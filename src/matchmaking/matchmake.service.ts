@@ -125,14 +125,34 @@ export class MatchmakeService {
         );
 
         const stats = (regionStats[region.value] ??= {});
-        stats[type] = lobbyIds.map((lobbyId) => {
+        const liveIndexes: number[] = [];
+
+        for (const lobbyId of lobbyIds) {
+          // Orphan zset members (details deleted, id left in the queue) used to
+          // show up as "1 in queue" on Play with nobody actually searching.
+          const details =
+            await this.matchmakingLobbyService.getLobbyDetails(lobbyId);
+          if (!details) {
+            await this.redis.zrem(
+              getMatchmakingQueueCacheKey(type, region.value),
+              lobbyId,
+            );
+            await this.redis.zrem(
+              getMatchmakingRankCacheKey(type, region.value),
+              lobbyId,
+            );
+            continue;
+          }
+
           let index = lobbyIndexes.get(lobbyId);
           if (index === undefined) {
             index = lobbyIndexes.size;
             lobbyIndexes.set(lobbyId, index);
           }
-          return index;
-        });
+          liveIndexes.push(index);
+        }
+
+        stats[type] = liveIndexes;
       }
     }
 
@@ -732,8 +752,16 @@ export class MatchmakeService {
       1,
     );
 
-    const { lobbyIds, team1, team2, confirmed } =
+    const { lobbyIds, team1, team2, confirmed, matchId } =
       await this.getMatchConfirmationDetails(confirmationId);
+
+    // Already created (another confirmer won the race, or a retry).
+    if (matchId) {
+      for (const lobbyId of lobbyIds) {
+        void this.matchmakingLobbyService.sendQueueDetailsToLobby(lobbyId);
+      }
+      return;
+    }
 
     if (confirmed.length != team1.length + team2.length) {
       for (const lobbyId of lobbyIds) {
@@ -742,7 +770,27 @@ export class MatchmakeService {
       return;
     }
 
-    await this.createMatch(confirmationId);
+    // Only one concurrent confirmer may create the match. Without this lock,
+    // every player who clicks Ready in the same tick can all see a full
+    // confirmed set and spawn duplicate matches (often 10+ for Competitive).
+    const createLockKey = `${getMatchmakingConformationCacheKey(confirmationId)}:creating`;
+    const acquired = await this.redis.set(createLockKey, "1", "EX", 120, "NX");
+    if (acquired !== "OK") {
+      return;
+    }
+
+    try {
+      // Re-check after the lock — another worker may have finished between
+      // the earlier read and acquiring NX.
+      const latest = await this.getMatchConfirmationDetails(confirmationId);
+      if (latest.matchId) {
+        return;
+      }
+      await this.createMatch(confirmationId);
+    } catch (error) {
+      await this.redis.del(createLockKey);
+      throw error;
+    }
   }
 
   private async createMatch(confirmationId: string) {
