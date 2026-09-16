@@ -4,7 +4,10 @@ import { S3Service } from "../s3/s3.service";
 import { HasuraService } from "../hasura/hasura.service";
 
 const PWA_ICON_SIZES = [192, 512] as const;
-const PWA_ICON_BACKGROUND = { r: 10, g: 10, b: 14, alpha: 1 };
+// Transparent so the crest sits cleanly on Windows taskbar / dock chrome
+// instead of a dark square tile. Android maskable still works; the crest
+// already has safe-zone padding from the 0.8 inner resize.
+const PWA_ICON_BACKGROUND = { r: 0, g: 0, b: 0, alpha: 0 };
 
 @Injectable()
 export class BrandingService {
