@@ -371,11 +371,9 @@ export class MatchmakingLobbyService {
             confirmation: confirmationId && {
               ...confirmationDetails,
               confirmed: confirmationDetails.confirmed.length,
-              isReady:
-                confirmationId &&
-                confirmationDetails.confirmed.find((steamId) => {
-                  return steamId === player.steam_id;
-                }),
+              isReady: confirmationDetails.confirmed.some(
+                (steamId) => String(steamId) === String(player.steam_id),
+              ),
             },
           },
         }),
