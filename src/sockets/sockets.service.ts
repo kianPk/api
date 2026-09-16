@@ -327,4 +327,9 @@ export class SocketsService {
       }),
     );
   }
+
+  public async getOnlinePlayerCount(): Promise<number> {
+    const players = await this.redis.keys("players:*");
+    return players.length;
+  }
 }

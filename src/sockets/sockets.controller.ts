@@ -1,4 +1,4 @@
-import { Controller, Logger } from "@nestjs/common";
+import { Controller, Get, Logger } from "@nestjs/common";
 import { EventPattern } from "@nestjs/microservices";
 import { SocketsService } from "./sockets.service";
 
@@ -8,6 +8,12 @@ export class SocketsController {
     private readonly logger: Logger,
     private readonly sockets: SocketsService,
   ) {}
+
+  // Public landing counter — no auth. Same Redis presence keys the hub uses.
+  @Get("players-online")
+  public async playersOnline() {
+    return { count: await this.sockets.getOnlinePlayerCount() };
+  }
 
   @EventPattern("answer")
   public async handleAnswer(data: any) {
