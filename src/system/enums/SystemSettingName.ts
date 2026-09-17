@@ -18,8 +18,10 @@ export enum SystemSettingName {
   YpointCostTrios = "public.ypoint_cost_trios",
   YpointCostDraftCreate = "public.ypoint_cost_draft_create",
   YpointCostDraftJoin = "public.ypoint_cost_draft_join",
-  // When true, Duel / Wingman / Trios cost 0 regardless of the per-mode prices.
-  YpointRankedFree = "public.ypoint_ranked_free",
+  // Per ranked mode: when true that mode costs 0 while the saved price stays.
+  YpointFreeDuel = "public.ypoint_free_duel",
+  YpointFreeWingman = "public.ypoint_free_wingman",
+  YpointFreeTrios = "public.ypoint_free_trios",
   DemoNetworkLimiter = "demo_network_limiter",
   PublicDefaultModels = "public.default_models",
   VetoPickTimeout = "public.veto_pick_timeout",

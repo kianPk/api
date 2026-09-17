@@ -6,15 +6,25 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
+import { Readable } from "stream";
 import { PostgresService } from "../postgres/postgres.service";
 import { BaleConfig } from "../configs/types/BaleConfig";
 import { AppConfig } from "../configs/types/AppConfig";
+import { S3Service } from "../s3/s3.service";
 
 import { YpointService } from "../ypoint/ypoint.service";
 import { RconService } from "../rcon/rcon.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { e_notification_types_enum } from "../../generated/schema";
+
+const IMAGE_PREFIX = "store";
+const EXTENSION_BY_MIMETYPE: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
 
 type StoreProductRow = {
   id: string;
@@ -50,9 +60,53 @@ export class StoreService {
     private readonly ypoint: YpointService,
     private readonly rcon: RconService,
     private readonly notifications: NotificationsService,
+    private readonly s3: S3Service,
   ) {
     this.envBale = this.configService.get<BaleConfig>("bale");
     this.app = this.configService.get<AppConfig>("app");
+  }
+
+  public async uploadProductImage(
+    buffer: Buffer,
+    mimetype: string,
+  ): Promise<string> {
+    const ext = EXTENSION_BY_MIMETYPE[mimetype];
+    if (!ext) {
+      throw new BadRequestException("Unsupported image type");
+    }
+    const filename = `${randomBytes(12).toString("hex")}.${ext}`;
+    const key = `${IMAGE_PREFIX}/${filename}`;
+    await this.s3.put(key, buffer, mimetype);
+    this.logger.log(`Uploaded store product image ${filename}`);
+    return filename;
+  }
+
+  public async getProductImageStream(
+    filename: string,
+  ): Promise<{ stream: Readable; contentType: string; etag?: string } | null> {
+    if (!/^[0-9a-f]{24}\.(png|jpg|webp|gif)$/.test(filename)) {
+      return null;
+    }
+    const key = `${IMAGE_PREFIX}/${filename}`;
+    if (!(await this.s3.has(key))) {
+      return null;
+    }
+    const [stream, stat] = await Promise.all([
+      this.s3.get(key),
+      this.s3.stat(key),
+    ]);
+    const byExt: Record<string, string> = {
+      png: "image/png",
+      jpg: "image/jpeg",
+      webp: "image/webp",
+      gif: "image/gif",
+    };
+    const ext = filename.split(".").pop() || "png";
+    return {
+      stream,
+      contentType: stat.metaData?.["content-type"] || byExt[ext] || "image/png",
+      etag: stat.etag,
+    };
   }
 
   /** Env wins; settings (`bale.*`) fill gaps so tokens can be set without kubectl. */

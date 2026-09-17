@@ -51,24 +51,22 @@ export class YpointService {
     return raw === "true" || raw === "1";
   }
 
-  public async isRankedFree(): Promise<boolean> {
-    return this.settingFlag(SystemSettingName.YpointRankedFree, false);
-  }
-
   public async getCosts(): Promise<Record<YpointCostKey, number>> {
-    const [duel, wingman, trios, draftCreate, draftJoin, rankedFree] =
+    const [duel, wingman, trios, draftCreate, draftJoin, freeDuel, freeWingman, freeTrios] =
       await Promise.all([
         this.settingNumber(SystemSettingName.YpointCostDuel, 8),
         this.settingNumber(SystemSettingName.YpointCostWingman, 0),
         this.settingNumber(SystemSettingName.YpointCostTrios, 12),
         this.settingNumber(SystemSettingName.YpointCostDraftCreate, 15),
         this.settingNumber(SystemSettingName.YpointCostDraftJoin, 10),
-        this.isRankedFree(),
+        this.settingFlag(SystemSettingName.YpointFreeDuel, false),
+        this.settingFlag(SystemSettingName.YpointFreeWingman, false),
+        this.settingFlag(SystemSettingName.YpointFreeTrios, false),
       ]);
     return {
-      duel: rankedFree ? 0 : Math.max(0, Number(duel) || 0),
-      wingman: rankedFree ? 0 : Math.max(0, Number(wingman) || 0),
-      trios: rankedFree ? 0 : Math.max(0, Number(trios) || 0),
+      duel: freeDuel ? 0 : Math.max(0, Number(duel) || 0),
+      wingman: freeWingman ? 0 : Math.max(0, Number(wingman) || 0),
+      trios: freeTrios ? 0 : Math.max(0, Number(trios) || 0),
       draft_create: Math.max(0, Number(draftCreate) || 0),
       draft_join: Math.max(0, Number(draftJoin) || 0),
     };

@@ -2,13 +2,23 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Headers,
+  NotFoundException,
+  Param,
   Post,
   Req,
+  Res,
   UnauthorizedException,
+  UploadedFile,
+  UseInterceptors,
+  ParseFilePipe,
+  MaxFileSizeValidator,
+  FileTypeValidator,
 } from "@nestjs/common";
-import { Request } from "express";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { Request, Response } from "express";
 import { User } from "../auth/types/User";
 import { StoreService } from "./store.service";
 import { timingSafeStringEqual } from "../utilities/timingSafeStringEqual";
@@ -20,6 +30,45 @@ export class StoreController {
   @Get("status")
   public async status() {
     return this.store.getPublicStatus();
+  }
+
+  @Post("upload-image")
+  @UseInterceptors(FileInterceptor("file"))
+  public async uploadImage(
+    @Req() request: Request,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new FileTypeValidator({ fileType: /image\/(png|jpeg|webp|gif)/ }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    this.requireAdmin(request);
+    const filename = await this.store.uploadProductImage(
+      file.buffer,
+      file.mimetype,
+    );
+    return { success: true, filename };
+  }
+
+  @Get("image/:filename")
+  public async serveImage(
+    @Param("filename") filename: string,
+    @Res() res: Response,
+  ) {
+    const result = await this.store.getProductImageStream(filename);
+    if (!result) {
+      throw new NotFoundException("Image not found");
+    }
+    res.setHeader("Content-Type", result.contentType);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    if (result.etag) {
+      res.setHeader("ETag", result.etag);
+    }
+    result.stream.pipe(res);
   }
 
   @Post("checkout")
@@ -64,5 +113,15 @@ export class StoreController {
       throw new UnauthorizedException("Authentication required");
     }
     return user;
+  }
+
+  private requireAdmin(request: Request) {
+    const user = request.user as User | undefined;
+    if (!user?.steam_id) {
+      throw new ForbiddenException("Authentication required");
+    }
+    if (user.role !== "administrator") {
+      throw new ForbiddenException("Administrator access required");
+    }
   }
 }
