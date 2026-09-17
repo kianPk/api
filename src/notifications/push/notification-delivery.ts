@@ -45,6 +45,8 @@ const DELIVERY_POLICIES: Record<string, e_notification_types_enum[]> = {
     "MatchStatsReady",
     "ClipReady",
     "AwardGranted",
+    "StorePurchasePaid",
+    "StorePurchaseCancelled",
     "NameChangeApproved",
     "NameChangeDenied",
     "PlayerSanctioned",
