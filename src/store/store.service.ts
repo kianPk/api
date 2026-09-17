@@ -12,6 +12,7 @@ import { BaleConfig } from "../configs/types/BaleConfig";
 import { AppConfig } from "../configs/types/AppConfig";
 
 import { YpointService } from "../ypoint/ypoint.service";
+import { RconService } from "../rcon/rcon.service";
 
 type StoreProductRow = {
   id: string;
@@ -22,6 +23,8 @@ type StoreProductRow = {
   image_url: string | null;
   active: boolean;
   ypoint_amount: number | null;
+  vip_server_id: string | null;
+  vip_duration: string | null;
 };
 
 type StoreOrderRow = {
@@ -43,6 +46,7 @@ export class StoreService {
     private readonly configService: ConfigService,
     private readonly logger: Logger,
     private readonly ypoint: YpointService,
+    private readonly rcon: RconService,
   ) {
     this.envBale = this.configService.get<BaleConfig>("bale");
     this.app = this.configService.get<AppConfig>("app");
@@ -212,6 +216,9 @@ export class StoreService {
         id: string;
         buyer_steam_id: string;
         ypoint_amount: number | null;
+        vip_server_id: string | null;
+        vip_duration: string | null;
+        vip_granted_at: string | null;
       }>
     >(
       `UPDATE store_orders o
@@ -222,13 +229,36 @@ export class StoreService {
        WHERE o.bale_payload = $1
          AND o.status = 'pending'
          AND p.id = o.product_id
-       RETURNING o.id, o.buyer_steam_id::text, p.ypoint_amount`,
+       RETURNING o.id, o.buyer_steam_id::text, p.ypoint_amount,
+                 p.vip_server_id, p.vip_duration, o.vip_granted_at`,
       [payload, chargeId || null],
     );
 
     const order = updated.at(0);
     if (!order) {
-      this.logger.log(`Store order already paid or missing payload=${payload}`);
+      // Already paid — still try VIP grant if a previous RCON attempt failed.
+      const existing = await this.postgres.query<
+        Array<{
+          id: string;
+          buyer_steam_id: string;
+          vip_server_id: string | null;
+          vip_duration: string | null;
+          vip_granted_at: string | null;
+        }>
+      >(
+        `SELECT o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration, o.vip_granted_at
+         FROM store_orders o
+         JOIN store_products p ON p.id = o.product_id
+         WHERE o.bale_payload = $1 AND o.status = 'paid'
+         LIMIT 1`,
+        [payload],
+      );
+      const paid = existing.at(0);
+      if (paid) {
+        await this.grantVipIfNeeded(paid);
+      } else {
+        this.logger.log(`Store order already paid or missing payload=${payload}`);
+      }
       return;
     }
 
@@ -243,7 +273,61 @@ export class StoreService {
       });
     }
 
+    await this.grantVipIfNeeded(order);
+
     this.logger.log(`Store order paid payload=${payload} charge=${chargeId}`);
+  }
+
+  private async grantVipIfNeeded(order: {
+    id: string;
+    buyer_steam_id: string;
+    vip_server_id: string | null;
+    vip_duration: string | null;
+    vip_granted_at: string | null;
+  }) {
+    if (order.vip_granted_at) return;
+    const serverId = order.vip_server_id?.trim();
+    const duration = (order.vip_duration || "").trim();
+    if (!serverId || !duration) return;
+
+    const steamId = String(order.buyer_steam_id).trim();
+    if (!/^\d{15,20}$/.test(steamId)) {
+      this.logger.error(
+        `VIP grant skipped: invalid steam id for order ${order.id}`,
+      );
+      return;
+    }
+
+    // Duration tokens accepted by YGuardVIP (30d, 1mo, …).
+    if (!/^(perm|permanent|0|lifetime|forever|\d+\s*(m|min|mins|h|hr|hrs|d|day|days|w|week|weeks|mo|month|months))$/i.test(duration)) {
+      this.logger.error(
+        `VIP grant skipped: bad duration "${duration}" for order ${order.id}`,
+      );
+      return;
+    }
+
+    try {
+      const rcon = await this.rcon.connect(serverId);
+      if (!rcon) {
+        this.logger.error(
+          `VIP grant failed: RCON unavailable server=${serverId} order=${order.id}`,
+        );
+        return;
+      }
+      const reply = await rcon.send(`css_addvip ${steamId} ${duration}`);
+      this.logger.log(
+        `VIP granted steam=${steamId} server=${serverId} duration=${duration} reply=${String(reply || "").slice(0, 200)}`,
+      );
+      await this.postgres.query(
+        `UPDATE store_orders SET vip_granted_at = now() WHERE id = $1 AND vip_granted_at IS NULL`,
+        [order.id],
+      );
+    } catch (error) {
+      this.logger.error(
+        `VIP grant RCON error order=${order.id} server=${serverId}`,
+        error instanceof Error ? error.stack : error,
+      );
+    }
   }
 
   private async sendInvoice(args: {

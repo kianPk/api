@@ -4,9 +4,10 @@ import { StoreService } from "./store.service";
 import { PostgresModule } from "../postgres/postgres.module";
 import { loggerFactory } from "../utilities/LoggerFactory";
 import { YpointModule } from "../ypoint/ypoint.module";
+import { RconModule } from "../rcon/rcon.module";
 
 @Module({
-  imports: [PostgresModule, YpointModule],
+  imports: [PostgresModule, YpointModule, RconModule],
   controllers: [StoreController],
   providers: [StoreService, loggerFactory()],
   exports: [StoreService],

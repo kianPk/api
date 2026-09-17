@@ -1,7 +1,10 @@
 table:
   name: store_products
   schema: public
-object_relationships: []
+object_relationships:
+  - name: vip_server
+    using:
+      foreign_key_constraint_on: vip_server_id
 insert_permissions:
   - role: administrator
     permission:
@@ -15,6 +18,8 @@ insert_permissions:
         - active
         - sort_order
         - ypoint_amount
+        - vip_server_id
+        - vip_duration
 select_permissions:
   - role: administrator
     permission:
@@ -28,6 +33,8 @@ select_permissions:
         - active
         - sort_order
         - ypoint_amount
+        - vip_server_id
+        - vip_duration
         - created_at
         - updated_at
       filter: {}
@@ -44,6 +51,7 @@ select_permissions:
         - active
         - sort_order
         - ypoint_amount
+        - vip_duration
         - created_at
       filter:
         active:
@@ -60,6 +68,8 @@ update_permissions:
         - active
         - sort_order
         - ypoint_amount
+        - vip_server_id
+        - vip_duration
         - updated_at
       filter: {}
       check: {}
