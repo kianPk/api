@@ -36,4 +36,16 @@ select_permissions:
       filter:
         buyer_steam_id:
           _eq: X-Hasura-User-Id
-# Inserts/updates go through Nest (service role / Postgres), not GraphQL clients.
+insert_permissions:
+  - role: user
+    permission:
+      check:
+        buyer_steam_id:
+          _eq: X-Hasura-User-Id
+      columns:
+        - id
+        - product_id
+        - buyer_steam_id
+        - amount_irr
+        - bale_payload
+# Amount/status are enforced by store_orders_before_insert trigger.
