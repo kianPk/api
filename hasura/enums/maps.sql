@@ -1,5 +1,6 @@
 insert into e_match_types ("value", "description") values
     ('Competitive', 'The classic 5 vs 5 competitive experience with full team coordination'),
+    ('Trios', 'Ranked 3 vs 3 competitive matches with full team coordination'),
     ('Wingman', 'Team up with a friend and compete in fast-paced 2v2 matches'),
     ('Duel', 'A competitive 1 vs 1 experience, perfect for practicing individual skill'),
     ('Premier', 'Valve Premier matchmaking — 5 vs 5 with CS Rating'),
@@ -11,6 +12,7 @@ insert into e_game_cfg_types ("value", "description") values
     ('Lan', 'Lan game configuration'),
     ('Live', 'Live game configuration'),
     ('Competitive', 'Competitive game configuration'),
+    ('Trios', 'Trios (3v3) game configuration'),
     ('Wingman', 'Wingman game configuration'),
     ('Duel', 'Duel game configuration'),
     ('Global', 'Applies to every match, on top of the type configuration')
@@ -113,6 +115,18 @@ map_type_config AS (
         ('de_debris', 'Competitive', false),
         ('de_eldorado', 'Competitive', false),
 
+        -- Trios maps (same active set as Competitive)
+        ('de_ancient', 'Trios', true),
+        ('de_anubis', 'Trios', true),
+        ('de_inferno', 'Trios', true),
+        ('de_mirage', 'Trios', true),
+        ('de_nuke', 'Trios', true),
+        ('de_dust2', 'Trios', true),
+        ('de_cache', 'Trios', true),
+        ('de_overpass', 'Trios', false),
+        ('de_vertigo', 'Trios', false),
+        ('de_train', 'Trios', false),
+
         -- Duel maps
         ('de_inferno', 'Duel', true),
         ('de_nuke', 'Duel', true),
@@ -172,6 +186,7 @@ on conflict("name", "type") do update set
 
 insert into e_map_pool_types ("value", "description") values
     ('Competitive', '5 vs 5'),
+    ('Trios', '3 vs 3'),
     ('Wingman', '2 vs 2'),
     ('Duel', '1 vs 1'),
     ('Custom', 'Custom')
@@ -194,7 +209,7 @@ existing_pools AS (
   FROM map_pools mp
   LEFT JOIN _map_pool mp_rel ON mp.id = mp_rel.map_pool_id
   LEFT JOIN maps m ON mp_rel.map_id = m.id
-  WHERE mp.seed = true AND mp.type IN ('Competitive', 'Wingman', 'Duel') AND mp.enabled = true
+  WHERE mp.seed = true AND mp.type IN ('Competitive', 'Trios', 'Wingman', 'Duel') AND mp.enabled = true
   GROUP BY mp.id, mp.type
 ),
 pools_to_disable AS (
@@ -214,6 +229,7 @@ WITH new_rows AS (
   SELECT *
   FROM (VALUES
       ('Competitive', true, true),
+      ('Trios', true, true),
       ('Wingman', true, true),
       ('Duel', true, true)
   ) AS data(type, enabled, seed)
@@ -248,7 +264,7 @@ begin
         WITH pool_ids AS (
             SELECT id, type
             FROM map_pools
-            WHERE type IN ('Competitive', 'Wingman', 'Duel') and seed = true and enabled = true
+            WHERE type IN ('Competitive', 'Trios', 'Wingman', 'Duel') and seed = true and enabled = true
             ORDER BY type
         )
         INSERT INTO _map_pool (map_id, map_pool_id)
@@ -256,6 +272,7 @@ begin
         FROM maps m
         JOIN pool_ids p ON (
             (p.type = 'Competitive' AND m.type = 'Competitive' AND m.active_pool = 'true') OR
+            (p.type = 'Trios' AND m.type = 'Trios' AND m.active_pool = 'true') OR
             (p.type = 'Wingman' AND m.type = 'Wingman' AND m.active_pool = 'true') OR
             (p.type = 'Duel' AND m.type = 'Duel' AND m.active_pool = 'true')
         )

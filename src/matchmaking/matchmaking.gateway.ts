@@ -75,6 +75,11 @@ export class MatchmakingGateway {
               },
               {
                 name: {
+                  _eq: "public.matchmaking_trios",
+                },
+              },
+              {
+                name: {
                   _eq: "public.matchmaking_wingman",
                 },
               },

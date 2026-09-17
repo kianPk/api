@@ -6,6 +6,7 @@ DECLARE
 BEGIN
     return jsonb_build_object(
         'competitive', get_player_peak_elo_by_type(player, 'Competitive'),
+        'trios', get_player_peak_elo_by_type(player, 'Trios'),
         'wingman', get_player_peak_elo_by_type(player, 'Wingman'),
         'duel', get_player_peak_elo_by_type(player, 'Duel')
     );

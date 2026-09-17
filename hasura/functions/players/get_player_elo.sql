@@ -8,6 +8,7 @@ BEGIN
     IF NOT seasons_enabled() THEN
         return jsonb_build_object(
             'competitive', get_player_elo_by_type(player, 'Competitive'),
+            'trios', get_player_elo_by_type(player, 'Trios'),
             'wingman', get_player_elo_by_type(player, 'Wingman'),
             'duel', get_player_elo_by_type(player, 'Duel')
         );
@@ -17,9 +18,11 @@ BEGIN
 
     return jsonb_build_object(
         'competitive', get_player_season_elo_by_type(player, 'Competitive', _active_season_id),
+        'trios', get_player_season_elo_by_type(player, 'Trios', _active_season_id),
         'wingman', get_player_season_elo_by_type(player, 'Wingman', _active_season_id),
         'duel', get_player_season_elo_by_type(player, 'Duel', _active_season_id),
         'tournament_competitive', get_player_tournament_elo_by_type(player, 'Competitive'),
+        'tournament_trios', get_player_tournament_elo_by_type(player, 'Trios'),
         'tournament_wingman', get_player_tournament_elo_by_type(player, 'Wingman'),
         'tournament_duel', get_player_tournament_elo_by_type(player, 'Duel')
     );
