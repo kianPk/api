@@ -138,34 +138,56 @@ export class StoreService {
       throw new BadRequestException("Invalid order");
     }
 
-    const rows = await this.postgres.query<
-      Array<
-        StoreOrderRow & {
-          title: string;
-          description: string;
-        }
-      >
+    // Always re-read the live product price so admin edits apply to unpaid invoices.
+    const synced = await this.postgres.query<
+      Array<{
+        id: string;
+        status: string;
+        amount_irr: number;
+        bale_payload: string;
+        title: string;
+        description: string;
+      }>
     >(
-      `SELECT o.id, o.product_id, o.buyer_steam_id, o.amount_irr, o.status,
-              o.bale_payload, p.title, p.description
-       FROM store_orders o
-       JOIN store_products p ON p.id = o.product_id
+      `UPDATE store_orders o
+       SET amount_irr = p.price_irr
+       FROM store_products p
        WHERE o.id = $1
-       LIMIT 1`,
+         AND p.id = o.product_id
+         AND o.status = 'pending'
+         AND p.active = true
+       RETURNING o.id, o.status, o.amount_irr, o.bale_payload,
+                 p.title, p.description`,
       [orderId],
     );
-    const order = rows.at(0);
+
+    const order = synced.at(0);
     if (!order) {
-      throw new NotFoundException("Order not found");
+      const existing = await this.postgres.query<
+        Array<{ status: string }>
+      >(
+        `SELECT status FROM store_orders WHERE id = $1 LIMIT 1`,
+        [orderId],
+      );
+      const row = existing.at(0);
+      if (!row) {
+        throw new NotFoundException("Order not found");
+      }
+      throw new BadRequestException(`Order is ${row.status}`);
     }
-    if (order.status !== "pending") {
-      throw new BadRequestException(`Order is ${order.status}`);
-    }
+
+    const toman = Math.round(Number(order.amount_irr) / 10);
+    const baseDescription = (order.description || order.title).slice(0, 200);
+    const description =
+      `${baseDescription} · ${toman.toLocaleString("en-US")} تومان`.slice(
+        0,
+        255,
+      );
 
     await this.sendInvoice({
       chatId,
       title: order.title,
-      description: order.description || order.title,
+      description,
       payload: order.bale_payload,
       amountIrr: order.amount_irr,
       providerToken: (await this.resolveBale()).providerToken,
