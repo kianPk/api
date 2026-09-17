@@ -9,7 +9,5 @@ CREATE OR REPLACE VIEW public.v_pool_maps AS
     maps.patch,
     maps.active_pool,
     maps.workshop_map_id
-   FROM public._map_pool
-   INNER JOIN public.maps ON _map_pool.map_id = maps.id
-  WHERE maps.deleted_at IS NULL
-    AND maps.enabled = true;
+   FROM (public._map_pool
+     LEFT JOIN public.maps ON ((_map_pool.map_id = maps.id)));

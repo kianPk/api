@@ -251,6 +251,26 @@ export class YpointService {
     });
   }
 
+  /** Admin panel: players with highest Ypoint balances. */
+  public async listBalances(limit = 50) {
+    const capped = Math.min(200, Math.max(1, Math.floor(limit) || 50));
+    return this.postgres.query<
+      Array<{
+        steam_id: string;
+        name: string | null;
+        avatar_url: string | null;
+        ypoint_balance: number;
+      }>
+    >(
+      `SELECT steam_id::text, name, avatar_url, ypoint_balance
+       FROM players
+       WHERE ypoint_balance > 0
+       ORDER BY ypoint_balance DESC, name ASC NULLS LAST
+       LIMIT $1`,
+      [capped],
+    );
+  }
+
   /** Admin panel: look up a player by SteamID64 or name substring. */
   public async findPlayers(query: string, limit = 20) {
     const q = query.trim();

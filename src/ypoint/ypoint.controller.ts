@@ -35,6 +35,18 @@ export class YpointController {
     return this.ypoint.getCosts();
   }
 
+  @Get("admin/balances")
+  public async adminBalances(
+    @Req() request: Request,
+    @Query("limit") limit?: string,
+  ) {
+    this.requireAdmin(request);
+    const players = await this.ypoint.listBalances(
+      limit ? Number(limit) : 50,
+    );
+    return { players };
+  }
+
   @Get("admin/players")
   public async adminPlayers(
     @Req() request: Request,
