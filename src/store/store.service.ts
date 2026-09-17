@@ -11,6 +11,8 @@ import { PostgresService } from "../postgres/postgres.service";
 import { BaleConfig } from "../configs/types/BaleConfig";
 import { AppConfig } from "../configs/types/AppConfig";
 
+import { YpointService } from "../ypoint/ypoint.service";
+
 type StoreProductRow = {
   id: string;
   title: string;
@@ -19,6 +21,7 @@ type StoreProductRow = {
   price_irr: number;
   image_url: string | null;
   active: boolean;
+  ypoint_amount: number | null;
 };
 
 type StoreOrderRow = {
@@ -39,6 +42,7 @@ export class StoreService {
     private readonly postgres: PostgresService,
     private readonly configService: ConfigService,
     private readonly logger: Logger,
+    private readonly ypoint: YpointService,
   ) {
     this.envBale = this.configService.get<BaleConfig>("bale");
     this.app = this.configService.get<AppConfig>("app");
@@ -203,15 +207,41 @@ export class StoreService {
       return;
     }
 
-    await this.postgres.query(
-      `UPDATE store_orders
+    const updated = await this.postgres.query<
+      Array<{
+        id: string;
+        buyer_steam_id: string;
+        ypoint_amount: number | null;
+      }>
+    >(
+      `UPDATE store_orders o
        SET status = 'paid',
            paid_at = COALESCE(paid_at, now()),
            bale_payment_charge_id = COALESCE(NULLIF($2, ''), bale_payment_charge_id)
-       WHERE bale_payload = $1
-         AND status = 'pending'`,
+       FROM store_products p
+       WHERE o.bale_payload = $1
+         AND o.status = 'pending'
+         AND p.id = o.product_id
+       RETURNING o.id, o.buyer_steam_id::text, p.ypoint_amount`,
       [payload, chargeId || null],
     );
+
+    const order = updated.at(0);
+    if (!order) {
+      this.logger.log(`Store order already paid or missing payload=${payload}`);
+      return;
+    }
+
+    const amount = Number(order.ypoint_amount || 0);
+    if (amount > 0) {
+      await this.ypoint.credit({
+        steamId: order.buyer_steam_id,
+        amount,
+        reason: "store_purchase",
+        refType: "store_order",
+        refId: order.id,
+      });
+    }
 
     this.logger.log(`Store order paid payload=${payload} charge=${chargeId}`);
   }

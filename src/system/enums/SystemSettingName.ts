@@ -13,6 +13,10 @@ export enum SystemSettingName {
   // Days, not seconds: DMs are swept rather than expired, because they live in
   // postgres. 0 keeps them forever.
   ChatRetentionDirectDays = "public.chat_retention_direct_days",
+  YpointCostDuel = "public.ypoint_cost_duel",
+  YpointCostWingman = "public.ypoint_cost_wingman",
+  YpointCostDraftCreate = "public.ypoint_cost_draft_create",
+  YpointCostDraftJoin = "public.ypoint_cost_draft_join",
   DemoNetworkLimiter = "demo_network_limiter",
   PublicDefaultModels = "public.default_models",
   VetoPickTimeout = "public.veto_pick_timeout",

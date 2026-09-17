@@ -166,6 +166,7 @@
 - "!include public_player_unused_utility.yaml"
 - "!include public_player_utility.yaml"
 - "!include public_players.yaml"
+- "!include public_ypoint_ledger.yaml"
 - "!include public_plugin_versions.yaml"
 - "!include public_push_subscriptions.yaml"
 - "!include public_seasons.yaml"

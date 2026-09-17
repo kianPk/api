@@ -21,6 +21,8 @@ import { DraftGame } from "./types/DraftGame";
 import { DraftGameError } from "./types/DraftGameError";
 import { DraftGameQueues } from "./enums/DraftGameQueues";
 import { DraftService } from "./draft.service";
+import { YpointService } from "../ypoint/ypoint.service";
+import { BadRequestException } from "@nestjs/common";
 
 export interface CreateDraftGameSettings {
   type: e_match_types_enum;
@@ -68,7 +70,33 @@ export class DraftGameService {
     private readonly draftService: DraftService,
     @InjectQueue(DraftGameQueues.DraftGames) private queue: Queue,
     private readonly notifications: NotificationsService,
+    private readonly ypoint: YpointService,
   ) {}
+
+  private async requireYpoints(
+    steamIds: Array<string | bigint>,
+    amount: number,
+  ) {
+    try {
+      await this.ypoint.assertCanAfford(steamIds, amount);
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw new DraftGameError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async chargeJoinSafe(steamId: string, draftGameId: string) {
+    try {
+      await this.ypoint.chargeDraftJoin(steamId, draftGameId);
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw new DraftGameError(error.message);
+      }
+      throw error;
+    }
+  }
 
   public static lockKey(draftGameId: string): string {
     return `draft-game:${draftGameId}`;
@@ -109,6 +137,9 @@ export class DraftGameService {
         settings.team_2_id,
       ]);
     }
+
+    const createCost = (await this.ypoint.getCosts()).draft_create;
+    await this.requireYpoints([user.steam_id], createCost);
 
     // Organizers can open a lobby they manage but do not play in; everyone else
     // is always seeded as the first accepted player.
@@ -200,6 +231,21 @@ export class DraftGameService {
         throw error;
       }
 
+      try {
+        await this.ypoint.chargeDraftCreate(user.steam_id, inserted.id);
+      } catch (error) {
+        await this.hasura.mutation({
+          delete_draft_games_by_pk: {
+            __args: { id: inserted.id },
+            __typename: true,
+          },
+        });
+        if (error instanceof BadRequestException) {
+          throw new DraftGameError(error.message);
+        }
+        throw error;
+      }
+
       if (hostJoins) {
         await this.clearOtherRequests(user.steam_id, inserted.id);
       }
@@ -224,6 +270,72 @@ export class DraftGameService {
     });
 
     return draftGameId;
+  }
+
+  public async onDraftPlayerAccepted(args: {
+    draftGameId: string;
+    steamId: string;
+    previousStatus?: string | null;
+  }) {
+    const { draftGameId, steamId, previousStatus } = args;
+    if (previousStatus === "Accepted") return;
+
+    const draftGame = await this.getDraftGame(draftGameId);
+    if (!draftGame) return;
+    // Host pays create cost, not join.
+    if (String(draftGame.host_steam_id) === String(steamId)) return;
+
+    try {
+      await this.ypoint.chargeDraftJoin(steamId, draftGameId);
+    } catch (error) {
+      this.logger.warn(
+        `Ypoint join charge failed draft=${draftGameId} steam=${steamId}`,
+        error,
+      );
+    }
+  }
+
+  public async approveDraftPlayer(
+    user: User,
+    draftGameId: string,
+    steamId: string,
+  ) {
+    return this.draftLock(draftGameId, async () => {
+      const draftGame = await this.getDraftGame(draftGameId);
+      if (!draftGame) {
+        throw new DraftGameError("Draft game not found");
+      }
+      if (
+        String(draftGame.host_steam_id) !== String(user.steam_id) &&
+        !isRoleAbove(user.role, "match_organizer")
+      ) {
+        throw new DraftGameError("Only the host can approve players");
+      }
+
+      const membership = draftGame.players.find(
+        (player) => String(player.steam_id) === String(steamId),
+      );
+      if (!membership || membership.status !== "Requested") {
+        throw new DraftGameError("Player has no pending request");
+      }
+
+      const joinCost = (await this.ypoint.getCosts()).draft_join;
+      await this.requireYpoints([steamId], joinCost);
+
+      await this.hasura.mutation({
+        update_draft_game_players_by_pk: {
+          __args: {
+            pk_columns: { draft_game_id: draftGameId, steam_id: steamId },
+            _set: { status: "Accepted" },
+          },
+          __typename: true,
+        },
+      });
+
+      await this.chargeJoinSafe(steamId, draftGameId);
+      await this.clearOtherRequests(steamId, draftGameId);
+      return { success: true };
+    });
   }
 
   public async onDraftDeleted(draftGameId: string) {
@@ -273,6 +385,11 @@ export class DraftGameService {
             ? "Waitlist"
             : "Accepted";
 
+      if (status === "Accepted") {
+        const joinCost = (await this.ypoint.getCosts()).draft_join;
+        await this.requireYpoints([user.steam_id], joinCost);
+      }
+
       await this.playerLock(user.steam_id, async () => {
         await this.verifyPlayerEligible(user.steam_id);
 
@@ -308,6 +425,7 @@ export class DraftGameService {
         });
 
         if (status === "Accepted") {
+          await this.chargeJoinSafe(user.steam_id, draftGameId);
           await this.clearOtherRequests(user.steam_id, draftGameId);
         }
       });
@@ -461,6 +579,13 @@ export class DraftGameService {
       }
 
       const nextPickOrder = teamCount + 1;
+      const joinCost = (await this.ypoint.getCosts()).draft_join;
+
+      try {
+        await this.requireYpoints([steamId], joinCost);
+      } catch {
+        continue;
+      }
 
       const inserted = await this.playerLock(steamId, async () => {
         const elsewhere = await this.getPlayerActiveDraftGame(steamId);
@@ -484,6 +609,7 @@ export class DraftGameService {
           },
         });
 
+        await this.chargeJoinSafe(steamId, draftGameId);
         await this.clearOtherRequests(steamId, draftGameId);
 
         return true;
@@ -542,6 +668,12 @@ export class DraftGameService {
           if (elsewhere && elsewhere !== draftGameId) {
             return;
           }
+          const joinCost = (await this.ypoint.getCosts()).draft_join;
+          try {
+            await this.requireYpoints([steamId], joinCost);
+          } catch {
+            return;
+          }
         }
 
         await this.hasura.mutation({
@@ -565,6 +697,7 @@ export class DraftGameService {
         });
 
         if (status === "Accepted") {
+          await this.chargeJoinSafe(steamId, draftGameId);
           await this.clearOtherRequests(steamId, draftGameId);
         }
       });
@@ -701,6 +834,7 @@ export class DraftGameService {
 
       let acceptedCount = this.acceptedPlayers(draftGame).length;
       const joined: string[] = [];
+      const joinCost = (await this.ypoint.getCosts()).draft_join;
 
       for (const steamId of members) {
         if (draftGame.players.find((player) => player.steam_id === steamId)) {
@@ -712,6 +846,10 @@ export class DraftGameService {
           : acceptedCount < draftGame.capacity
             ? "Accepted"
             : "Waitlist";
+
+        if (status === "Accepted") {
+          await this.requireYpoints([steamId], joinCost);
+        }
 
         const inserted = await this.playerLock(steamId, async () => {
           const elsewhere = await this.getPlayerActiveDraftGame(steamId);
@@ -742,6 +880,7 @@ export class DraftGameService {
           });
 
           if (status === "Accepted") {
+            await this.chargeJoinSafe(steamId, draftGameId);
             await this.clearOtherRequests(steamId, draftGameId);
           }
 
@@ -853,6 +992,11 @@ export class DraftGameService {
           status = started || isFull ? "Waitlist" : "Accepted";
         }
 
+        if (status === "Accepted") {
+          const joinCost = (await this.ypoint.getCosts()).draft_join;
+          await this.requireYpoints([steamId], joinCost);
+        }
+
         await this.hasura.mutation({
           insert_draft_game_players_one: {
             __args: {
@@ -869,6 +1013,7 @@ export class DraftGameService {
         });
 
         if (status === "Accepted") {
+          await this.chargeJoinSafe(steamId, draftGameId);
           await this.clearOtherRequests(steamId, draftGameId);
         }
 
@@ -957,6 +1102,11 @@ export class DraftGameService {
           this.acceptedPlayers(draftGame).length >= draftGame.capacity;
         const status = started || isFull ? "Waitlist" : "Accepted";
 
+        if (status === "Accepted") {
+          const joinCost = (await this.ypoint.getCosts()).draft_join;
+          await this.requireYpoints([user.steam_id], joinCost);
+        }
+
         await this.hasura.mutation({
           update_draft_game_players_by_pk: {
             __args: {
@@ -971,6 +1121,7 @@ export class DraftGameService {
         });
 
         if (status === "Accepted") {
+          await this.chargeJoinSafe(user.steam_id, draftGameId);
           await this.clearOtherRequests(user.steam_id, draftGameId);
         }
       });

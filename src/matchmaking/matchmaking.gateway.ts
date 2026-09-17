@@ -18,6 +18,8 @@ import { HasuraService } from "src/hasura/hasura.service";
 import { isRoleAbove } from "src/utilities/isRoleAbove";
 import { e_player_roles_enum } from "generated";
 import { SocketsService } from "src/sockets/sockets.service";
+import { YpointService } from "../ypoint/ypoint.service";
+import { BadRequestException } from "@nestjs/common";
 
 @WebSocketGateway({
   path: "/ws/web",
@@ -32,6 +34,7 @@ export class MatchmakingGateway {
     public readonly matchmakeService: MatchmakeService,
     public readonly matchmakingLobbyService: MatchmakingLobbyService,
     private readonly cache: CacheService,
+    private readonly ypoint: YpointService,
   ) {
     this.redis = this.redisManager.getConnection();
   }
@@ -221,6 +224,21 @@ export class MatchmakingGateway {
 
       if (!lobby) {
         throw new JoinQueueError("Unable to find Player Lobby");
+      }
+
+      const ypointCost = await this.ypoint.costForMatchType(type);
+      if (ypointCost > 0) {
+        try {
+          await this.ypoint.assertCanAfford(
+            lobby.players.map((player) => player.steam_id),
+            ypointCost,
+          );
+        } catch (error) {
+          if (error instanceof BadRequestException) {
+            throw new JoinQueueError(error.message);
+          }
+          throw error;
+        }
       }
 
       try {

@@ -23,6 +23,7 @@ import { shuffleSplit } from "./utilities/shuffleSplit";
 import { balanceTeams, canFillTeams } from "./utilities/balanceTeams";
 import { selectMatchCandidates } from "./utilities/selectMatchCandidates";
 import { WINDOW_CAP, winProbability } from "./utilities/matchmakingTuning";
+import { YpointService } from "../ypoint/ypoint.service";
 
 function averageRank(players: Array<{ rank: number }>) {
   return players.reduce((acc, player) => acc + player.rank, 0) / players.length;
@@ -48,6 +49,7 @@ export class MatchmakeService {
     public readonly redisManager: RedisManagerService,
     public readonly matchAssistant: MatchAssistantService,
     private matchmakingLobbyService: MatchmakingLobbyService,
+    private readonly ypoint: YpointService,
     @InjectQueue(MatchmakingQueues.Matchmaking) private queue: Queue,
   ) {
     this.redis = this.redisManager.getConnection();
@@ -799,21 +801,57 @@ export class MatchmakeService {
 
     await this.removeCancelMatchMakingJob(confirmationId);
 
+    const steamIds = [...team1, ...team2].map((player) => player.steam_id);
+    const ypointCost = await this.ypoint.costForMatchType(type);
+    if (ypointCost > 0) {
+      await this.ypoint.debitMany({
+        steamIds,
+        amount: ypointCost,
+        reason: `matchmaking:${type}`,
+        refType: "mm_confirmation",
+        refId: confirmationId,
+      });
+    }
+
     // e_map_pool_types_enum doesn't include Premier/Faceit (imports only).
     const mapPoolType: e_map_pool_types_enum =
       type === "Premier" || type === "Faceit" ? "Competitive" : type;
-    const match = await this.matchAssistant.createMatchBasedOnType(
-      type,
-      mapPoolType,
-      {
-        mr: type === "Competitive" ? 12 : 8,
-        best_of: 1,
-        knife: true,
-        overtime: true,
-        timeout_setting: "Admin",
-        region,
-      },
-    );
+
+    let match;
+    try {
+      match = await this.matchAssistant.createMatchBasedOnType(
+        type,
+        mapPoolType,
+        {
+          mr: type === "Competitive" ? 12 : 8,
+          best_of: 1,
+          knife: true,
+          overtime: true,
+          timeout_setting: "Admin",
+          region,
+        },
+      );
+    } catch (error) {
+      if (ypointCost > 0) {
+        for (const steamId of steamIds) {
+          try {
+            await this.ypoint.credit({
+              steamId,
+              amount: ypointCost,
+              reason: `matchmaking_refund:${type}`,
+              refType: "mm_confirmation_refund",
+              refId: confirmationId,
+            });
+          } catch (refundError) {
+            this.logger.error(
+              `Ypoint refund failed steam=${steamId} confirmation=${confirmationId}`,
+              refundError,
+            );
+          }
+        }
+      }
+      throw error;
+    }
 
     await this.hasura.mutation({
       insert_match_lineup_players: {

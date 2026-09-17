@@ -16,12 +16,14 @@ import { CancelMatchMaking } from "./jobs/CancelMatchMaking";
 import { MatchmakingController } from "./matchmaking.controller";
 import { MarkPlayerOffline } from "./jobs/MarkPlayerOffline";
 import { ExpandMatchmaking } from "./jobs/ExpandMatchmaking";
+import { YpointModule } from "../ypoint/ypoint.module";
 
 @Module({
   imports: [
     RedisModule,
     HasuraModule,
     CacheModule,
+    YpointModule,
     forwardRef(() => MatchesModule),
     BullModule.registerQueue({
       name: MatchmakingQueues.Matchmaking,

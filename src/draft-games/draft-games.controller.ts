@@ -42,6 +42,25 @@ export class DraftGamesController {
   }
 
   @HasuraEvent()
+  public async draft_game_player_events(data: DraftGameEvent) {
+    if (data.op !== "INSERT" && data.op !== "UPDATE") {
+      return;
+    }
+    const row = data.new;
+    if (!row || row.status !== "Accepted") {
+      return;
+    }
+    if (data.op === "UPDATE" && data.old?.status === "Accepted") {
+      return;
+    }
+    await this.draftGameService.onDraftPlayerAccepted({
+      draftGameId: String(row.draft_game_id),
+      steamId: String(row.steam_id),
+      previousStatus: data.old?.status ?? null,
+    });
+  }
+
+  @HasuraEvent()
   public async draft_game_pick_events(data: DraftGameEvent) {
     if (data.op !== "INSERT") {
       return;
@@ -127,6 +146,19 @@ export class DraftGamesController {
       data.lineup,
     );
     return { success: true };
+  }
+
+  @HasuraAction()
+  public async approveDraftPlayer(data: {
+    user: User;
+    draftGameId: string;
+    steamId: string;
+  }) {
+    return this.draftGameService.approveDraftPlayer(
+      data.user,
+      data.draftGameId,
+      data.steamId,
+    );
   }
 
   @HasuraAction()

@@ -1717,6 +1717,13 @@ type Mutation {
 }
 
 type Mutation {
+  approveDraftPlayer(
+    draftGameId: uuid!
+    steamId: String!
+  ): SuccessOutput
+}
+
+type Mutation {
   respondDraftInvite(
     draftGameId: uuid!
     accept: Boolean!

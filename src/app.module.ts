@@ -61,6 +61,7 @@ import { LeaguesModule } from "./leagues/leagues.module";
 import { PluginsModule } from "./plugins/plugins.module";
 import { UtilityModule } from "./utility/utility.module";
 import { StoreModule } from "./store/store.module";
+import { YpointModule } from "./ypoint/ypoint.module";
 
 @Module({
   imports: [
@@ -157,6 +158,7 @@ import { StoreModule } from "./store/store.module";
     SteamPresenceModule,
     NewsModule,
     StoreModule,
+    YpointModule,
     EventsModule,
     ScrimsModule,
     LeaguesModule,

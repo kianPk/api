@@ -20,6 +20,7 @@ import { MatchAssistantService } from "../matches/match-assistant/match-assistan
 import { MatchmakingLobbyService } from "./matchmaking-lobby.service";
 import { RedisManagerService } from "../redis/redis-manager/redis-manager.service";
 import { MatchmakingQueues } from "./enums/MatchmakingQueues";
+import { YpointService } from "../ypoint/ypoint.service";
 
 type ConfirmationTeams = { team1: MatchmakingTeam; team2: MatchmakingTeam };
 
@@ -105,6 +106,15 @@ describe("MatchmakeService", () => {
         {
           provide: RedisManagerService,
           useValue: mockRedisManager,
+        },
+        {
+          provide: YpointService,
+          useValue: {
+            costForMatchType: jest.fn().mockResolvedValue(0),
+            assertCanAfford: jest.fn().mockResolvedValue(undefined),
+            debitMany: jest.fn().mockResolvedValue(false),
+            credit: jest.fn().mockResolvedValue(0),
+          },
         },
         {
           provide: `BullQueue_${MatchmakingQueues.Matchmaking}`,

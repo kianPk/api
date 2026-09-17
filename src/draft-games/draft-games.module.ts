@@ -19,6 +19,7 @@ import { DraftService } from "./draft.service";
 import { DraftMatchService } from "./draft-match.service";
 import { DraftPickTimeout } from "./jobs/DraftPickTimeout";
 import { CleanExpiredDraftGames } from "./jobs/CleanExpiredDraftGames";
+import { YpointModule } from "../ypoint/ypoint.module";
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { CleanExpiredDraftGames } from "./jobs/CleanExpiredDraftGames";
     CacheModule,
     ChatModule,
     NotificationsModule,
+    YpointModule,
     forwardRef(() => MatchesModule),
     BullModule.registerQueue({
       name: DraftGameQueues.DraftGames,
