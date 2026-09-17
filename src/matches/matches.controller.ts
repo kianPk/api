@@ -202,6 +202,7 @@ export class MatchesController {
         lineup_2_id: true,
         current_match_map_id: true,
         is_tournament_match: true,
+        organizer_steam_id: true,
         draft_games: {
           __args: {
             limit: 1,
@@ -459,6 +460,31 @@ export class MatchesController {
     if (gameMode?.cfg) {
       match.options.cfg_overrides.Mode = gameMode.cfg;
       match.options.cfg_execs.push("mode");
+    }
+
+    // Custom lobbies / scrims / drafts (organizer or draft, not tournament):
+    // no teammate damage. Ranked matchmaking has no organizer and keeps FF.
+    if (
+      !match.is_tournament_match &&
+      (match.organizer_steam_id != null || match.is_draft_match)
+    ) {
+      const noFf = [
+        "mp_friendlyfire 0",
+        "mp_tkpunish 0",
+        "ff_damage_reduction_bullets 0",
+        "ff_damage_reduction_grenade 0",
+        "ff_damage_reduction_grenade_self 0",
+        "ff_damage_reduction_other 0",
+      ].join("\n");
+
+      const existingMode = match.options.cfg_overrides.Mode ?? "";
+      match.options.cfg_overrides.Mode = existingMode.trim()
+        ? `${existingMode.trim()}\n${noFf}`
+        : noFf;
+
+      if (!match.options.cfg_execs.includes("mode")) {
+        match.options.cfg_execs.push("mode");
+      }
     }
 
     // withAlwaysLoad answers with a nameless mode when the only thing to load

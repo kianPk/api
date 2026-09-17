@@ -250,4 +250,98 @@ export class YpointService {
       refId: `${draftGameId}:${steamId}`,
     });
   }
+
+  /** Admin panel: look up a player by SteamID64 or name substring. */
+  public async findPlayers(query: string, limit = 20) {
+    const q = query.trim();
+    if (!q) return [];
+    const capped = Math.min(50, Math.max(1, limit));
+
+    if (/^\d{15,20}$/.test(q)) {
+      return this.postgres.query<
+        Array<{
+          steam_id: string;
+          name: string | null;
+          avatar_url: string | null;
+          ypoint_balance: number;
+        }>
+      >(
+        `SELECT steam_id::text, name, avatar_url, ypoint_balance
+         FROM players
+         WHERE steam_id = $1
+         LIMIT 1`,
+        [q],
+      );
+    }
+
+    return this.postgres.query<
+      Array<{
+        steam_id: string;
+        name: string | null;
+        avatar_url: string | null;
+        ypoint_balance: number;
+      }>
+    >(
+      `SELECT steam_id::text, name, avatar_url, ypoint_balance
+       FROM players
+       WHERE name ILIKE '%' || $1 || '%'
+       ORDER BY name ASC NULLS LAST
+       LIMIT $2`,
+      [q, capped],
+    );
+  }
+
+  /**
+   * Admin add/remove Ypoints. Positive delta credits, negative debits.
+   * Balance cannot go below 0.
+   */
+  public async adminAdjust(args: {
+    targetSteamId: string;
+    delta: number;
+    adminSteamId: string;
+    note?: string;
+  }): Promise<{ balance: number; delta: number }> {
+    const delta = Math.trunc(Number(args.delta));
+    if (!Number.isFinite(delta) || delta === 0) {
+      throw new BadRequestException("delta must be a non-zero integer");
+    }
+    if (!/^\d{15,20}$/.test(args.targetSteamId)) {
+      throw new BadRequestException("Invalid Steam ID");
+    }
+
+    const exists = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT steam_id::text FROM players WHERE steam_id = $1 LIMIT 1`,
+      [args.targetSteamId],
+    );
+    if (!exists.length) {
+      throw new BadRequestException("Player not found");
+    }
+
+    const note = (args.note || "").trim().slice(0, 200);
+    const reason = note
+      ? `admin_adjust:${note}`
+      : `admin_adjust:${args.adminSteamId}`;
+    const refId = `${args.adminSteamId}:${Date.now()}:${Math.abs(delta)}`;
+
+    if (delta > 0) {
+      const balance = await this.credit({
+        steamId: args.targetSteamId,
+        amount: delta,
+        reason,
+        refType: "admin_adjust",
+        refId,
+      });
+      return { balance, delta };
+    }
+
+    const amount = Math.abs(delta);
+    await this.debitMany({
+      steamIds: [args.targetSteamId],
+      amount,
+      reason,
+      refType: "admin_adjust",
+      refId,
+    });
+    return { balance: await this.getBalance(args.targetSteamId), delta };
+  }
 }
