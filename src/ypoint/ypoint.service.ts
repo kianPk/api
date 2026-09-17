@@ -5,6 +5,7 @@ import { SystemSettingName } from "../system/enums/SystemSettingName";
 export type YpointCostKey =
   | "duel"
   | "wingman"
+  | "trios"
   | "draft_create"
   | "draft_join";
 
@@ -37,16 +38,37 @@ export class YpointService {
     return Number.isFinite(num) ? num : fallback;
   }
 
+  private async settingFlag(
+    name: SystemSettingName,
+    fallback = false,
+  ): Promise<boolean> {
+    const rows = await this.postgres.query<Array<{ value: string }>>(
+      `SELECT value FROM public.settings WHERE name = $1 LIMIT 1`,
+      [name],
+    );
+    const raw = rows.at(0)?.value;
+    if (raw === undefined || raw === null || raw === "") return fallback;
+    return raw === "true" || raw === "1";
+  }
+
+  public async isRankedFree(): Promise<boolean> {
+    return this.settingFlag(SystemSettingName.YpointRankedFree, false);
+  }
+
   public async getCosts(): Promise<Record<YpointCostKey, number>> {
-    const [duel, wingman, draftCreate, draftJoin] = await Promise.all([
-      this.settingNumber(SystemSettingName.YpointCostDuel, 8),
-      this.settingNumber(SystemSettingName.YpointCostWingman, 0),
-      this.settingNumber(SystemSettingName.YpointCostDraftCreate, 15),
-      this.settingNumber(SystemSettingName.YpointCostDraftJoin, 10),
-    ]);
+    const [duel, wingman, trios, draftCreate, draftJoin, rankedFree] =
+      await Promise.all([
+        this.settingNumber(SystemSettingName.YpointCostDuel, 8),
+        this.settingNumber(SystemSettingName.YpointCostWingman, 0),
+        this.settingNumber(SystemSettingName.YpointCostTrios, 12),
+        this.settingNumber(SystemSettingName.YpointCostDraftCreate, 15),
+        this.settingNumber(SystemSettingName.YpointCostDraftJoin, 10),
+        this.isRankedFree(),
+      ]);
     return {
-      duel: Math.max(0, Number(duel) || 0),
-      wingman: Math.max(0, Number(wingman) || 0),
+      duel: rankedFree ? 0 : Math.max(0, Number(duel) || 0),
+      wingman: rankedFree ? 0 : Math.max(0, Number(wingman) || 0),
+      trios: rankedFree ? 0 : Math.max(0, Number(trios) || 0),
       draft_create: Math.max(0, Number(draftCreate) || 0),
       draft_join: Math.max(0, Number(draftJoin) || 0),
     };
@@ -56,6 +78,7 @@ export class YpointService {
     const costs = await this.getCosts();
     if (type === "Duel") return costs.duel;
     if (type === "Wingman") return costs.wingman;
+    if (type === "Trios") return costs.trios;
     return 0;
   }
 

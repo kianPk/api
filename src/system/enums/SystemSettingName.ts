@@ -15,8 +15,11 @@ export enum SystemSettingName {
   ChatRetentionDirectDays = "public.chat_retention_direct_days",
   YpointCostDuel = "public.ypoint_cost_duel",
   YpointCostWingman = "public.ypoint_cost_wingman",
+  YpointCostTrios = "public.ypoint_cost_trios",
   YpointCostDraftCreate = "public.ypoint_cost_draft_create",
   YpointCostDraftJoin = "public.ypoint_cost_draft_join",
+  // When true, Duel / Wingman / Trios cost 0 regardless of the per-mode prices.
+  YpointRankedFree = "public.ypoint_ranked_free",
   DemoNetworkLimiter = "demo_network_limiter",
   PublicDefaultModels = "public.default_models",
   VetoPickTimeout = "public.veto_pick_timeout",
