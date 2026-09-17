@@ -167,7 +167,7 @@ event_triggers:
     definition:
       enable_manual: false
       insert:
-        columns: "*"
+        columns: '*'
       update:
         columns:
           - status
@@ -175,4 +175,4 @@ event_triggers:
       interval_sec: 10
       num_retries: 3
       timeout_sec: 60
-    webhook: "{{HASURA_GRAPHQL_EVENT_HOOK}}"
+    webhook: '{{HASURA_GRAPHQL_EVENT_HOOK}}'
