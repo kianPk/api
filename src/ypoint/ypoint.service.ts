@@ -39,9 +39,9 @@ export class YpointService {
 
   public async getCosts(): Promise<Record<YpointCostKey, number>> {
     const [duel, wingman, draftCreate, draftJoin] = await Promise.all([
-      this.settingNumber(SystemSettingName.YpointCostDuel, 5),
-      this.settingNumber(SystemSettingName.YpointCostWingman, 8),
-      this.settingNumber(SystemSettingName.YpointCostDraftCreate, 10),
+      this.settingNumber(SystemSettingName.YpointCostDuel, 8),
+      this.settingNumber(SystemSettingName.YpointCostWingman, 0),
+      this.settingNumber(SystemSettingName.YpointCostDraftCreate, 15),
       this.settingNumber(SystemSettingName.YpointCostDraftJoin, 10),
     ]);
     return {

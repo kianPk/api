@@ -27,9 +27,9 @@ COMMENT ON COLUMN public.store_products.ypoint_amount IS 'If set, paying for thi
 COMMENT ON TABLE public.ypoint_ledger IS 'Append-only Ypoint balance changes';
 
 INSERT INTO public.settings (name, value) VALUES
-  ('public.ypoint_cost_duel', '5'),
-  ('public.ypoint_cost_wingman', '8'),
-  ('public.ypoint_cost_draft_create', '10'),
+  ('public.ypoint_cost_duel', '8'),
+  ('public.ypoint_cost_wingman', '0'),
+  ('public.ypoint_cost_draft_create', '15'),
   ('public.ypoint_cost_draft_join', '10')
 ON CONFLICT (name) DO NOTHING;
 
