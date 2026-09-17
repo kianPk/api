@@ -61,7 +61,7 @@ export const PUSH_CATEGORIES: Record<string, e_notification_types_enum[]> = {
     "DraftInvite",
   ],
   utility: ["UtilityPracticeInvite", "UtilityPracticeReady"],
-  account: ["NameChangeApproved", "NameChangeDenied", "PlayerSanctioned", "AwardGranted"],
+  account: ["NameChangeApproved", "NameChangeDenied", "PlayerSanctioned", "AwardGranted", "StorePurchasePaid", "StorePurchaseCancelled"],
   news: ["NewsPublished"],
   staff_moderation: ["MatchSupport", "MatchAbandoned", "NameChangeRequest"],
   staff_infrastructure: [
@@ -116,6 +116,8 @@ export const IN_APP_KEYS: PreferenceKey[] = [
   { key: "MatchStatsReady", defaultEnabled: true },
   { key: "ClipReady", defaultEnabled: true },
   { key: "AwardGranted", defaultEnabled: true },
+  { key: "StorePurchasePaid", defaultEnabled: true },
+  { key: "StorePurchaseCancelled", defaultEnabled: true },
   { key: "NewsPublished", defaultEnabled: true },
   { key: "TournamentReminder", defaultEnabled: true },
   { key: "TournamentCheckInOpen", defaultEnabled: true },

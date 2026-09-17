@@ -49,3 +49,17 @@ insert_permissions:
         - amount_irr
         - bale_payload
 # Amount/status are enforced by store_orders_before_insert trigger.
+update_permissions:
+  - role: user
+    permission:
+      filter:
+        _and:
+          - buyer_steam_id:
+              _eq: X-Hasura-User-Id
+          - status:
+              _eq: pending
+      check:
+        status:
+          _eq: cancelled
+      columns:
+        - status

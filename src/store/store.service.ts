@@ -13,6 +13,8 @@ import { AppConfig } from "../configs/types/AppConfig";
 
 import { YpointService } from "../ypoint/ypoint.service";
 import { RconService } from "../rcon/rcon.service";
+import { NotificationsService } from "../notifications/notifications.service";
+import { e_notification_types_enum } from "../../generated/schema";
 
 type StoreProductRow = {
   id: string;
@@ -47,6 +49,7 @@ export class StoreService {
     private readonly logger: Logger,
     private readonly ypoint: YpointService,
     private readonly rcon: RconService,
+    private readonly notifications: NotificationsService,
   ) {
     this.envBale = this.configService.get<BaleConfig>("bale");
     this.app = this.configService.get<AppConfig>("app");
@@ -241,6 +244,7 @@ export class StoreService {
         vip_server_id: string | null;
         vip_duration: string | null;
         vip_granted_at: string | null;
+        product_title: string;
       }>
     >(
       `UPDATE store_orders o
@@ -252,13 +256,12 @@ export class StoreService {
          AND o.status = 'pending'
          AND p.id = o.product_id
        RETURNING o.id, o.buyer_steam_id::text, p.ypoint_amount,
-                 p.vip_server_id, p.vip_duration, o.vip_granted_at`,
+                 p.vip_server_id, p.vip_duration, o.vip_granted_at, p.title AS product_title`,
       [payload, chargeId || null],
     );
 
     const order = updated.at(0);
     if (!order) {
-      // Already paid — still try VIP grant if a previous RCON attempt failed.
       const existing = await this.postgres.query<
         Array<{
           id: string;
@@ -266,9 +269,12 @@ export class StoreService {
           vip_server_id: string | null;
           vip_duration: string | null;
           vip_granted_at: string | null;
+          product_title: string;
+          ypoint_amount: number | null;
         }>
       >(
-        `SELECT o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration, o.vip_granted_at
+        `SELECT o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration,
+                o.vip_granted_at, p.title AS product_title, p.ypoint_amount
          FROM store_orders o
          JOIN store_products p ON p.id = o.product_id
          WHERE o.bale_payload = $1 AND o.status = 'paid'
@@ -278,6 +284,7 @@ export class StoreService {
       const paid = existing.at(0);
       if (paid) {
         await this.grantVipIfNeeded(paid);
+        await this.notifyPurchasePaid(paid);
       } else {
         this.logger.log(`Store order already paid or missing payload=${payload}`);
       }
@@ -296,8 +303,114 @@ export class StoreService {
     }
 
     await this.grantVipIfNeeded(order);
+    await this.notifyPurchasePaid(order);
 
     this.logger.log(`Store order paid payload=${payload} charge=${chargeId}`);
+  }
+
+  public async cancelPendingOrders(steamId: string, exceptOrderId?: string) {
+    const cancelled = await this.postgres.query<
+      Array<{ id: string; product_title: string }>
+    >(
+      `UPDATE store_orders o
+       SET status = 'cancelled'
+       FROM store_products p
+       WHERE o.product_id = p.id
+         AND o.buyer_steam_id = $1::bigint
+         AND o.status = 'pending'
+         AND ($2::uuid IS NULL OR o.id <> $2::uuid)
+       RETURNING o.id, p.title AS product_title`,
+      [steamId, exceptOrderId || null],
+    );
+
+    for (const row of cancelled) {
+      await this.notifyPurchaseCancelled(row.id, steamId, row.product_title);
+    }
+
+    return { cancelled: cancelled.length };
+  }
+
+  private async notifyPurchasePaid(order: {
+    id: string;
+    buyer_steam_id: string;
+    product_title: string;
+    ypoint_amount?: number | null;
+    vip_duration?: string | null;
+    vip_server_id?: string | null;
+  }) {
+    try {
+      const existing = await this.postgres.query<Array<{ id: string }>>(
+        `SELECT id FROM notifications
+         WHERE steam_id = $1::bigint
+           AND type = 'StorePurchasePaid'
+           AND entity_id = $2
+         LIMIT 1`,
+        [order.buyer_steam_id, order.id],
+      );
+      if (existing.length) return;
+
+      const bits: string[] = [
+        `Payment for <b>${NotificationsService.escapeHtml(order.product_title)}</b> succeeded.`,
+      ];
+      const yp = Number(order.ypoint_amount || 0);
+      if (yp > 0) bits.push(`+${yp} Ypoints credited.`);
+      if (order.vip_server_id && order.vip_duration) {
+        bits.push(`VIP ${NotificationsService.escapeHtml(order.vip_duration)} activated on the server.`);
+      }
+      bits.push(`<a href="/store">Open Store</a>`);
+
+      await this.notifications.notifyPlayers(
+        "StorePurchasePaid" as e_notification_types_enum,
+        {
+          title: "Purchase successful",
+          message: bits.join(" "),
+          role: "user",
+          entity_id: order.id,
+          steamIds: [order.buyer_steam_id],
+        },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Store paid notify failed order=${order.id}`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  private async notifyPurchaseCancelled(
+    orderId: string,
+    steamId: string,
+    productTitle: string,
+  ) {
+    try {
+      const existing = await this.postgres.query<Array<{ id: string }>>(
+        `SELECT id FROM notifications
+         WHERE steam_id = $1::bigint
+           AND type = 'StorePurchaseCancelled'
+           AND entity_id = $2
+         LIMIT 1`,
+        [steamId, orderId],
+      );
+      if (existing.length) return;
+
+      await this.notifications.notifyPlayers(
+        "StorePurchaseCancelled" as e_notification_types_enum,
+        {
+          title: "Purchase cancelled",
+          message: `Your pending purchase of <b>${NotificationsService.escapeHtml(
+            productTitle,
+          )}</b> was cancelled. <a href="/store">Open Store</a>`,
+          role: "user",
+          entity_id: orderId,
+          steamIds: [steamId],
+        },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Store cancel notify failed order=${orderId}`,
+        error instanceof Error ? error.message : error,
+      );
+    }
   }
 
   private async grantVipIfNeeded(order: {
@@ -307,7 +420,6 @@ export class StoreService {
     vip_duration: string | null;
     vip_granted_at: string | null;
   }) {
-    if (order.vip_granted_at) return;
     const serverId = order.vip_server_id?.trim();
     const duration = (order.vip_duration || "").trim();
     if (!serverId || !duration) return;
@@ -320,36 +432,111 @@ export class StoreService {
       return;
     }
 
-    // Duration tokens accepted by YGuardVIP (30d, 1mo, …).
-    if (!/^(perm|permanent|0|lifetime|forever|\d+\s*(m|min|mins|h|hr|hrs|d|day|days|w|week|weeks|mo|month|months))$/i.test(duration)) {
+    if (
+      !/^(perm|permanent|0|lifetime|forever|\d+\s*(m|min|mins|h|hr|hrs|d|day|days|w|week|weeks|mo|month|months))$/i.test(
+        duration,
+      )
+    ) {
       this.logger.error(
         `VIP grant skipped: bad duration "${duration}" for order ${order.id}`,
       );
       return;
     }
 
-    try {
-      const rcon = await this.rcon.connect(serverId);
-      if (!rcon) {
+    if (!order.vip_granted_at) {
+      try {
+        const rcon = await this.rcon.connect(serverId);
+        if (!rcon) {
+          this.logger.error(
+            `VIP grant failed: RCON unavailable server=${serverId} order=${order.id}`,
+          );
+        } else {
+          const reply = await rcon.send(`css_addvip ${steamId} ${duration}`);
+          this.logger.log(
+            `VIP granted steam=${steamId} server=${serverId} duration=${duration} reply=${String(reply || "").slice(0, 200)}`,
+          );
+          await this.postgres.query(
+            `UPDATE store_orders SET vip_granted_at = now() WHERE id = $1 AND vip_granted_at IS NULL`,
+            [order.id],
+          );
+        }
+      } catch (error) {
         this.logger.error(
-          `VIP grant failed: RCON unavailable server=${serverId} order=${order.id}`,
+          `VIP grant RCON error order=${order.id} server=${serverId}`,
+          error instanceof Error ? error.stack : error,
         );
-        return;
       }
-      const reply = await rcon.send(`css_addvip ${steamId} ${duration}`);
-      this.logger.log(
-        `VIP granted steam=${steamId} server=${serverId} duration=${duration} reply=${String(reply || "").slice(0, 200)}`,
-      );
+    }
+
+    await this.upsertVipGrant({
+      steamId,
+      serverId,
+      orderId: order.id,
+      duration,
+    });
+  }
+
+  private async upsertVipGrant(args: {
+    steamId: string;
+    serverId: string;
+    orderId: string;
+    duration: string;
+  }) {
+    const expiresAt = StoreService.durationToExpiry(args.duration);
+    try {
       await this.postgres.query(
-        `UPDATE store_orders SET vip_granted_at = now() WHERE id = $1 AND vip_granted_at IS NULL`,
-        [order.id],
+        `INSERT INTO store_vip_grants (steam_id, server_id, order_id, expires_at)
+         VALUES ($1::bigint, $2::uuid, $3::uuid, $4::timestamptz)
+         ON CONFLICT (steam_id, server_id) DO UPDATE SET
+           order_id = EXCLUDED.order_id,
+           expires_at = CASE
+             WHEN EXCLUDED.expires_at IS NULL THEN NULL
+             WHEN store_vip_grants.expires_at IS NOT NULL
+               AND store_vip_grants.expires_at > now()
+               AND EXCLUDED.expires_at IS NOT NULL
+             THEN store_vip_grants.expires_at
+                  + (EXCLUDED.expires_at - now())
+             ELSE EXCLUDED.expires_at
+           END,
+           updated_at = now()`,
+        [args.steamId, args.serverId, args.orderId, expiresAt],
       );
     } catch (error) {
-      this.logger.error(
-        `VIP grant RCON error order=${order.id} server=${serverId}`,
-        error instanceof Error ? error.stack : error,
+      this.logger.warn(
+        `VIP grant roster upsert failed order=${args.orderId}`,
+        error instanceof Error ? error.message : error,
       );
     }
+  }
+
+  /** Convert YGuardVIP duration token to an absolute expiry (UTC ISO), or null for permanent. */
+  static durationToExpiry(duration: string): string | null {
+    const s = duration.trim().toLowerCase();
+    if (
+      s === "perm" ||
+      s === "permanent" ||
+      s === "0" ||
+      s === "lifetime" ||
+      s === "forever"
+    ) {
+      return null;
+    }
+    const m = s.match(
+      /^(\d+)\s*(m|min|mins|h|hr|hrs|d|day|days|w|week|weeks|mo|month|months)$/,
+    );
+    if (!m) return null;
+    const n = Number(m[1]);
+    const unit = m[2];
+    const ms = /^(m|min|mins)$/.test(unit)
+      ? n * 60_000
+      : /^(h|hr|hrs)$/.test(unit)
+        ? n * 3_600_000
+        : /^(d|day|days)$/.test(unit)
+          ? n * 86_400_000
+          : /^(w|week|weeks)$/.test(unit)
+            ? n * 7 * 86_400_000
+            : n * 30 * 86_400_000;
+    return new Date(Date.now() + ms).toISOString();
   }
 
   private async sendInvoice(args: {

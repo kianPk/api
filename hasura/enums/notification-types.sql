@@ -44,6 +44,8 @@ INSERT INTO e_notification_types ("value", "description") VALUES
     ('MatchStatsReady', 'Stats for a match you played are ready'),
     ('ClipReady', 'A clip you requested finished rendering'),
     ('AwardGranted', 'You received an award'),
+    ('StorePurchasePaid', 'A store purchase was paid successfully'),
+    ('StorePurchaseCancelled', 'A store purchase was cancelled or failed'),
     ('EventReminder', 'An event you are attending starts soon'),
     ('SeasonEnded', 'A season has ended'),
     ('UtilityPracticeInvite', 'You were invited to a utility practice session'),

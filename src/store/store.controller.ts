@@ -34,6 +34,15 @@ export class StoreController {
     return this.store.checkout(body.productId, user.steam_id);
   }
 
+  @Post("cancel-pending")
+  public async cancelPending(
+    @Req() request: Request,
+    @Body() body: { exceptOrderId?: string },
+  ) {
+    const user = this.requireUser(request);
+    return this.store.cancelPendingOrders(user.steam_id, body?.exceptOrderId);
+  }
+
   @Post("bale-webhook")
   public async baleWebhook(
     @Headers("x-bale-webhook-secret") secretHeader: string | undefined,

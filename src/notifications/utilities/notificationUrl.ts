@@ -36,6 +36,8 @@ const PATH_BY_TYPE: Record<string, (entityId: string) => string> = {
   TournamentTeamInvite: () => `/tournaments`,
   // entity_id is the grant, not the award, and there is no page for a grant.
   AwardGranted: () => `/awards`,
+  StorePurchasePaid: () => `/store`,
+  StorePurchaseCancelled: () => `/store`,
   // Where the name was requested, which is where the outcome belongs.
   NameChangeApproved: () => `/settings`,
   NameChangeDenied: () => `/settings`,

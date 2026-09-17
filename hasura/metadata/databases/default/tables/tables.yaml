@@ -177,6 +177,7 @@
 - "!include public_steam_accounts.yaml"
 - "!include public_store_orders.yaml"
 - "!include public_store_products.yaml"
+- "!include public_store_vip_grants.yaml"
 - "!include public_system_alerts.yaml"
 - "!include public_team_invites.yaml"
 - "!include public_team_roster.yaml"
