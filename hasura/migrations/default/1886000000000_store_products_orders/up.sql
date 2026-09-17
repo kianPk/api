@@ -18,7 +18,7 @@ CREATE INDEX IF NOT EXISTS store_products_active_sort_idx
 CREATE TABLE IF NOT EXISTS public.store_orders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   product_id uuid NOT NULL REFERENCES public.store_products (id) ON DELETE RESTRICT,
-  buyer_steam_id text NOT NULL REFERENCES public.players (steam_id) ON DELETE CASCADE,
+  buyer_steam_id bigint NOT NULL REFERENCES public.players (steam_id) ON UPDATE CASCADE ON DELETE CASCADE,
   amount_irr integer NOT NULL CHECK (amount_irr >= 0),
   status text NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'paid', 'failed', 'cancelled')),
