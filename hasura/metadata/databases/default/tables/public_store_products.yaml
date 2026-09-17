@@ -1,0 +1,140 @@
+table:
+  name: store_products
+  schema: public
+object_relationships: []
+insert_permissions:
+  - role: administrator
+    permission:
+      check: {}
+      columns:
+        - title
+        - slug
+        - description
+        - price_irr
+        - image_url
+        - active
+        - sort_order
+select_permissions:
+  - role: administrator
+    permission:
+      columns:
+        - id
+        - title
+        - slug
+        - description
+        - price_irr
+        - image_url
+        - active
+        - sort_order
+        - created_at
+        - updated_at
+      filter: {}
+      allow_aggregations: true
+  - role: guest
+    permission:
+      columns:
+        - id
+        - title
+        - slug
+        - description
+        - price_irr
+        - image_url
+        - active
+        - sort_order
+        - created_at
+      filter:
+        active:
+          _eq: true
+  - role: user
+    permission:
+      columns:
+        - id
+        - title
+        - slug
+        - description
+        - price_irr
+        - image_url
+        - active
+        - sort_order
+        - created_at
+      filter:
+        active:
+          _eq: true
+  - role: verified_user
+    permission:
+      columns:
+        - id
+        - title
+        - slug
+        - description
+        - price_irr
+        - image_url
+        - active
+        - sort_order
+        - created_at
+      filter:
+        active:
+          _eq: true
+  - role: match_organizer
+    permission:
+      columns:
+        - id
+        - title
+        - slug
+        - description
+        - price_irr
+        - image_url
+        - active
+        - sort_order
+        - created_at
+      filter:
+        active:
+          _eq: true
+  - role: tournament_organizer
+    permission:
+      columns:
+        - id
+        - title
+        - slug
+        - description
+        - price_irr
+        - image_url
+        - active
+        - sort_order
+        - created_at
+      filter:
+        active:
+          _eq: true
+  - role: streamer
+    permission:
+      columns:
+        - id
+        - title
+        - slug
+        - description
+        - price_irr
+        - image_url
+        - active
+        - sort_order
+        - created_at
+      filter:
+        active:
+          _eq: true
+update_permissions:
+  - role: administrator
+    permission:
+      columns:
+        - title
+        - slug
+        - description
+        - price_irr
+        - image_url
+        - active
+        - sort_order
+        - updated_at
+      filter: {}
+      check: {}
+delete_permissions:
+  - role: administrator
+    permission:
+      filter: {}

@@ -1,0 +1,91 @@
+table:
+  name: store_orders
+  schema: public
+object_relationships:
+  - name: product
+    using:
+      foreign_key_constraint_on: product_id
+  - name: buyer
+    using:
+      foreign_key_constraint_on: buyer_steam_id
+select_permissions:
+  - role: administrator
+    permission:
+      columns:
+        - id
+        - product_id
+        - buyer_steam_id
+        - amount_irr
+        - status
+        - bale_payload
+        - bale_payment_charge_id
+        - created_at
+        - paid_at
+      filter: {}
+      allow_aggregations: true
+  - role: user
+    permission:
+      columns:
+        - id
+        - product_id
+        - buyer_steam_id
+        - amount_irr
+        - status
+        - created_at
+        - paid_at
+      filter:
+        buyer_steam_id:
+          _eq: X-Hasura-User-Id
+  - role: verified_user
+    permission:
+      columns:
+        - id
+        - product_id
+        - buyer_steam_id
+        - amount_irr
+        - status
+        - created_at
+        - paid_at
+      filter:
+        buyer_steam_id:
+          _eq: X-Hasura-User-Id
+  - role: match_organizer
+    permission:
+      columns:
+        - id
+        - product_id
+        - buyer_steam_id
+        - amount_irr
+        - status
+        - created_at
+        - paid_at
+      filter:
+        buyer_steam_id:
+          _eq: X-Hasura-User-Id
+  - role: tournament_organizer
+    permission:
+      columns:
+        - id
+        - product_id
+        - buyer_steam_id
+        - amount_irr
+        - status
+        - created_at
+        - paid_at
+      filter:
+        buyer_steam_id:
+          _eq: X-Hasura-User-Id
+  - role: streamer
+    permission:
+      columns:
+        - id
+        - product_id
+        - buyer_steam_id
+        - amount_irr
+        - status
+        - created_at
+        - paid_at
+      filter:
+        buyer_steam_id:
+          _eq: X-Hasura-User-Id
+# Inserts/updates go through Nest (service role / Postgres), not GraphQL clients.

@@ -60,6 +60,7 @@ import { ScrimsModule } from "./scrims/scrims.module";
 import { LeaguesModule } from "./leagues/leagues.module";
 import { PluginsModule } from "./plugins/plugins.module";
 import { UtilityModule } from "./utility/utility.module";
+import { StoreModule } from "./store/store.module";
 
 @Module({
   imports: [
@@ -155,6 +156,7 @@ import { UtilityModule } from "./utility/utility.module";
     SteamMatchHistoryModule,
     SteamPresenceModule,
     NewsModule,
+    StoreModule,
     EventsModule,
     ScrimsModule,
     LeaguesModule,

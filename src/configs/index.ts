@@ -10,6 +10,7 @@ import typesense from "./typesense";
 import tailscale from "./tailscale";
 import faceit from "./faceit";
 import webPush from "./web-push";
+import bale from "./bale";
 
 export default [
   app,
@@ -24,4 +25,5 @@ export default [
   tailscale,
   faceit,
   webPush,
+  bale,
 ];
