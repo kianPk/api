@@ -8,26 +8,17 @@ import {
   Req,
   UnauthorizedException,
 } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { Request } from "express";
 import { User } from "../auth/types/User";
-import { BaleConfig } from "../configs/types/BaleConfig";
 import { StoreService } from "./store.service";
 import { timingSafeStringEqual } from "../utilities/timingSafeStringEqual";
 
 @Controller("store")
 export class StoreController {
-  private readonly bale: BaleConfig;
-
-  constructor(
-    private readonly store: StoreService,
-    private readonly configService: ConfigService,
-  ) {
-    this.bale = this.configService.get<BaleConfig>("bale");
-  }
+  constructor(private readonly store: StoreService) {}
 
   @Get("status")
-  public status() {
+  public async status() {
     return this.store.getPublicStatus();
   }
 
@@ -48,11 +39,9 @@ export class StoreController {
     @Headers("x-bale-webhook-secret") secretHeader: string | undefined,
     @Body() body: any,
   ) {
-    if (this.bale.webhookSecret) {
-      const ok = timingSafeStringEqual(
-        secretHeader || "",
-        this.bale.webhookSecret,
-      );
+    const webhookSecret = await this.store.getWebhookSecret();
+    if (webhookSecret) {
+      const ok = timingSafeStringEqual(secretHeader || "", webhookSecret);
       if (!ok) {
         throw new UnauthorizedException("Invalid webhook secret");
       }

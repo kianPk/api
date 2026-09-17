@@ -19,6 +19,9 @@ select_permissions:
         name:
           _nin:
             - web_push_private_key
+            - bale.bot_token
+            - bale.provider_token
+            - bale.webhook_secret
     comment: ""
   - role: guest
     permission:

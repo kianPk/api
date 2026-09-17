@@ -32,7 +32,7 @@ type StoreOrderRow = {
 
 @Injectable()
 export class StoreService {
-  private readonly bale: BaleConfig;
+  private readonly envBale: BaleConfig;
   private readonly app: AppConfig;
 
   constructor(
@@ -40,24 +40,47 @@ export class StoreService {
     private readonly configService: ConfigService,
     private readonly logger: Logger,
   ) {
-    this.bale = this.configService.get<BaleConfig>("bale");
+    this.envBale = this.configService.get<BaleConfig>("bale");
     this.app = this.configService.get<AppConfig>("app");
   }
 
-  public isConfigured(): boolean {
-    return Boolean(this.bale.botToken && this.bale.providerToken);
+  /** Env wins; settings (`bale.*`) fill gaps so tokens can be set without kubectl. */
+  private async resolveBale(): Promise<BaleConfig> {
+    const rows = await this.postgres.query<Array<{ name: string; value: string }>>(
+      `SELECT name, value FROM settings
+       WHERE name = ANY($1::text[])`,
+      [["bale.bot_token", "bale.provider_token", "bale.bot_username", "bale.webhook_secret"]],
+    );
+    const map = Object.fromEntries(rows.map((r) => [r.name, r.value ?? ""]));
+    return {
+      botToken: this.envBale.botToken || map["bale.bot_token"] || "",
+      providerToken: this.envBale.providerToken || map["bale.provider_token"] || "",
+      botUsername: this.envBale.botUsername || map["bale.bot_username"] || "",
+      webhookSecret: this.envBale.webhookSecret || map["bale.webhook_secret"] || "",
+    };
   }
 
-  public getPublicStatus() {
+  public async isConfigured(): Promise<boolean> {
+    const bale = await this.resolveBale();
+    return Boolean(bale.botToken && bale.providerToken);
+  }
+
+  public async getPublicStatus() {
+    const bale = await this.resolveBale();
     return {
-      configured: this.isConfigured(),
-      botUsername: this.bale.botUsername || null,
+      configured: Boolean(bale.botToken && bale.providerToken),
+      botUsername: bale.botUsername || null,
       webhookHint: `https://${this.app.apiDomain}/store/bale-webhook`,
     };
   }
 
+  public async getWebhookSecret(): Promise<string> {
+    return (await this.resolveBale()).webhookSecret || "";
+  }
+
   public async checkout(productId: string, buyerSteamId: string) {
-    if (!this.isConfigured()) {
+    const bale = await this.resolveBale();
+    if (!bale.botToken || !bale.providerToken) {
       throw new ServiceUnavailableException(
         "Bale Pay is not configured. Set BALE_BOT_TOKEN and BALE_PROVIDER_TOKEN.",
       );
@@ -88,14 +111,14 @@ export class StoreService {
       [orderId, product.id, buyerSteamId, product.price_irr, payload],
     );
 
-    const deepLink = this.buildDeepLink(orderId);
+    const deepLink = this.buildDeepLink(orderId, bale.botUsername);
 
     return {
       orderId,
       amountIrr: product.price_irr,
       productTitle: product.title,
       deepLink,
-      botUsername: this.bale.botUsername || null,
+      botUsername: bale.botUsername || null,
       // Client opens Bale; /start pay_<orderId> triggers invoice send.
       startParam: `pay_${orderId.replace(/-/g, "")}`,
     };
@@ -137,6 +160,7 @@ export class StoreService {
       description: order.description || order.title,
       payload: order.bale_payload,
       amountIrr: order.amount_irr,
+      providerToken: (await this.resolveBale()).providerToken,
     });
 
     return { ok: true };
@@ -198,13 +222,14 @@ export class StoreService {
     description: string;
     payload: string;
     amountIrr: number;
+    providerToken: string;
   }) {
     const body = {
       chat_id: args.chatId,
       title: args.title.slice(0, 32),
       description: args.description.slice(0, 255),
       payload: args.payload,
-      provider_token: this.bale.providerToken,
+      provider_token: args.providerToken,
       currency: "IRR",
       prices: [
         {
@@ -226,10 +251,11 @@ export class StoreService {
   }
 
   private async baleApi(method: string, body: Record<string, unknown>) {
-    if (!this.bale.botToken) {
+    const bale = await this.resolveBale();
+    if (!bale.botToken) {
       throw new ServiceUnavailableException("Bale bot token missing");
     }
-    const url = `https://tapi.bale.ai/bot${this.bale.botToken}/${method}`;
+    const url = `https://tapi.bale.ai/bot${bale.botToken}/${method}`;
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -248,9 +274,9 @@ export class StoreService {
     return data;
   }
 
-  private buildDeepLink(orderId: string): string {
+  private buildDeepLink(orderId: string, botUsername: string): string {
     const start = `pay_${orderId.replace(/-/g, "")}`;
-    const username = (this.bale.botUsername || "").replace(/^@/, "");
+    const username = (botUsername || "").replace(/^@/, "");
     if (username) {
       return `https://ble.ir/${username}?start=${start}`;
     }
