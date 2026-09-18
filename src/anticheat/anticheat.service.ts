@@ -472,7 +472,7 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       version: process.env.AC_LAUNCHER_VERSION || "0.2.0",
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.2.2/YGuardAC-0.2.2-client.zip",
+        "https://github.com/kianPk/web/releases/download/client-v0.2.3/YGuardAC-0.2.3-client.zip",
       mandatory: false,
     };
   }
