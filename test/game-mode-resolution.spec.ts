@@ -359,11 +359,12 @@ describe("game mode resolution (SQL-driven)", () => {
         (await service.resolveForServer(serverId, ranked))?.enabledPlugins,
       ).toEqual("inventory-simulator@1.0.0");
 
+      // Ranked load also covers custom matches so security plugins apply
+      // fleet-wide without a second toggle.
       const casual = await matchOn(serverId, { ranked: false });
       expect(
-        (await service.resolveForServer(serverId, casual))?.enabledPlugins ??
-          "",
-      ).toEqual("");
+        (await service.resolveForServer(serverId, casual))?.enabledPlugins,
+      ).toEqual("inventory-simulator@1.0.0");
     });
 
     // Both flags true must resolve to the tournament bucket, so a ranked-only
@@ -395,7 +396,7 @@ describe("game mode resolution (SQL-driven)", () => {
       expect(await forScope("custom")).toEqual([]);
     });
 
-    it("loads only where its target says", async () => {
+    it("loads ranked plugins on ranked and custom, not tournaments", async () => {
       await autoLoads("inventory-simulator", {
         ranked: true,
         tournaments: false,
@@ -404,7 +405,7 @@ describe("game mode resolution (SQL-driven)", () => {
 
       expect(await forScope("ranked")).toEqual(["inventory-simulator@1.0.0"]);
       expect(await forScope("tournaments")).toEqual([]);
-      expect(await forScope("custom")).toEqual([]);
+      expect(await forScope("custom")).toEqual(["inventory-simulator@1.0.0"]);
     });
 
     it("keeps a customs-only plugin out of ranked and tournaments", async () => {
@@ -420,12 +421,23 @@ describe("game mode resolution (SQL-driven)", () => {
     });
 
     // A dedicated server is built before it has a match, so gating it on a
-    // guess would drop plugins it is meant to carry.
+    // guess would drop plugins it is meant to carry. Public pods get the
+    // union of every load flag — including ranked.
     it("falls back to anything that loads somewhere with no match", async () => {
       await autoLoads("inventory-simulator", {
         ranked: false,
         tournaments: false,
         custom: true,
+      });
+
+      expect(await forScope()).toEqual(["inventory-simulator@1.0.0"]);
+    });
+
+    it("also loads a ranked-only plugin on a public pod with no match", async () => {
+      await autoLoads("inventory-simulator", {
+        ranked: true,
+        tournaments: false,
+        custom: false,
       });
 
       expect(await forScope()).toEqual(["inventory-simulator@1.0.0"]);
