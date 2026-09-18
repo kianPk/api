@@ -5,6 +5,7 @@ import {
   Header,
   Headers,
   Post,
+  Query,
   Req,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -100,6 +101,20 @@ export class AnticheatController {
   @Header("Cache-Control", "no-store, no-cache, must-revalidate")
   public launcher() {
     return this.ac.getLauncherRelease();
+  }
+
+  /**
+   * Game server (Bearer SERVER_API_PASSWORD): may this steam join / stay?
+   * Used by YGuardAC plugin to kick IP-connects without a live launcher.
+   */
+  @Get("server/check")
+  @Header("Cache-Control", "no-store")
+  public serverCheck(
+    @Headers("authorization") authorization: string | undefined,
+    @Query("steam_id") steamId: string,
+    @Query("server_id") serverId: string,
+  ) {
+    return this.ac.checkPlayerForServer(serverId, steamId, authorization);
   }
 
   /** Launcher: report local cheat signature hits → platform ban; clean → unban. */

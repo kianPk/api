@@ -11,6 +11,7 @@ import { ModuleRef } from "@nestjs/core";
 import { createHash, randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
 import { SystemSettingName } from "../system/enums/SystemSettingName";
+import { timingSafeStringEqual } from "../utilities/timingSafeStringEqual";
 
 export type AcChecks = {
   secure_boot: boolean;
@@ -34,7 +35,7 @@ export type AcCheatHit = {
 };
 
 /** Launcher must heartbeat at least this often while in a match. */
-const DEVICE_ALIVE_SECONDS = 45;
+const DEVICE_ALIVE_SECONDS = 35;
 
 @Injectable()
 export class AnticheatService implements OnModuleInit, OnModuleDestroy {
@@ -675,6 +676,72 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     if (result.length > 0) {
       this.logger.log(`AC cleaned ${result.length} leftover security ban(s)`);
     }
+  }
+
+  /**
+   * Game-server plugin gate: Bearer = servers.api_password.
+   * Lineup players on this server's current match must have a live AC launcher.
+   */
+  public async checkPlayerForServer(
+    serverId: string,
+    steamId: string,
+    authorization?: string,
+  ): Promise<{ required: boolean; allowed: boolean; reason?: string }> {
+    const sid = String(serverId || "").trim();
+    const steam = String(steamId || "").trim();
+    if (!sid || !steam) {
+      throw new BadRequestException("server_id and steam_id required");
+    }
+
+    const apiPassword = String(authorization || "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+    const servers = await this.postgres.query<
+      Array<{ api_password: string | null }>
+    >(
+      `SELECT api_password::text AS api_password
+       FROM public.servers
+       WHERE id = $1::uuid
+       LIMIT 1`,
+      [sid],
+    );
+    const row = servers.at(0);
+    if (!row || !timingSafeStringEqual(row.api_password, apiPassword)) {
+      throw new UnauthorizedException("Invalid server credentials");
+    }
+
+    const req = await this.getRequirements();
+    if (!req.required) {
+      return { required: false, allowed: true };
+    }
+
+    const inLineup = await this.postgres.query<Array<{ ok: number }>>(
+      `SELECT 1 AS ok
+       FROM public.matches m
+       JOIN public.match_lineup_players mlp
+         ON mlp.match_lineup_id IN (m.lineup_1_id, m.lineup_2_id)
+       WHERE m.server_id = $1::uuid
+         AND mlp.steam_id = $2::bigint
+         AND m.status NOT IN (
+           'Canceled', 'Finished', 'Forfeit', 'Surrendered', 'Tie', 'Veto'
+         )
+       LIMIT 1`,
+      [sid, steam],
+    );
+    if (inLineup.length === 0) {
+      // Spectator / non-roster — do not block.
+      return { required: true, allowed: true };
+    }
+
+    const ok = await this.hasValidAttestation(steam);
+    if (ok) {
+      return { required: true, allowed: true };
+    }
+    return {
+      required: true,
+      allowed: false,
+      reason: "YGuard AC: reopen the Anti-Cheat launcher",
+    };
   }
 
   /**
