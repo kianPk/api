@@ -8,7 +8,7 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
-import { createHash, randomBytes } from "crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
 import { SystemSettingName } from "../system/enums/SystemSettingName";
 import { timingSafeStringEqual } from "../utilities/timingSafeStringEqual";
@@ -36,6 +36,16 @@ export type AcCheatHit = {
 
 /** Launcher must heartbeat at least this often while in a match. */
 const DEVICE_ALIVE_SECONDS = 35;
+
+/** One-time attest challenge lifetime (seconds). */
+const CHALLENGE_TTL_SECONDS = 45;
+
+/** Reject attest clocks skewed more than this (seconds). */
+const ATTEST_CLOCK_SKEW_SECONDS = 60;
+
+/** Minimum launcher build that speaks the signed-challenge protocol. */
+const MIN_CLIENT_VERSION =
+  process.env.AC_LAUNCHER_MIN_VERSION?.trim() || "0.3.0";
 
 @Injectable()
 export class AnticheatService implements OnModuleInit, OnModuleDestroy {
@@ -67,6 +77,78 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
 
   private hashToken(token: string): string {
     return createHash("sha256").update(token).digest("hex");
+  }
+
+  private hashChallenge(challenge: string): string {
+    return createHash("sha256").update(challenge).digest("hex");
+  }
+
+  private parseVersion(raw: string): number[] {
+    return String(raw || "")
+      .trim()
+      .replace(/^v/i, "")
+      .split(".")
+      .map((p) => Number.parseInt(p.replace(/\D.*/, ""), 10) || 0)
+      .concat([0, 0, 0])
+      .slice(0, 3);
+  }
+
+  private isVersionAtLeast(actual: string, minimum: string): boolean {
+    const a = this.parseVersion(actual);
+    const m = this.parseVersion(minimum);
+    for (let i = 0; i < 3; i++) {
+      if (a[i] > m[i]) return true;
+      if (a[i] < m[i]) return false;
+    }
+    return true;
+  }
+
+  private timingSafeHexEqual(a: string, b: string): boolean {
+    try {
+      const ba = Buffer.from(String(a || ""), "hex");
+      const bb = Buffer.from(String(b || ""), "hex");
+      if (ba.length === 0 || ba.length !== bb.length) return false;
+      return timingSafeEqual(ba, bb);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Canonical string the launcher HMAC-signs. Field order is fixed so
+   * crackers cannot reorder JSON and still pass.
+   */
+  public static attestCanonical(input: {
+    challenge: string;
+    ts: number;
+    client_version: string;
+    hardware_hash: string;
+    secure_boot: boolean;
+    iommu: boolean;
+    tpm_20: boolean;
+    tpm_attestation: boolean;
+    hvci: boolean;
+    windows_updates: boolean;
+    cheat_clean: boolean;
+  }): string {
+    const flag = (v: boolean) => (v ? "1" : "0");
+    return [
+      `challenge=${input.challenge}`,
+      `ts=${input.ts}`,
+      `client_version=${input.client_version}`,
+      `hardware_hash=${input.hardware_hash}`,
+      `secure_boot=${flag(input.secure_boot)}`,
+      `iommu=${flag(input.iommu)}`,
+      `tpm_20=${flag(input.tpm_20)}`,
+      `tpm_attestation=${flag(input.tpm_attestation)}`,
+      `hvci=${flag(input.hvci)}`,
+      `windows_updates=${flag(input.windows_updates)}`,
+      `cheat_clean=${flag(input.cheat_clean)}`,
+    ].join("\n");
+  }
+
+  private signAttest(deviceToken: string, canonical: string): string {
+    return createHmac("sha256", deviceToken).update(canonical).digest("hex");
   }
 
   private async settingFlag(name: string, fallback = false): Promise<boolean> {
@@ -302,15 +384,16 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
   private async resolveDevice(deviceToken: string): Promise<{
     id: string;
     steam_id: string;
+    hardware_hash: string | null;
   }> {
     if (!deviceToken?.trim()) {
       throw new UnauthorizedException("Device token required");
     }
     const tokenHash = this.hashToken(deviceToken.trim());
     const rows = await this.postgres.query<
-      Array<{ id: string; steam_id: string }>
+      Array<{ id: string; steam_id: string; hardware_hash: string | null }>
     >(
-      `SELECT id::text, steam_id::text
+      `SELECT id::text, steam_id::text, hardware_hash
        FROM public.ac_devices
        WHERE device_token_hash = $1 AND revoked_at IS NULL
        LIMIT 1`,
@@ -325,6 +408,108 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       [device.id],
     );
     return device;
+  }
+
+  /**
+   * Issue a one-time challenge the launcher must HMAC with its device token.
+   * Without this, a stolen token can be replayed by a fake client forever.
+   */
+  public async issueChallenge(deviceToken: string): Promise<{
+    challenge: string;
+    expires_in: number;
+    min_version: string;
+  }> {
+    const device = await this.resolveDevice(deviceToken);
+    const challenge = randomBytes(32).toString("base64url");
+    const expires = new Date(Date.now() + CHALLENGE_TTL_SECONDS * 1000);
+
+    // Drop expired / used rows for this device so the table stays small.
+    await this.postgres.query(
+      `DELETE FROM public.ac_challenges
+       WHERE device_id = $1::uuid
+         AND (used_at IS NOT NULL OR expires_at < now())`,
+      [device.id],
+    );
+
+    await this.postgres.query(
+      `INSERT INTO public.ac_challenges (device_id, challenge_hash, expires_at)
+       VALUES ($1::uuid, $2, $3)`,
+      [device.id, this.hashChallenge(challenge), expires.toISOString()],
+    );
+
+    return {
+      challenge,
+      expires_in: CHALLENGE_TTL_SECONDS,
+      min_version: MIN_CLIENT_VERSION,
+    };
+  }
+
+  private async consumeChallenge(
+    deviceId: string,
+    challenge: string,
+  ): Promise<void> {
+    const challengeHash = this.hashChallenge(challenge);
+    const rows = await this.postgres.query<Array<{ id: string }>>(
+      `UPDATE public.ac_challenges
+       SET used_at = now()
+       WHERE device_id = $1::uuid
+         AND challenge_hash = $2
+         AND used_at IS NULL
+         AND expires_at > now()
+       RETURNING id::text`,
+      [deviceId, challengeHash],
+    );
+    if (rows.length === 0) {
+      throw new UnauthorizedException("Invalid or expired attest challenge");
+    }
+  }
+
+  private async bindOrVerifyHardware(
+    deviceId: string,
+    hardwareHash: string,
+  ): Promise<void> {
+    const hash = String(hardwareHash || "")
+      .trim()
+      .toLowerCase()
+      .slice(0, 128);
+    if (!/^[a-f0-9]{16,128}$/.test(hash)) {
+      throw new BadRequestException("Invalid hardware fingerprint");
+    }
+
+    const rows = await this.postgres.query<
+      Array<{ hardware_hash: string | null }>
+    >(
+      `SELECT hardware_hash FROM public.ac_devices WHERE id = $1::uuid LIMIT 1`,
+      [deviceId],
+    );
+    const existing = rows.at(0)?.hardware_hash?.trim().toLowerCase() || null;
+
+    if (!existing) {
+      await this.postgres.query(
+        `UPDATE public.ac_devices
+         SET hardware_hash = $2
+         WHERE id = $1::uuid AND hardware_hash IS NULL`,
+        [deviceId, hash],
+      );
+      return;
+    }
+
+    if (!timingSafeStringEqual(existing, hash)) {
+      // Token stolen onto another PC — kill the device, force re-pair.
+      await this.postgres.query(
+        `UPDATE public.ac_devices SET revoked_at = now() WHERE id = $1::uuid`,
+        [deviceId],
+      );
+      await this.postgres.query(
+        `UPDATE public.ac_attestations
+         SET expires_at = now()
+         WHERE device_id = $1::uuid AND expires_at > now()`,
+        [deviceId],
+      );
+      throw new UnauthorizedException(
+        "Device fingerprint changed — open YGuard AC and pair again",
+      );
+    }
   }
 
   public evaluatePass(checks: AcChecks, req: AcRequirements): boolean {
@@ -376,10 +561,39 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       hardware_hash?: string;
       /** Client also reports whether the local cheat scan is clean this tick. */
       cheat_clean?: boolean;
+      /** One-time challenge from POST /plugins/ac/challenge */
+      challenge?: string;
+      /** Unix epoch seconds when the client signed */
+      ts?: number;
+      /** HMAC-SHA256 hex of attestCanonical(...) using the device token */
+      signature?: string;
+      /** Launcher assembly version, e.g. 0.3.0 */
+      client_version?: string;
     },
   ) {
     const device = await this.resolveDevice(deviceToken);
-    const req = await this.getRequirements();
+
+    const clientVersion = String(body.client_version || "").trim();
+    if (!this.isVersionAtLeast(clientVersion, MIN_CLIENT_VERSION)) {
+      throw new ForbiddenException(
+        `Update YGuard Anti-Cheat to ${MIN_CLIENT_VERSION} or newer`,
+      );
+    }
+
+    const challenge = String(body.challenge || "").trim();
+    const signature = String(body.signature || "").trim().toLowerCase();
+    const ts = Number(body.ts);
+    if (!challenge || !signature || !Number.isFinite(ts)) {
+      throw new BadRequestException("Signed attest challenge required");
+    }
+    const skew = Math.abs(Date.now() / 1000 - ts);
+    if (skew > ATTEST_CLOCK_SKEW_SECONDS) {
+      throw new UnauthorizedException("Attest timestamp out of range");
+    }
+
+    const hardwareHash = String(body.hardware_hash || "")
+      .trim()
+      .toLowerCase();
     const checks: AcChecks = {
       secure_boot: !!body.secure_boot,
       iommu: !!body.iommu,
@@ -388,6 +602,32 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       hvci: !!body.hvci,
       windows_updates: !!body.windows_updates,
     };
+    const cheatClean = !!body.cheat_clean;
+
+    const canonical = AnticheatService.attestCanonical({
+      challenge,
+      ts: Math.trunc(ts),
+      client_version: clientVersion,
+      hardware_hash: hardwareHash,
+      ...checks,
+      cheat_clean: cheatClean,
+    });
+    const expected = this.signAttest(deviceToken.trim(), canonical);
+    if (!this.timingSafeHexEqual(expected, signature)) {
+      throw new UnauthorizedException("Invalid attest signature");
+    }
+
+    await this.consumeChallenge(device.id, challenge);
+    await this.bindOrVerifyHardware(device.id, hardwareHash);
+
+    await this.postgres.query(
+      `UPDATE public.ac_devices
+       SET client_version = $2
+       WHERE id = $1::uuid`,
+      [device.id, clientVersion.slice(0, 32)],
+    );
+
+    const req = await this.getRequirements();
     const passed = this.evaluatePass(checks, req);
     const expires = new Date(Date.now() + req.ttl_minutes * 60 * 1000);
 
@@ -414,7 +654,7 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
         checks.hvci,
         checks.windows_updates,
         (body.os_version || "").slice(0, 120) || null,
-        (body.hardware_hash || "").slice(0, 128) || null,
+        hardwareHash.slice(0, 128) || null,
         passed,
         expires.toISOString(),
       ],
@@ -440,7 +680,7 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
 
     // If client says cheats are gone AND checks pass, lift cheat auto-bans too.
     let unbanned = false;
-    if (passed && body.cheat_clean === true) {
+    if (passed && cheatClean) {
       unbanned = await this.liftAcBans(device.steam_id, "all");
     }
 
@@ -462,15 +702,19 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     version: string;
     download_url: string;
     mandatory: boolean;
+    min_version: string;
   } {
     // Advertise real latest so older clients get the update prompt.
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
+    const version = process.env.AC_LAUNCHER_VERSION || "0.3.0";
     return {
-      version: process.env.AC_LAUNCHER_VERSION || "0.2.6",
+      version,
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.2.6/YGuardAC-0.2.6-client.zip",
-      mandatory: false,
+        "https://github.com/kianPk/web/releases/download/client-v0.3.0/YGuardAC-0.3.0-client.zip",
+      // Force upgrade past unsigned-attest clients.
+      mandatory: true,
+      min_version: MIN_CLIENT_VERSION,
     };
   }
 

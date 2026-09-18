@@ -72,6 +72,18 @@ export class AnticheatController {
     return this.ac.profileForDevice(token);
   }
 
+  /**
+   * Launcher: fetch a one-time challenge before attest.
+   * Attestations without a fresh challenge+HMAC are rejected.
+   */
+  @Post("challenge")
+  public async challenge(
+    @Headers("authorization") authorization: string | undefined,
+  ) {
+    const token = this.bearer(authorization);
+    return this.ac.issueChallenge(token);
+  }
+
   /** Launcher: submit hardware checks. Header: Authorization: Bearer <device_token> */
   @Post("attest")
   public async attest(
@@ -81,6 +93,10 @@ export class AnticheatController {
       os_version?: string;
       hardware_hash?: string;
       cheat_clean?: boolean;
+      challenge?: string;
+      ts?: number;
+      signature?: string;
+      client_version?: string;
     },
   ) {
     const token = this.bearer(authorization);
