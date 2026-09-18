@@ -19,7 +19,8 @@ import { isRoleAbove } from "src/utilities/isRoleAbove";
 import { e_player_roles_enum } from "generated";
 import { SocketsService } from "src/sockets/sockets.service";
 import { YpointService } from "../ypoint/ypoint.service";
-import { BadRequestException } from "@nestjs/common";
+import { AnticheatService } from "../anticheat/anticheat.service";
+import { BadRequestException, ForbiddenException } from "@nestjs/common";
 
 @WebSocketGateway({
   path: "/ws/web",
@@ -35,6 +36,7 @@ export class MatchmakingGateway {
     public readonly matchmakingLobbyService: MatchmakingLobbyService,
     private readonly cache: CacheService,
     private readonly ypoint: YpointService,
+    private readonly anticheat: AnticheatService,
   ) {
     this.redis = this.redisManager.getConnection();
   }
@@ -244,6 +246,17 @@ export class MatchmakingGateway {
           }
           throw error;
         }
+      }
+
+      try {
+        await this.anticheat.assertPlayersReady(
+          lobby.players.map((player) => String(player.steam_id)),
+        );
+      } catch (error) {
+        if (error instanceof ForbiddenException) {
+          throw new JoinQueueError(error.message);
+        }
+        throw error;
       }
 
       try {

@@ -62,6 +62,7 @@ import { PluginsModule } from "./plugins/plugins.module";
 import { UtilityModule } from "./utility/utility.module";
 import { StoreModule } from "./store/store.module";
 import { YpointModule } from "./ypoint/ypoint.module";
+import { AnticheatModule } from "./anticheat/anticheat.module";
 
 @Module({
   imports: [
@@ -159,6 +160,7 @@ import { YpointModule } from "./ypoint/ypoint.module";
     NewsModule,
     StoreModule,
     YpointModule,
+    AnticheatModule,
     EventsModule,
     ScrimsModule,
     LeaguesModule,

@@ -17,7 +17,7 @@ import { SanctionsController } from "./sanctions.controller";
 @Module({
   imports: [HasuraModule, PostgresModule, RconModule, DedicatedServersModule],
   providers: [SanctionsService, SanctionPolicyService, loggerFactory()],
-  exports: [SanctionPolicyService],
+  exports: [SanctionsService, SanctionPolicyService],
   controllers: [SanctionsController],
 })
 export class SanctionsModule implements NestModule {

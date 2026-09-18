@@ -17,6 +17,7 @@ import { MatchmakingController } from "./matchmaking.controller";
 import { MarkPlayerOffline } from "./jobs/MarkPlayerOffline";
 import { ExpandMatchmaking } from "./jobs/ExpandMatchmaking";
 import { YpointModule } from "../ypoint/ypoint.module";
+import { AnticheatModule } from "../anticheat/anticheat.module";
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { YpointModule } from "../ypoint/ypoint.module";
     HasuraModule,
     CacheModule,
     YpointModule,
+    AnticheatModule,
     forwardRef(() => MatchesModule),
     BullModule.registerQueue({
       name: MatchmakingQueues.Matchmaking,
