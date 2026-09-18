@@ -34,7 +34,7 @@ export type AcCheatHit = {
 };
 
 /** Launcher must heartbeat at least this often while in a match. */
-const DEVICE_ALIVE_SECONDS = 90;
+const DEVICE_ALIVE_SECONDS = 45;
 
 @Injectable()
 export class AnticheatService implements OnModuleInit, OnModuleDestroy {
@@ -57,7 +57,7 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       void this.enforceLiveMatchAc().catch((err) =>
         this.logger.warn(`AC live enforce failed: ${err}`),
       );
-    }, 30_000);
+    }, 8_000);
   }
 
   public onModuleDestroy() {
@@ -465,10 +465,10 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     // Advertise real latest so older clients get the update prompt.
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
     return {
-      version: process.env.AC_LAUNCHER_VERSION || "0.2.5",
+      version: process.env.AC_LAUNCHER_VERSION || "0.2.6",
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.2.5/YGuardAC-0.2.5-client.zip",
+        "https://github.com/kianPk/web/releases/download/client-v0.2.6/YGuardAC-0.2.6-client.zip",
       mandatory: false,
     };
   }
