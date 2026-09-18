@@ -465,10 +465,10 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     // Advertise real latest so older clients get the update prompt.
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
     return {
-      version: process.env.AC_LAUNCHER_VERSION || "0.2.4",
+      version: process.env.AC_LAUNCHER_VERSION || "0.2.5",
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.2.4/YGuardAC-0.2.4-client.zip",
+        "https://github.com/kianPk/web/releases/download/client-v0.2.5/YGuardAC-0.2.5-client.zip",
       mandatory: false,
     };
   }
