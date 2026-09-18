@@ -462,14 +462,13 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     download_url: string;
     mandatory: boolean;
   } {
-    // Advertise real latest so 0.2.1/0.2.2 clients get the update prompt.
-    // 0.2.3+ skip-on-No + InstallDirectory fix; override with AC_LAUNCHER_VERSION
-    // / AC_LAUNCHER_DOWNLOAD_URL if needed.
+    // Advertise real latest so older clients get the update prompt.
+    // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
     return {
-      version: process.env.AC_LAUNCHER_VERSION || "0.2.3",
+      version: process.env.AC_LAUNCHER_VERSION || "0.2.4",
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.2.3/YGuardAC-0.2.3-client.zip",
+        "https://github.com/kianPk/web/releases/download/client-v0.2.4/YGuardAC-0.2.4-client.zip",
       mandatory: false,
     };
   }
