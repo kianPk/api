@@ -75,18 +75,29 @@ export class AnticheatController {
   public async attest(
     @Headers("authorization") authorization: string | undefined,
     @Body()
-    body: AcChecks & { os_version?: string; hardware_hash?: string },
+    body: AcChecks & {
+      os_version?: string;
+      hardware_hash?: string;
+      cheat_clean?: boolean;
+    },
   ) {
     const token = this.bearer(authorization);
     return this.ac.submitAttestation(token, body || ({} as AcChecks));
   }
 
-  /** Launcher: report local cheat signature hits → platform ban + kick. */
+  /** Public: latest Windows launcher version + download URL (auto-update). */
+  @Get("launcher")
+  public launcher() {
+    return this.ac.getLauncherRelease();
+  }
+
+  /** Launcher: report local cheat signature hits → platform ban; clean → unban. */
   @Post("report")
   public async report(
     @Headers("authorization") authorization: string | undefined,
     @Body()
     body: {
+      clean?: boolean;
       hits?: Array<{
         signature?: string;
         path?: string;
@@ -96,7 +107,9 @@ export class AnticheatController {
     },
   ) {
     const token = this.bearer(authorization);
-    return this.ac.reportCheatHits(token, body?.hits || []);
+    return this.ac.reportCheatHits(token, body?.hits || [], {
+      clean: !!body?.clean,
+    });
   }
 
   /** Website: am I allowed to queue? */

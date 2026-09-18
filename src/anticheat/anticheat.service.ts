@@ -334,9 +334,19 @@ export class AnticheatService {
     };
   }
 
+  /** Prefix for auto bans issued by the AC launcher (safe to lift when fixed). */
+  private static readonly AcBanPrefix = "YGuard AC:";
+  private static readonly AcSecurityBanReason =
+    "YGuard AC: security requirements not met";
+
   public async submitAttestation(
     deviceToken: string,
-    body: AcChecks & { os_version?: string; hardware_hash?: string },
+    body: AcChecks & {
+      os_version?: string;
+      hardware_hash?: string;
+      /** Client also reports whether the local cheat scan is clean this tick. */
+      cheat_clean?: boolean;
+    },
   ) {
     const device = await this.resolveDevice(deviceToken);
     const req = await this.getRequirements();
@@ -380,13 +390,152 @@ export class AnticheatService {
       ],
     );
 
+    // Failed required checks → platform ban until the PC is fixed.
+    if (!passed) {
+      await this.ensureAcBan(
+        device.steam_id,
+        AnticheatService.AcSecurityBanReason,
+      );
+      await this.postgres.query(
+        `UPDATE public.ac_attestations
+         SET expires_at = now()
+         WHERE steam_id = $1 AND expires_at > now()`,
+        [device.steam_id],
+      );
+    } else {
+      // Security OK — drop the auto security ban (cheat bans stay until clean scan).
+      await this.liftAcBans(device.steam_id, "security");
+    }
+
+    // If client says cheats are gone AND checks pass, lift cheat auto-bans too.
+    let unbanned = false;
+    if (passed && body.cheat_clean === true) {
+      unbanned = await this.liftAcBans(device.steam_id, "all");
+    }
+
+    const banned = await this.hasActiveBan(device.steam_id);
+
     return {
-      passed,
+      passed: passed && !banned,
       expires_at: rows.at(0)?.expires_at,
       attestation_id: rows.at(0)?.id,
       requirements: req,
       checks,
+      banned,
+      unbanned,
     };
+  }
+
+  /** Latest published Windows launcher build (client auto-update). */
+  public getLauncherRelease(): {
+    version: string;
+    download_url: string;
+    mandatory: boolean;
+  } {
+    const webHost = process.env.WEB_DOMAIN || "yguard.ir";
+    const base = webHost.startsWith("http") ? webHost : `https://${webHost}`;
+    return {
+      // Bump together with yguard-ac-launcher Version + public/downloads zip.
+      version: process.env.AC_LAUNCHER_VERSION || "0.2.0",
+      download_url: `${base.replace(/\/$/, "")}/downloads/YGuardAC.zip`,
+      mandatory: true,
+    };
+  }
+
+  private async hasActiveBan(steamId: string): Promise<boolean> {
+    const rows = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id::text
+       FROM public.player_sanctions
+       WHERE player_steam_id = $1::bigint
+         AND type = 'ban'
+         AND deleted_at IS NULL
+         AND (remove_sanction_date IS NULL OR remove_sanction_date > now())
+       LIMIT 1`,
+      [steamId],
+    );
+    return rows.length > 0;
+  }
+
+  private async ensureAcBan(steamId: string, reason: string): Promise<boolean> {
+    const existing = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id::text
+       FROM public.player_sanctions
+       WHERE player_steam_id = $1::bigint
+         AND type = 'ban'
+         AND deleted_at IS NULL
+         AND (remove_sanction_date IS NULL OR remove_sanction_date > now())
+         AND reason = $2
+       LIMIT 1`,
+      [steamId, reason.slice(0, 240)],
+    );
+    if (existing.length > 0) return false;
+    await this.postgres.query(
+      `INSERT INTO public.player_sanctions
+         (type, player_steam_id, sanctioned_by_steam_id, reason)
+       VALUES ('ban', $1::bigint, NULL, $2)`,
+      [steamId, reason.slice(0, 240)],
+    );
+    this.logger.warn(`AC auto-ban steam=${steamId} reason=${reason}`);
+    return true;
+  }
+
+  /**
+   * Soft-delete auto bans issued by YGuard AC.
+   * scope=security → only the security-requirements ban
+   * scope=cheat → bans whose reason mentions detection / cheat
+   * scope=all → every reason starting with "YGuard AC:"
+   */
+  private async liftAcBans(
+    steamId: string,
+    scope: "security" | "cheat" | "all",
+  ): Promise<boolean> {
+    let reasonFilter = `reason LIKE $2`;
+    let pattern = `${AnticheatService.AcBanPrefix}%`;
+    if (scope === "security") {
+      reasonFilter = `reason = $2`;
+      pattern = AnticheatService.AcSecurityBanReason;
+    } else if (scope === "cheat") {
+      reasonFilter = `reason LIKE $2 AND reason <> $3`;
+      // handled below with 3 params
+    }
+
+    let result: Array<{ id: string }>;
+    if (scope === "cheat") {
+      result = await this.postgres.query(
+        `UPDATE public.player_sanctions
+         SET deleted_at = now()
+         WHERE player_steam_id = $1::bigint
+           AND type = 'ban'
+           AND deleted_at IS NULL
+           AND reason LIKE $2
+           AND reason <> $3
+         RETURNING id::text`,
+        [
+          steamId,
+          `${AnticheatService.AcBanPrefix}%`,
+          AnticheatService.AcSecurityBanReason,
+        ],
+      );
+    } else {
+      result = await this.postgres.query(
+        `UPDATE public.player_sanctions
+         SET deleted_at = now()
+         WHERE player_steam_id = $1::bigint
+           AND type = 'ban'
+           AND deleted_at IS NULL
+           AND ${reasonFilter}
+         RETURNING id::text`,
+        [steamId, pattern],
+      );
+    }
+
+    if (result.length > 0) {
+      this.logger.log(
+        `AC lifted ${result.length} auto-ban(s) steam=${steamId} scope=${scope}`,
+      );
+      return true;
+    }
+    return false;
   }
 
   /** True when every steam id has a fresh passing attestation (or AC is off). */
@@ -452,8 +601,9 @@ export class AnticheatService {
   }
 
   /**
-   * Launcher found known cheat files/processes on the PC.
-   * Logs hits, issues a permanent platform ban, and kicks from live match if any.
+   * Launcher cheat scan result.
+   * - hits present → permanent platform ban (lifted only after a clean scan + pass)
+   * - clean:true / empty hits → lift AC cheat auto-bans if security also passes
    */
   public async reportCheatHits(
     deviceToken: string,
@@ -463,10 +613,12 @@ export class AnticheatService {
       process_name?: string;
       details?: Record<string, unknown>;
     }>,
+    opts?: { clean?: boolean },
   ): Promise<{
     banned: boolean;
     kicked: boolean;
     already_banned: boolean;
+    unbanned: boolean;
     signatures: string[];
   }> {
     const device = await this.resolveDevice(deviceToken);
@@ -485,13 +637,26 @@ export class AnticheatService {
       }))
       .filter((h) => h.signature.length > 0);
 
-    if (cleaned.length === 0) {
-      throw new BadRequestException("No cheat hits provided");
+    // Clean report: remove cheat files → lift AC cheat bans (keep security ban if any).
+    if (cleaned.length === 0 || opts?.clean === true) {
+      const unbanned = await this.liftAcBans(device.steam_id, "cheat");
+      // Only fully clear play lock if they also have a fresh passing attestation.
+      const ok = await this.hasValidAttestation(device.steam_id);
+      if (ok) {
+        await this.liftAcBans(device.steam_id, "all");
+      }
+      const banned = await this.hasActiveBan(device.steam_id);
+      return {
+        banned,
+        kicked: false,
+        already_banned: banned,
+        unbanned,
+        signatures: [],
+      };
     }
 
     const signatures = [...new Set(cleaned.map((h) => h.signature))];
-    const primary = cleaned[0];
-    const reason = `YGuard AC: ${signatures.join(", ")} detected`;
+    const reason = `${AnticheatService.AcBanPrefix} ${signatures.join(", ")} detected`;
 
     for (const hit of cleaned) {
       await this.postgres.query(
@@ -517,31 +682,9 @@ export class AnticheatService {
       [device.steam_id],
     );
 
-    const already = await this.postgres.query<Array<{ id: string }>>(
-      `SELECT id::text
-       FROM public.player_sanctions
-       WHERE player_steam_id = $1::bigint
-         AND type = 'ban'
-         AND deleted_at IS NULL
-         AND (remove_sanction_date IS NULL OR remove_sanction_date > now())
-       LIMIT 1`,
-      [device.steam_id],
-    );
-    const alreadyBanned = already.length > 0;
-
-    let banned = alreadyBanned;
-    if (!alreadyBanned) {
-      await this.postgres.query(
-        `INSERT INTO public.player_sanctions
-           (type, player_steam_id, sanctioned_by_steam_id, reason)
-         VALUES ('ban', $1::bigint, NULL, $2)`,
-        [device.steam_id, reason.slice(0, 240)],
-      );
-      banned = true;
-      this.logger.warn(
-        `AC cheat ban steam=${device.steam_id} sigs=${signatures.join(",")}`,
-      );
-    }
+    const alreadyBanned = await this.hasActiveBan(device.steam_id);
+    // Always ensure a cheat-specific ban row (even if a security ban already exists).
+    await this.ensureAcBan(device.steam_id, reason);
 
     await this.postgres.query(
       `UPDATE public.ac_detections
@@ -555,9 +698,6 @@ export class AnticheatService {
     let kicked = false;
     const live = await this.findLiveMatchServer(device.steam_id);
     if (live?.server_id) {
-      // Live kick goes through the next match sync / player_sanctions poll.
-      // We intentionally do not import SanctionsModule here — that created a
-      // Nest circular import (Matchmaking → Anticheat → Sanctions → …).
       this.logger.warn(
         `AC cheat ban steam=${device.steam_id} on live server=${live.server_id} match=${live.match_id} (platform ban applied; kick on next sync)`,
       );
@@ -565,9 +705,10 @@ export class AnticheatService {
     }
 
     return {
-      banned,
+      banned: true,
       kicked,
       already_banned: alreadyBanned,
+      unbanned: false,
       signatures,
     };
   }
