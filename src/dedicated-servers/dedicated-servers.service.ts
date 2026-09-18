@@ -568,6 +568,34 @@ export class DedicatedServersService {
     }
   }
 
+  /** Resolve userid + kick in one RCON session (avoids race between status and kick). */
+  public async kickSteamId(
+    serverId: string,
+    steamId: string,
+    reason: string,
+  ): Promise<boolean> {
+    const rcon = await this.RconService.connect(serverId);
+    if (!rcon) {
+      return false;
+    }
+
+    try {
+      const output = await rcon.send("status");
+      const userid = this.parseUserIdFromStatus(output, steamId);
+      if (!userid) {
+        this.logger.warn(
+          `kickSteamId: could not resolve userid for ${steamId} on ${serverId}`,
+        );
+        return false;
+      }
+      const safe = reason.replace(/[\r\n";]/g, " ").trim().slice(0, 120);
+      await rcon.send(`kickid ${userid} ${safe}`);
+      return true;
+    } finally {
+      await this.RconService.disconnect(serverId);
+    }
+  }
+
   private parseUserIdFromStatus(
     output: string,
     steamId: string,

@@ -57,7 +57,7 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       void this.enforceLiveMatchAc().catch((err) =>
         this.logger.warn(`AC live enforce failed: ${err}`),
       );
-    }, 8_000);
+    }, 5_000);
   }
 
   public onModuleDestroy() {
@@ -677,6 +677,63 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Called when FiveStack reports player-connected. Lineup players without a
+   * live AC launcher are kicked immediately (with retries until status shows them).
+   */
+  public async enforceConnectedPlayer(
+    matchId: string,
+    steamId: string,
+  ): Promise<void> {
+    const req = await this.getRequirements();
+    if (!req.required) return;
+
+    const inLineup = await this.postgres.query<Array<{ ok: number }>>(
+      `SELECT 1 AS ok
+       FROM public.matches m
+       JOIN public.match_lineup_players mlp
+         ON mlp.match_lineup_id IN (m.lineup_1_id, m.lineup_2_id)
+       WHERE m.id = $1::uuid
+         AND mlp.steam_id = $2::bigint
+       LIMIT 1`,
+      [matchId, steamId],
+    );
+    if (inLineup.length === 0) return;
+
+    if (await this.hasValidAttestation(steamId)) return;
+
+    const servers = await this.postgres.query<Array<{ server_id: string }>>(
+      `SELECT server_id::text AS server_id
+       FROM public.matches
+       WHERE id = $1::uuid AND server_id IS NOT NULL
+       LIMIT 1`,
+      [matchId],
+    );
+    const serverId = servers.at(0)?.server_id;
+    if (!serverId) return;
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      if (await this.hasValidAttestation(steamId)) return;
+      const kicked = await this.kickOnServer(
+        serverId,
+        steamId,
+        "YGuard AC: reopen the Anti-Cheat launcher",
+      );
+      if (kicked) {
+        this.logger.warn(
+          `AC kick on connect steam=${steamId} match=${matchId} attempt=${attempt + 1}`,
+        );
+        return;
+      }
+    }
+    this.logger.warn(
+      `AC kick on connect FAILED steam=${steamId} match=${matchId} (player not found via RCON)`,
+    );
+  }
+
   /** Kick anyone in a live match whose AC launcher is offline / not attested. */
   private async enforceLiveMatchAc(): Promise<void> {
     const req = await this.getRequirements();
@@ -721,39 +778,24 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     steamId: string,
     reason: string,
   ): Promise<boolean> {
-    // Resolve Rcon / DedicatedServers at call-time via ModuleRef so AnticheatModule
-    // does not import them (that created a Nest circular graph and broke CI).
-    let rcon: { connect: Function; disconnect: Function } | undefined;
     try {
       const { DedicatedServersService } = await import(
         "../dedicated-servers/dedicated-servers.service"
       );
-      const { RconService } = await import("../rcon/rcon.service");
       const dedicated = this.moduleRef.get(DedicatedServersService, {
         strict: false,
       });
-      rcon = this.moduleRef.get(RconService, { strict: false });
-      if (!dedicated || !rcon) return false;
-
-      const userid = await dedicated.resolveServerUserId(serverId, steamId);
-      if (!userid) return false;
-      const client = await rcon.connect(serverId);
-      if (!client) return false;
-      const safe = reason.replace(/[\r\n";]/g, " ").trim().slice(0, 120);
-      await client.send(`kickid ${userid} ${safe}`);
-      this.logger.warn(
-        `AC kick steam=${steamId} server=${serverId} reason=${safe}`,
-      );
-      return true;
+      if (!dedicated?.kickSteamId) return false;
+      const ok = await dedicated.kickSteamId(serverId, steamId, reason);
+      if (ok) {
+        this.logger.warn(
+          `AC kick steam=${steamId} server=${serverId} reason=${reason}`,
+        );
+      }
+      return ok;
     } catch (err) {
       this.logger.warn(`AC kick failed steam=${steamId}: ${err}`);
       return false;
-    } finally {
-      try {
-        await rcon?.disconnect(serverId);
-      } catch {
-        /* ignore */
-      }
     }
   }
 

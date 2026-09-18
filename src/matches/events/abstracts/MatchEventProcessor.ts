@@ -3,6 +3,7 @@ import { HasuraService } from "../../../hasura/hasura.service";
 import { MatchAssistantService } from "../../match-assistant/match-assistant.service";
 import { ChatService } from "../../../chat/chat.service";
 import { NotificationsService } from "../../../notifications/notifications.service";
+import { AnticheatService } from "../../../anticheat/anticheat.service";
 
 @Injectable({ scope: Scope.REQUEST })
 export default abstract class MatchEventProcessor<T> {
@@ -15,6 +16,7 @@ export default abstract class MatchEventProcessor<T> {
     protected readonly matchAssistant: MatchAssistantService,
     protected readonly chat: ChatService,
     protected readonly notifications: NotificationsService,
+    protected readonly anticheat: AnticheatService,
   ) {}
 
   public setData(matchId: string, data: T) {

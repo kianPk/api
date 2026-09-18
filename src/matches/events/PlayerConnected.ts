@@ -59,5 +59,15 @@ export default class PlayerConnected extends MatchEventProcessor<{
     });
 
     await this.chat.joinLobbyViaGame(this.matchId, this.data.steam_id);
+
+    // Kick immediately if ranked AC is required and launcher is offline.
+    // Fire-and-forget so connect handling isn't delayed by RCON retries.
+    void this.anticheat
+      .enforceConnectedPlayer(this.matchId, this.data.steam_id)
+      .catch((err) =>
+        this.logger.warn(
+          `AC enforce on connect failed match=${this.matchId} steam=${this.data.steam_id}: ${err}`,
+        ),
+      );
   }
 }
