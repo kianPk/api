@@ -85,6 +85,15 @@ export class AnticheatController {
     return this.ac.submitAttestation(token, body || ({} as AcChecks));
   }
 
+  /** Launcher closing / logout — expire attestation and kick from live match (no ban). */
+  @Post("disconnect")
+  public async disconnect(
+    @Headers("authorization") authorization: string | undefined,
+  ) {
+    const token = this.bearer(authorization);
+    return this.ac.disconnectDevice(token);
+  }
+
   /** Public: latest Windows launcher version + download URL (auto-update). */
   @Get("launcher")
   public launcher() {

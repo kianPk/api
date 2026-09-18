@@ -3,10 +3,14 @@ import {
   ForbiddenException,
   Injectable,
   Logger,
+  OnModuleDestroy,
+  OnModuleInit,
   UnauthorizedException,
 } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
+import { RconService } from "../rcon/rcon.service";
+import { DedicatedServersService } from "../dedicated-servers/dedicated-servers.service";
 import { SystemSettingName } from "../system/enums/SystemSettingName";
 
 export type AcChecks = {
@@ -30,12 +34,37 @@ export type AcCheatHit = {
   details?: Record<string, unknown>;
 };
 
+/** Launcher must heartbeat at least this often while in a match. */
+const DEVICE_ALIVE_SECONDS = 90;
+
 @Injectable()
-export class AnticheatService {
+export class AnticheatService implements OnModuleInit, OnModuleDestroy {
+  private enforceTimer?: NodeJS.Timeout;
+
   constructor(
     private readonly postgres: PostgresService,
+    private readonly rcon: RconService,
+    private readonly dedicatedServers: DedicatedServersService,
     private readonly logger: Logger,
   ) {}
+
+  public onModuleInit() {
+    // Drop leftover "security requirements" platform bans — those should never
+    // have looked like a site ban; queue is gated by attestation only.
+    void this.liftAllSecurityBans().catch((err) =>
+      this.logger.warn(`AC security-ban cleanup failed: ${err}`),
+    );
+
+    this.enforceTimer = setInterval(() => {
+      void this.enforceLiveMatchAc().catch((err) =>
+        this.logger.warn(`AC live enforce failed: ${err}`),
+      );
+    }, 30_000);
+  }
+
+  public onModuleDestroy() {
+    if (this.enforceTimer) clearInterval(this.enforceTimer);
+  }
 
   private hashToken(token: string): string {
     return createHash("sha256").update(token).digest("hex");
@@ -73,7 +102,7 @@ export class AnticheatService {
       windows_updates,
     ] = await Promise.all([
       this.settingFlag(SystemSettingName.AcLauncherRequired, false),
-      this.settingNumber(SystemSettingName.AcAttestationTtlMinutes, 3),
+      this.settingNumber(SystemSettingName.AcAttestationTtlMinutes, 2),
       this.settingFlag(SystemSettingName.AcRequireSecureBoot, true),
       this.settingFlag(SystemSettingName.AcRequireTpm, true),
       this.settingFlag(SystemSettingName.AcRequireHvci, false),
@@ -83,7 +112,9 @@ export class AnticheatService {
 
     return {
       required,
-      ttl_minutes: Math.max(5, Math.min(120, ttl)),
+      // Short TTL so closing the launcher drops ranked access quickly.
+      // Launcher heartbeats ~30s; clamp 2–30 minutes.
+      ttl_minutes: Math.max(2, Math.min(30, ttl)),
       secure_boot,
       iommu,
       tpm_20,
@@ -390,20 +421,21 @@ export class AnticheatService {
       ],
     );
 
-    // Failed required checks → platform ban until the PC is fixed.
+    // Failed checks → no valid attestation (queue blocked). Not a platform ban.
+    // Cheat detections still ban via /report.
     if (!passed) {
-      await this.ensureAcBan(
-        device.steam_id,
-        AnticheatService.AcSecurityBanReason,
-      );
       await this.postgres.query(
         `UPDATE public.ac_attestations
          SET expires_at = now()
-         WHERE steam_id = $1 AND expires_at > now()`,
-        [device.steam_id],
+         WHERE steam_id = $1 AND expires_at > now() AND id <> $2::uuid`,
+        [device.steam_id, rows.at(0)?.id],
+      );
+      // Ensure the just-inserted failing row cannot be treated as valid.
+      await this.postgres.query(
+        `UPDATE public.ac_attestations SET expires_at = now() WHERE id = $1::uuid`,
+        [rows.at(0)?.id],
       );
     } else {
-      // Security OK — drop the auto security ban (cheat bans stay until clean scan).
       await this.liftAcBans(device.steam_id, "security");
     }
 
@@ -417,7 +449,7 @@ export class AnticheatService {
 
     return {
       passed: passed && !banned,
-      expires_at: rows.at(0)?.expires_at,
+      expires_at: passed ? rows.at(0)?.expires_at : null,
       attestation_id: rows.at(0)?.id,
       requirements: req,
       checks,
@@ -436,7 +468,7 @@ export class AnticheatService {
     const base = webHost.startsWith("http") ? webHost : `https://${webHost}`;
     return {
       // Bump together with yguard-ac-launcher Version + public/downloads zip.
-      version: process.env.AC_LAUNCHER_VERSION || "0.2.0",
+      version: process.env.AC_LAUNCHER_VERSION || "0.2.1",
       download_url: `${base.replace(/\/$/, "")}/downloads/YGuardAC.zip`,
       mandatory: true,
     };
@@ -548,7 +580,7 @@ export class AnticheatService {
       const ok = await this.hasValidAttestation(steamId);
       if (!ok) {
         throw new ForbiddenException(
-          `YGuard Anti-Cheat required. Open the launcher, keep it running, pass all checks, then try again. (SteamID ${steamId})`,
+          "Open YGuard Anti-Cheat and keep it running, then try again.",
         );
       }
     }
@@ -556,16 +588,45 @@ export class AnticheatService {
 
   public async hasValidAttestation(steamId: string): Promise<boolean> {
     const rows = await this.postgres.query<Array<{ id: string }>>(
-      `SELECT id::text
-       FROM public.ac_attestations
-       WHERE steam_id = $1
-         AND passed = true
-         AND expires_at > now()
-       ORDER BY expires_at DESC
+      `SELECT a.id::text
+       FROM public.ac_attestations a
+       JOIN public.ac_devices d ON d.id = a.device_id
+       WHERE a.steam_id = $1
+         AND a.passed = true
+         AND a.expires_at > now()
+         AND d.revoked_at IS NULL
+         AND d.last_seen_at > now() - ($2::text || ' seconds')::interval
+       ORDER BY a.expires_at DESC
        LIMIT 1`,
-      [steamId],
+      [steamId, String(DEVICE_ALIVE_SECONDS)],
     );
     return rows.length > 0;
+  }
+
+  /**
+   * Launcher closed / logging out — drop attestation immediately and kick from
+   * the live match (no platform ban). Re-open AC + attest → can rejoin.
+   */
+  public async disconnectDevice(deviceToken: string): Promise<{
+    ok: true;
+    kicked: boolean;
+  }> {
+    const device = await this.resolveDevice(deviceToken);
+    await this.postgres.query(
+      `UPDATE public.ac_attestations
+       SET expires_at = now()
+       WHERE steam_id = $1 AND expires_at > now()`,
+      [device.steam_id],
+    );
+    // Push last_seen into the past so hasValidAttestation fails immediately.
+    await this.postgres.query(
+      `UPDATE public.ac_devices
+       SET last_seen_at = now() - interval '10 minutes'
+       WHERE id = $1`,
+      [device.id],
+    );
+    const kicked = await this.kickLiveIfAcOffline(device.steam_id);
+    return { ok: true, kicked };
   }
 
   public async statusForPlayer(steamId: string) {
@@ -592,12 +653,99 @@ export class AnticheatService {
     );
     const latest = rows.at(0) ?? null;
     const valid = await this.hasValidAttestation(steamId);
+    const banned = await this.hasActiveBan(steamId);
     return {
       required: req.required,
       valid,
+      banned,
       requirements: req,
       latest,
     };
+  }
+
+  private async liftAllSecurityBans(): Promise<void> {
+    const result = await this.postgres.query<Array<{ id: string }>>(
+      `UPDATE public.player_sanctions
+       SET deleted_at = now()
+       WHERE type = 'ban'
+         AND deleted_at IS NULL
+         AND reason = $1
+       RETURNING id::text`,
+      [AnticheatService.AcSecurityBanReason],
+    );
+    if (result.length > 0) {
+      this.logger.log(`AC cleaned ${result.length} leftover security ban(s)`);
+    }
+  }
+
+  /** Kick anyone in a live match whose AC launcher is offline / not attested. */
+  private async enforceLiveMatchAc(): Promise<void> {
+    const req = await this.getRequirements();
+    if (!req.required) return;
+
+    const rows = await this.postgres.query<
+      Array<{ steam_id: string; server_id: string }>
+    >(
+      `SELECT DISTINCT mlp.steam_id::text AS steam_id, m.server_id::text AS server_id
+       FROM public.matches m
+       JOIN public.match_lineup_players mlp
+         ON mlp.match_lineup_id IN (m.lineup_1_id, m.lineup_2_id)
+       WHERE m.server_id IS NOT NULL
+         AND m.status NOT IN (
+           'Canceled', 'Finished', 'Forfeit', 'Surrendered', 'Tie', 'Veto'
+         )`,
+    );
+
+    for (const row of rows) {
+      const ok = await this.hasValidAttestation(row.steam_id);
+      if (ok) continue;
+      await this.kickOnServer(
+        row.server_id,
+        row.steam_id,
+        "YGuard AC: reopen the Anti-Cheat launcher",
+      );
+    }
+  }
+
+  private async kickLiveIfAcOffline(steamId: string): Promise<boolean> {
+    const live = await this.findLiveMatchServer(steamId);
+    if (!live?.server_id) return false;
+    return this.kickOnServer(
+      live.server_id,
+      steamId,
+      "YGuard AC: reopen the Anti-Cheat launcher",
+    );
+  }
+
+  private async kickOnServer(
+    serverId: string,
+    steamId: string,
+    reason: string,
+  ): Promise<boolean> {
+    try {
+      const userid = await this.dedicatedServers.resolveServerUserId(
+        serverId,
+        steamId,
+      );
+      if (!userid) return false;
+      const rcon = await this.rcon.connect(serverId);
+      if (!rcon) return false;
+      const safe = reason.replace(/[\r\n";]/g, " ").trim().slice(0, 120);
+      await rcon.send(`kickid ${userid} ${safe}`);
+      this.logger.warn(
+        `AC kick steam=${steamId} server=${serverId} reason=${safe}`,
+      );
+      return true;
+    } catch (err) {
+      this.logger.warn(`AC kick failed steam=${steamId}: ${err}`);
+      return false;
+    } finally {
+      try {
+        await this.rcon.disconnect(serverId);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   /**
