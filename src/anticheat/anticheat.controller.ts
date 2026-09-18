@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Headers,
   Post,
   Req,
@@ -96,6 +97,7 @@ export class AnticheatController {
 
   /** Public: latest Windows launcher version + download URL (auto-update). */
   @Get("launcher")
+  @Header("Cache-Control", "no-store, no-cache, must-revalidate")
   public launcher() {
     return this.ac.getLauncherRelease();
   }
