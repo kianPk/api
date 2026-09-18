@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -173,6 +174,137 @@ export class ChallengesService implements OnModuleInit {
     );
     this.logger.log(
       `Subscription granted steam=${args.steamId} tier=${args.tier} order=${args.orderId}`,
+    );
+  }
+
+  public async adminListSubscriptions(limit = 100) {
+    await this.ensureSchema();
+    const capped = Math.min(Math.max(Number(limit) || 100, 1), 500);
+    return this.postgres.query<
+      Array<{
+        steam_id: string;
+        tier: string;
+        expires_at: string | null;
+        updated_at: string;
+        name: string | null;
+        avatar_url: string | null;
+        active: boolean;
+      }>
+    >(
+      `SELECT ps.steam_id::text,
+              ps.tier,
+              ps.expires_at::text,
+              ps.updated_at::text,
+              p.name,
+              p.avatar_url,
+              (ps.expires_at IS NULL OR ps.expires_at > now()) AS active
+       FROM public.player_subscriptions ps
+       JOIN public.players p ON p.steam_id = ps.steam_id
+       ORDER BY
+         (ps.expires_at IS NULL OR ps.expires_at > now()) DESC,
+         ps.updated_at DESC
+       LIMIT $1`,
+      [capped],
+    );
+  }
+
+  public async adminGetSubscription(steamId: string) {
+    await this.ensureSchema();
+    if (!/^\d{15,20}$/.test(steamId)) {
+      throw new BadRequestException("Invalid Steam ID");
+    }
+    const rows = await this.postgres.query<
+      Array<{
+        steam_id: string;
+        tier: string;
+        expires_at: string | null;
+        updated_at: string;
+        name: string | null;
+        avatar_url: string | null;
+        active: boolean;
+      }>
+    >(
+      `SELECT ps.steam_id::text,
+              ps.tier,
+              ps.expires_at::text,
+              ps.updated_at::text,
+              p.name,
+              p.avatar_url,
+              (ps.expires_at IS NULL OR ps.expires_at > now()) AS active
+       FROM public.player_subscriptions ps
+       JOIN public.players p ON p.steam_id = ps.steam_id
+       WHERE ps.steam_id = $1::bigint
+       LIMIT 1`,
+      [steamId],
+    );
+    return rows.at(0) ?? null;
+  }
+
+  public async adminGrantSubscription(args: {
+    steamId: string;
+    tier: ChallengeTier;
+    duration: string;
+    mode: "extend" | "set";
+    adminSteamId: string;
+    note?: string;
+  }) {
+    await this.ensureSchema();
+    if (!/^\d{15,20}$/.test(args.steamId)) {
+      throw new BadRequestException("Invalid Steam ID");
+    }
+    const exists = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT steam_id::text FROM players WHERE steam_id = $1 LIMIT 1`,
+      [args.steamId],
+    );
+    if (!exists.length) {
+      throw new BadRequestException("Player not found");
+    }
+
+    const expiresAt = durationToExpiry(args.duration);
+    const extend = args.mode === "extend";
+
+    await this.postgres.query(
+      `INSERT INTO public.player_subscriptions (steam_id, tier, expires_at, order_id)
+       VALUES ($1::bigint, $2, $3::timestamptz, NULL)
+       ON CONFLICT (steam_id) DO UPDATE SET
+         tier = EXCLUDED.tier,
+         expires_at = CASE
+           WHEN EXCLUDED.expires_at IS NULL THEN NULL
+           WHEN $4::boolean
+             AND player_subscriptions.expires_at IS NOT NULL
+             AND player_subscriptions.expires_at > now()
+             AND EXCLUDED.expires_at IS NOT NULL
+           THEN player_subscriptions.expires_at
+                + (EXCLUDED.expires_at - now())
+           ELSE EXCLUDED.expires_at
+         END,
+         updated_at = now()`,
+      [args.steamId, args.tier, expiresAt, extend],
+    );
+
+    this.logger.warn(
+      `Admin subscription grant steam=${args.steamId} tier=${args.tier} duration=${args.duration} mode=${args.mode} by=${args.adminSteamId} note=${(args.note || "").slice(0, 80)}`,
+    );
+    return this.adminGetSubscription(args.steamId);
+  }
+
+  public async adminRevokeSubscription(args: {
+    steamId: string;
+    adminSteamId: string;
+    note?: string;
+  }) {
+    await this.ensureSchema();
+    if (!/^\d{15,20}$/.test(args.steamId)) {
+      throw new BadRequestException("Invalid Steam ID");
+    }
+    await this.postgres.query(
+      `UPDATE public.player_subscriptions
+       SET expires_at = now(), updated_at = now()
+       WHERE steam_id = $1::bigint`,
+      [args.steamId],
+    );
+    this.logger.warn(
+      `Admin subscription revoke steam=${args.steamId} by=${args.adminSteamId} note=${(args.note || "").slice(0, 80)}`,
     );
   }
 
