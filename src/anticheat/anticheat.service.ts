@@ -7,10 +7,9 @@ import {
   OnModuleInit,
   UnauthorizedException,
 } from "@nestjs/common";
+import { ModuleRef } from "@nestjs/core";
 import { createHash, randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
-import { RconService } from "../rcon/rcon.service";
-import { DedicatedServersService } from "../dedicated-servers/dedicated-servers.service";
 import { SystemSettingName } from "../system/enums/SystemSettingName";
 
 export type AcChecks = {
@@ -43,9 +42,8 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly postgres: PostgresService,
-    private readonly rcon: RconService,
-    private readonly dedicatedServers: DedicatedServersService,
     private readonly logger: Logger,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   public onModuleInit() {
@@ -722,16 +720,26 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     steamId: string,
     reason: string,
   ): Promise<boolean> {
+    // Resolve Rcon / DedicatedServers at call-time via ModuleRef so AnticheatModule
+    // does not import them (that created a Nest circular graph and broke CI).
+    let rcon: { connect: Function; disconnect: Function } | undefined;
     try {
-      const userid = await this.dedicatedServers.resolveServerUserId(
-        serverId,
-        steamId,
+      const { DedicatedServersService } = await import(
+        "../dedicated-servers/dedicated-servers.service"
       );
+      const { RconService } = await import("../rcon/rcon.service");
+      const dedicated = this.moduleRef.get(DedicatedServersService, {
+        strict: false,
+      });
+      rcon = this.moduleRef.get(RconService, { strict: false });
+      if (!dedicated || !rcon) return false;
+
+      const userid = await dedicated.resolveServerUserId(serverId, steamId);
       if (!userid) return false;
-      const rcon = await this.rcon.connect(serverId);
-      if (!rcon) return false;
+      const client = await rcon.connect(serverId);
+      if (!client) return false;
       const safe = reason.replace(/[\r\n";]/g, " ").trim().slice(0, 120);
-      await rcon.send(`kickid ${userid} ${safe}`);
+      await client.send(`kickid ${userid} ${safe}`);
       this.logger.warn(
         `AC kick steam=${steamId} server=${serverId} reason=${safe}`,
       );
@@ -741,7 +749,7 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       return false;
     } finally {
       try {
-        await this.rcon.disconnect(serverId);
+        await rcon?.disconnect(serverId);
       } catch {
         /* ignore */
       }
