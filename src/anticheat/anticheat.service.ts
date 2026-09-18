@@ -680,7 +680,8 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Game-server plugin gate: Bearer = servers.api_password.
-   * Lineup players on this server's current match must have a live AC launcher.
+   * When AC is required, every connecting player (ranked / custom / public)
+   * must have a live AC launcher — not only match lineup roster.
    */
   public async checkPlayerForServer(
     serverId: string,
@@ -713,24 +714,6 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     const req = await this.getRequirements();
     if (!req.required) {
       return { required: false, allowed: true };
-    }
-
-    const inLineup = await this.postgres.query<Array<{ ok: number }>>(
-      `SELECT 1 AS ok
-       FROM public.matches m
-       JOIN public.match_lineup_players mlp
-         ON mlp.match_lineup_id IN (m.lineup_1_id, m.lineup_2_id)
-       WHERE m.server_id = $1::uuid
-         AND mlp.steam_id = $2::bigint
-         AND m.status NOT IN (
-           'Canceled', 'Finished', 'Forfeit', 'Surrendered', 'Tie', 'Veto'
-         )
-       LIMIT 1`,
-      [sid, steam],
-    );
-    if (inLineup.length === 0) {
-      // Spectator / non-roster — do not block.
-      return { required: true, allowed: true };
     }
 
     const ok = await this.hasValidAttestation(steam);

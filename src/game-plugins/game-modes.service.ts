@@ -122,9 +122,8 @@ export class GameModesService {
       }),
       // A dedicated server is built before it has a match, and its plugin set
       // is baked into the pod -- so "decide later, per match" is not available
-      // there. A Ranked server only ever hosts matchmaking, which is answer
-      // enough; anything else falls through to the union of the other two
-      // (see the ELSE in autoLoadPlugins), never to ranked.
+      // there. Ranked-type servers use the ranked load flag; every other
+      // dedicated (public / casual) uses the public union (see ELSE).
       match: matchId
         ? GameModesService.matchScope({
             isTournament: row?.is_tournament ?? false,
@@ -398,12 +397,11 @@ export class GameModesService {
 
   // Plugins that load without a game mode asking for them: a stats collector
   // is not a game mode, and hand-placing it in custom-plugins is what this
-  // replaces. Each install says which of the three kinds of match it wants,
-  // so a plugin can sit on customs and tournaments and stay off ranked.
+  // replaces. Each install says which of the three kinds of match it wants.
   //
-  // With no match in scope the caller is building a server, not a match. Ranked
-  // is excluded from that union deliberately: a plugin the operator kept off
-  // ranked must not be baked into a pod that might later host a ranked match.
+  // Ranked load also covers custom matches and public dedicated servers so a
+  // security plugin enabled for ranked (e.g. YGuard AC) applies fleet-wide
+  // without forcing a second toggle. Tournament stays its own opt-in.
   public async autoLoadPlugins(scope?: PluginScope): Promise<Array<string>> {
     const runtime =
       scope?.runtime ?? (await this.pluginRuntime.getPluginRuntime());
@@ -427,8 +425,8 @@ export class GameModesService {
           AND CASE $3::text
                 WHEN 'ranked' THEN i.load_ranked
                 WHEN 'tournaments' THEN i.load_tournaments
-                WHEN 'custom' THEN i.load_custom
-                ELSE i.load_tournaments OR i.load_custom
+                WHEN 'custom' THEN i.load_custom OR i.load_ranked
+                ELSE i.load_ranked OR i.load_tournaments OR i.load_custom
               END
         ORDER BY i.plugin_slug`,
       [runtime, nodeId, scope?.match ?? null],
