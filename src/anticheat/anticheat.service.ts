@@ -45,7 +45,7 @@ const ATTEST_CLOCK_SKEW_SECONDS = 300;
 
 /** Minimum launcher build that speaks the signed-challenge protocol. */
 const MIN_CLIENT_VERSION =
-  process.env.AC_LAUNCHER_MIN_VERSION?.trim() || "0.3.0";
+  process.env.AC_LAUNCHER_MIN_VERSION?.trim() || "0.3.2";
 
 @Injectable()
 export class AnticheatService implements OnModuleInit, OnModuleDestroy {
@@ -786,13 +786,13 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
   } {
     // Advertise real latest so older clients get the update prompt.
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
-    const version = process.env.AC_LAUNCHER_VERSION || "0.3.2";
+    const version = process.env.AC_LAUNCHER_VERSION || "0.3.3";
     return {
       version,
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.3.2/YGuardAC-0.3.2-client.zip",
-      // Force upgrade past unsigned-attest clients.
+        "https://github.com/kianPk/web/releases/download/client-v0.3.3/YGuardAC-0.3.3-client.zip",
+      // Force upgrade past clients that still show the old pair-again 401 text.
       mandatory: true,
       min_version: MIN_CLIENT_VERSION,
     };
