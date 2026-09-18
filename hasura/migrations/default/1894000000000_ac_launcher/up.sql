@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS public.ac_pair_codes (
 
 INSERT INTO public.settings (name, value) VALUES
   ('public.ac_launcher_required', 'false'),
-  ('public.ac_attestation_ttl_minutes', '15'),
+  ('public.ac_attestation_ttl_minutes', '3'),
   ('public.ac_require_secure_boot', 'true'),
   ('public.ac_require_tpm', 'true'),
   ('public.ac_require_hvci', 'false'),

@@ -18,6 +18,7 @@ import {
   GameModesService,
   RequiredPluginMissing,
 } from "../game-plugins/game-modes.service";
+import { AnticheatService } from "../anticheat/anticheat.service";
 import { MatchAssistantService } from "./match-assistant/match-assistant.service";
 import { DiscordBotOverviewService } from "../discord-bot/discord-bot-overview/discord-bot-overview.service";
 import { DiscordBotMessagingService } from "../discord-bot/discord-bot-messaging/discord-bot-messaging.service";
@@ -140,6 +141,7 @@ export class MatchesController {
     @Inject(forwardRef(() => UtilityPracticeService))
     private readonly utilityPractice: UtilityPracticeService,
     private readonly gameModesService: GameModesService,
+    private readonly anticheat: AnticheatService,
   ) {
     this.appConfig = this.configService.get<AppConfig>("app");
   }
@@ -1225,6 +1227,16 @@ export class MatchesController {
         "you are not a match organizer or the match is waiting for players to check in",
       );
     }
+
+    const roster = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT mlp.steam_id::text AS steam_id
+       FROM public.matches m
+       JOIN public.match_lineup_players mlp
+         ON mlp.match_lineup_id IN (m.lineup_1_id, m.lineup_2_id)
+       WHERE m.id = $1`,
+      [match_id],
+    );
+    await this.anticheat.assertPlayersReady(roster.map((r) => r.steam_id));
 
     const { update_matches_by_pk: updated_match } = await this.hasura.mutation({
       update_matches_by_pk: {

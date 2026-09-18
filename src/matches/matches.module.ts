@@ -79,11 +79,13 @@ import { MediaMtxModule } from "../mediamtx/mediamtx.module";
 import { CameraController } from "./camera/camera.controller";
 import { CameraService } from "./camera/camera.service";
 import { CameraMonitorService } from "./camera/camera-monitor.service";
+import { AnticheatModule } from "../anticheat/anticheat.module";
 
 @Module({
   imports: [
     HasuraModule,
     MediaMtxModule,
+    AnticheatModule,
     forwardRef(() => RconModule),
     CacheModule,
     RedisModule,

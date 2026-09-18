@@ -73,7 +73,7 @@ export class AnticheatService {
       windows_updates,
     ] = await Promise.all([
       this.settingFlag(SystemSettingName.AcLauncherRequired, false),
-      this.settingNumber(SystemSettingName.AcAttestationTtlMinutes, 15),
+      this.settingNumber(SystemSettingName.AcAttestationTtlMinutes, 3),
       this.settingFlag(SystemSettingName.AcRequireSecureBoot, true),
       this.settingFlag(SystemSettingName.AcRequireTpm, true),
       this.settingFlag(SystemSettingName.AcRequireHvci, false),
@@ -399,7 +399,7 @@ export class AnticheatService {
       const ok = await this.hasValidAttestation(steamId);
       if (!ok) {
         throw new ForbiddenException(
-          `Anti-Cheat launcher required for SteamID ${steamId}. Open YGuard AC, pass checks, then try again.`,
+          `YGuard Anti-Cheat required. Open the launcher, keep it running, pass all checks, then try again. (SteamID ${steamId})`,
         );
       }
     }

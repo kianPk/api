@@ -11,7 +11,7 @@ import { Request } from "express";
 import { User } from "../auth/types/User";
 import { AnticheatService, AcChecks } from "./anticheat.service";
 
-@Controller("ac")
+@Controller("plugins/ac")
 export class AnticheatController {
   constructor(private readonly ac: AnticheatService) {}
 
