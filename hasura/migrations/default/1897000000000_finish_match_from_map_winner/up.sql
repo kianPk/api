@@ -1,3 +1,11 @@
+-- Ranked Competitive matches were stuck Live / later Canceled when the plugin
+-- finished a map with winning_lineup_id but round score rows were missing
+-- (lineup_*_score → 0-0). Elo and Watch both require matches.status=Finished
+-- with a winner, so those matches vanished as if never played.
+--
+-- Honor match_maps.winning_lineup_id when round scores are tied/absent, and
+-- never invent a winner when both sides have zero map wins.
+
 CREATE OR REPLACE FUNCTION public.update_match_state(_match_map match_maps) RETURNS VOID
     LANGUAGE plpgsql
     AS $$
@@ -16,7 +24,6 @@ DECLARE
     match_map public.match_maps;
     wins_needed INT;
 BEGIN
-    -- Retrieve match best_of value
     SELECT mo.best_of, lineup_1_id, lineup_2_id
     INTO match_best_of, match_lineup_1_id, match_lineup_2_id
     FROM matches m
@@ -25,7 +32,6 @@ BEGIN
     WHERE m.id = _match_map.match_id;
 
     IF (_match_map.status = 'Finished') THEN
-        -- Get current match status and lineups
         SELECT status
         INTO current_match_status
         FROM matches
@@ -35,9 +41,6 @@ BEGIN
             RETURN;
         END IF;
 
-        -- Winner-bracket advantage: when this match is the grand final of a
-        -- double-elimination stage, the winner-bracket team starts with a map-point
-        -- head start. Stays 0 (inert) for every other match.
         SELECT COALESCE(ts.final_map_advantage, 0)
         INTO final_advantage
         FROM tournament_brackets tb
@@ -53,8 +56,6 @@ BEGIN
                 AND lb.path = 'LB'
           );
 
-        -- Clamp below the win threshold: at or above it the winner-bracket team
-        -- would take the match on the first finished map, even one it lost.
         lineup_1_wins := LEAST(
             COALESCE(final_advantage, 0),
             CEIL(match_best_of / 2.0)::int - 1
@@ -62,11 +63,6 @@ BEGIN
 
         wins_needed := CEIL(match_best_of / 2.0)::int;
 
-        -- Only Finished maps count: an in-progress map's latest round snapshot
-        -- would otherwise credit a map win to whoever is momentarily ahead.
-        -- Prefer round scores; if they are missing/tied, fall back to the
-        -- plugin-reported match_maps.winning_lineup_id so ranked BO1 still
-        -- finishes (Elo + Watch) when rounds never landed in the DB.
         FOR match_map IN
             SELECT *
             FROM match_maps
@@ -88,8 +84,6 @@ BEGIN
             END IF;
         END LOOP;
 
-        -- Only finish once a side owns the series. Never default a tied
-        -- map-count to lineup_2 (that used to invent a winner with 0-0 wins).
         IF lineup_1_wins >= wins_needed THEN
             match_winning_lineup_id := match_lineup_1_id;
         ELSIF lineup_2_wins >= wins_needed THEN

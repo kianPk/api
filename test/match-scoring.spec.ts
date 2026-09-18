@@ -109,6 +109,38 @@ describe("match scoring from rounds (SQL-driven)", () => {
     expect(after.winning_lineup_id).toBeNull();
   });
 
+  it("finishes BO1 from map winning_lineup_id when round scores are missing", async () => {
+    const match = await createLiveMatch(1);
+
+    await postgres.query(
+      `UPDATE match_maps
+       SET status = 'Finished', winning_lineup_id = $2
+       WHERE id = $1`,
+      [match.mapIds[0], match.lineup_2_id],
+    );
+
+    const after = await matchRow(match.id);
+    expect(after.status).toBe("Finished");
+    expect(after.winning_lineup_id).toBe(match.lineup_2_id);
+    expect(after.ended_at).not.toBeNull();
+  });
+
+  it("finishes BO1 from map winning_lineup_id when rounds are tied 0-0", async () => {
+    const match = await createLiveMatch(1);
+    await recordScore(match.mapIds[0], 0, 0);
+
+    await postgres.query(
+      `UPDATE match_maps
+       SET status = 'Finished', winning_lineup_id = $2
+       WHERE id = $1`,
+      [match.mapIds[0], match.lineup_1_id],
+    );
+
+    const after = await matchRow(match.id);
+    expect(after.status).toBe("Finished");
+    expect(after.winning_lineup_id).toBe(match.lineup_1_id);
+  });
+
   it("a BO3 needs two map wins before the match finishes", async () => {
     const match = await createLiveMatch(3);
 
