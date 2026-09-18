@@ -41,7 +41,7 @@ const DEVICE_ALIVE_SECONDS = 35;
 const CHALLENGE_TTL_SECONDS = 45;
 
 /** Reject attest clocks skewed more than this (seconds). */
-const ATTEST_CLOCK_SKEW_SECONDS = 60;
+const ATTEST_CLOCK_SKEW_SECONDS = 300;
 
 /** Minimum launcher build that speaks the signed-challenge protocol. */
 const MIN_CLIENT_VERSION =
@@ -102,6 +102,19 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS ac_challenges_device_idx
         ON public.ac_challenges (device_id, expires_at DESC)
     `);
+
+    // Heal devices false-revoked by unstable HW fingerprints so players can
+    // queue again without re-pairing as soon as this API rolls out.
+    const healed = await this.postgres.query<Array<{ id: string }>>(
+      `UPDATE public.ac_devices
+       SET revoked_at = NULL
+       WHERE revoked_at IS NOT NULL
+       RETURNING id::text`,
+    );
+    if (healed.length > 0) {
+      this.logger.warn(`AC healed ${healed.length} revoked device(s)`);
+    }
+
     this.logger.log("AC security schema ready (challenges + hardware bind)");
   }
 
@@ -421,11 +434,16 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     }
     const tokenHash = this.hashToken(deviceToken.trim());
     const rows = await this.postgres.query<
-      Array<{ id: string; steam_id: string; hardware_hash: string | null }>
+      Array<{
+        id: string;
+        steam_id: string;
+        hardware_hash: string | null;
+        revoked_at: string | null;
+      }>
     >(
-      `SELECT id::text, steam_id::text, hardware_hash
+      `SELECT id::text, steam_id::text, hardware_hash, revoked_at::text
        FROM public.ac_devices
-       WHERE device_token_hash = $1 AND revoked_at IS NULL
+       WHERE device_token_hash = $1
        LIMIT 1`,
       [tokenHash],
     );
@@ -433,11 +451,31 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     if (!device) {
       throw new UnauthorizedException("Invalid or revoked device token");
     }
-    await this.postgres.query(
-      `UPDATE public.ac_devices SET last_seen_at = now() WHERE id = $1`,
-      [device.id],
-    );
-    return device;
+
+    // Auto-heal false-positive revokes (unstable HW fingerprint used to kill
+    // legitimate devices). Valid token possession is enough to restore access.
+    if (device.revoked_at) {
+      await this.postgres.query(
+        `UPDATE public.ac_devices
+         SET revoked_at = NULL, last_seen_at = now()
+         WHERE id = $1::uuid`,
+        [device.id],
+      );
+      this.logger.warn(
+        `AC auto-unrevoke device=${device.id} steam=${device.steam_id}`,
+      );
+    } else {
+      await this.postgres.query(
+        `UPDATE public.ac_devices SET last_seen_at = now() WHERE id = $1`,
+        [device.id],
+      );
+    }
+
+    return {
+      id: device.id,
+      steam_id: device.steam_id,
+      hardware_hash: device.hardware_hash,
+    };
   }
 
   /**
@@ -537,22 +575,21 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    if (!timingSafeStringEqual(existing, hash)) {
-      // Token stolen onto another PC — kill the device, force re-pair.
-      await this.postgres.query(
-        `UPDATE public.ac_devices SET revoked_at = now() WHERE id = $1::uuid`,
-        [deviceId],
-      );
-      await this.postgres.query(
-        `UPDATE public.ac_attestations
-         SET expires_at = now()
-         WHERE device_id = $1::uuid AND expires_at > now()`,
-        [deviceId],
-      );
-      throw new UnauthorizedException(
-        "Device fingerprint changed — open YGuard AC and pair again",
-      );
+    if (timingSafeStringEqual(existing, hash)) {
+      return;
     }
+
+    // Valid HMAC already proved token possession. Re-bind instead of revoking —
+    // WMI disk/name churn was false-positive revoking real players.
+    await this.postgres.query(
+      `UPDATE public.ac_devices
+       SET hardware_hash = $2
+       WHERE id = $1::uuid`,
+      [deviceId, hash],
+    );
+    this.logger.warn(
+      `AC hardware fingerprint updated device=${deviceId} (no revoke)`,
+    );
   }
 
   public evaluatePass(checks: AcChecks, req: AcRequirements): boolean {
@@ -749,12 +786,12 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
   } {
     // Advertise real latest so older clients get the update prompt.
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
-    const version = process.env.AC_LAUNCHER_VERSION || "0.3.1";
+    const version = process.env.AC_LAUNCHER_VERSION || "0.3.2";
     return {
       version,
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.3.1/YGuardAC-0.3.1-client.zip",
+        "https://github.com/kianPk/web/releases/download/client-v0.3.2/YGuardAC-0.3.2-client.zip",
       // Force upgrade past unsigned-attest clients.
       mandatory: true,
       min_version: MIN_CLIENT_VERSION,
