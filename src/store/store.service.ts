@@ -17,6 +17,8 @@ import { YpointService } from "../ypoint/ypoint.service";
 import { RconService } from "../rcon/rcon.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { e_notification_types_enum } from "../../generated/schema";
+import { ChallengesService } from "../challenges/challenges.service";
+import type { ChallengeTier } from "../challenges/challenge-catalog";
 
 const IMAGE_PREFIX = "store";
 const EXTENSION_BY_MIMETYPE: Record<string, string> = {
@@ -61,6 +63,7 @@ export class StoreService {
     private readonly rcon: RconService,
     private readonly notifications: NotificationsService,
     private readonly s3: S3Service,
+    private readonly challenges: ChallengesService,
   ) {
     this.envBale = this.configService.get<BaleConfig>("bale");
     this.app = this.configService.get<AppConfig>("app");
@@ -299,6 +302,7 @@ export class StoreService {
         vip_duration: string | null;
         vip_granted_at: string | null;
         product_title: string;
+        subscription_tier: string | null;
       }>
     >(
       `UPDATE store_orders o
@@ -310,7 +314,8 @@ export class StoreService {
          AND o.status = 'pending'
          AND p.id = o.product_id
        RETURNING o.id, o.buyer_steam_id::text, p.ypoint_amount,
-                 p.vip_server_id, p.vip_duration, o.vip_granted_at, p.title AS product_title`,
+                 p.vip_server_id, p.vip_duration, o.vip_granted_at, p.title AS product_title,
+                 p.subscription_tier`,
       [payload, chargeId || null],
     );
 
@@ -325,10 +330,12 @@ export class StoreService {
           vip_granted_at: string | null;
           product_title: string;
           ypoint_amount: number | null;
+          subscription_tier: string | null;
         }>
       >(
         `SELECT o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration,
-                o.vip_granted_at, p.title AS product_title, p.ypoint_amount
+                o.vip_granted_at, p.title AS product_title, p.ypoint_amount,
+                p.subscription_tier
          FROM store_orders o
          JOIN store_products p ON p.id = o.product_id
          WHERE o.bale_payload = $1 AND o.status = 'paid'
@@ -338,6 +345,7 @@ export class StoreService {
       const paid = existing.at(0);
       if (paid) {
         await this.grantVipIfNeeded(paid);
+        await this.grantSubscriptionIfNeeded(paid);
         await this.notifyPurchasePaid(paid);
       } else {
         this.logger.log(`Store order already paid or missing payload=${payload}`);
@@ -357,6 +365,7 @@ export class StoreService {
     }
 
     await this.grantVipIfNeeded(order);
+    await this.grantSubscriptionIfNeeded(order);
     await this.notifyPurchasePaid(order);
 
     this.logger.log(`Store order paid payload=${payload} charge=${chargeId}`);
@@ -391,6 +400,7 @@ export class StoreService {
     ypoint_amount?: number | null;
     vip_duration?: string | null;
     vip_server_id?: string | null;
+    subscription_tier?: string | null;
   }) {
     try {
       const existing = await this.postgres.query<Array<{ id: string }>>(
@@ -410,6 +420,9 @@ export class StoreService {
       if (yp > 0) bits.push(`+${yp} Ypoints credited.`);
       if (order.vip_server_id && order.vip_duration) {
         bits.push(`VIP ${NotificationsService.escapeHtml(order.vip_duration)} activated on the server.`);
+      }
+      if (order.subscription_tier === "premium" || order.subscription_tier === "premium_plus") {
+        bits.push(`Challenges unlocked. <a href="/challenges">Open Challenges</a>`);
       }
       bits.push(`<a href="/store">Open Store</a>`);
 
@@ -463,6 +476,30 @@ export class StoreService {
       this.logger.warn(
         `Store cancel notify failed order=${orderId}`,
         error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  private async grantSubscriptionIfNeeded(order: {
+    id: string;
+    buyer_steam_id: string;
+    subscription_tier?: string | null;
+    vip_duration?: string | null;
+  }) {
+    const tier = (order.subscription_tier || "").trim();
+    if (tier !== "premium" && tier !== "premium_plus") return;
+    const duration = (order.vip_duration || "30d").trim() || "30d";
+    try {
+      await this.challenges.grantSubscription({
+        steamId: String(order.buyer_steam_id),
+        tier: tier as ChallengeTier,
+        duration,
+        orderId: order.id,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Subscription grant failed order=${order.id}`,
+        error instanceof Error ? error.stack : error,
       );
     }
   }

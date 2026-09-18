@@ -20,6 +20,7 @@ insert_permissions:
         - ypoint_amount
         - vip_server_id
         - vip_duration
+        - subscription_tier
 select_permissions:
   - role: administrator
     permission:
@@ -35,6 +36,7 @@ select_permissions:
         - ypoint_amount
         - vip_server_id
         - vip_duration
+        - subscription_tier
         - created_at
         - updated_at
       filter: {}
@@ -52,6 +54,7 @@ select_permissions:
         - sort_order
         - ypoint_amount
         - vip_duration
+        - subscription_tier
         - created_at
       filter:
         active:
@@ -70,6 +73,7 @@ update_permissions:
         - ypoint_amount
         - vip_server_id
         - vip_duration
+        - subscription_tier
         - updated_at
       filter: {}
       check: {}

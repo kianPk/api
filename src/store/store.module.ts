@@ -7,6 +7,7 @@ import { loggerFactory } from "../utilities/LoggerFactory";
 import { YpointModule } from "../ypoint/ypoint.module";
 import { RconModule } from "../rcon/rcon.module";
 import { NotificationsModule } from "../notifications/notifications.module";
+import { ChallengesModule } from "../challenges/challenges.module";
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { NotificationsModule } from "../notifications/notifications.module";
     YpointModule,
     RconModule,
     NotificationsModule,
+    ChallengesModule,
   ],
   controllers: [StoreController],
   providers: [StoreService, loggerFactory()],
