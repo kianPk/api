@@ -462,14 +462,11 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     download_url: string;
     mandatory: boolean;
   } {
-    const webHost = process.env.WEB_DOMAIN || "yguard.ir";
-    const base = webHost.startsWith("http") ? webHost : `https://${webHost}`;
-    // Advertise 0.2.0 so broken 0.2.0 auto-updaters stop looping (mandatory Yes/No
-    // both restarted the same exe). Real client zip is 0.2.2 — users download from
-    // /downloads/YGuardAC.zip after web rollout. Env can override when ready:
-    // AC_LAUNCHER_VERSION=0.2.2
+    // Advertise real latest so 0.2.1/0.2.2 clients get the update prompt.
+    // 0.2.3+ skip-on-No + InstallDirectory fix; override with AC_LAUNCHER_VERSION
+    // / AC_LAUNCHER_DOWNLOAD_URL if needed.
     return {
-      version: process.env.AC_LAUNCHER_VERSION || "0.2.0",
+      version: process.env.AC_LAUNCHER_VERSION || "0.2.3",
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
         "https://github.com/kianPk/web/releases/download/client-v0.2.3/YGuardAC-0.2.3-client.zip",
