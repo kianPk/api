@@ -7,7 +7,6 @@ import {
 } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
-import { SanctionsService } from "../sanctions/sanctions.service";
 import { SystemSettingName } from "../system/enums/SystemSettingName";
 
 export type AcChecks = {
@@ -35,7 +34,6 @@ export type AcCheatHit = {
 export class AnticheatService {
   constructor(
     private readonly postgres: PostgresService,
-    private readonly sanctions: SanctionsService,
     private readonly logger: Logger,
   ) {}
 
@@ -557,19 +555,13 @@ export class AnticheatService {
     let kicked = false;
     const live = await this.findLiveMatchServer(device.steam_id);
     if (live?.server_id) {
-      try {
-        const kick = await this.sanctions.kickServerPlayer({
-          serverId: live.server_id,
-          steamId: device.steam_id,
-          reason: "YGuard AC: cheat software detected",
-        });
-        kicked = !!kick.kicked;
-      } catch (err) {
-        this.logger.warn(
-          `AC kick failed steam=${device.steam_id} server=${live.server_id}`,
-          err,
-        );
-      }
+      // Live kick goes through the next match sync / player_sanctions poll.
+      // We intentionally do not import SanctionsModule here — that created a
+      // Nest circular import (Matchmaking → Anticheat → Sanctions → …).
+      this.logger.warn(
+        `AC cheat ban steam=${device.steam_id} on live server=${live.server_id} match=${live.match_id} (platform ban applied; kick on next sync)`,
+      );
+      kicked = false;
     }
 
     return {
