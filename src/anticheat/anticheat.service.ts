@@ -64,6 +64,12 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`AC security-ban cleanup failed: ${err}`),
     );
 
+    // Ensure challenge / hardware-bind columns exist even if Hasura migrate
+    // was skipped on the panel — otherwise 0.3.x clients get "Connection refused".
+    void this.ensureSecuritySchema().catch((err) =>
+      this.logger.warn(`AC security schema ensure failed: ${err}`),
+    );
+
     this.enforceTimer = setInterval(() => {
       void this.enforceLiveMatchAc().catch((err) =>
         this.logger.warn(`AC live enforce failed: ${err}`),
@@ -73,6 +79,30 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
 
   public onModuleDestroy() {
     if (this.enforceTimer) clearInterval(this.enforceTimer);
+  }
+
+  /** Idempotent DDL so signed-attest works without a manual migrate step. */
+  private async ensureSecuritySchema(): Promise<void> {
+    await this.postgres.query(`
+      ALTER TABLE public.ac_devices
+        ADD COLUMN IF NOT EXISTS hardware_hash text,
+        ADD COLUMN IF NOT EXISTS client_version text
+    `);
+    await this.postgres.query(`
+      CREATE TABLE IF NOT EXISTS public.ac_challenges (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        device_id uuid NOT NULL REFERENCES public.ac_devices(id) ON DELETE CASCADE,
+        challenge_hash text NOT NULL UNIQUE,
+        expires_at timestamptz NOT NULL,
+        used_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await this.postgres.query(`
+      CREATE INDEX IF NOT EXISTS ac_challenges_device_idx
+        ON public.ac_challenges (device_id, expires_at DESC)
+    `);
+    this.logger.log("AC security schema ready (challenges + hardware bind)");
   }
 
   private hashToken(token: string): string {
@@ -420,21 +450,34 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     min_version: string;
   }> {
     const device = await this.resolveDevice(deviceToken);
+    try {
+      return await this.insertChallenge(device.id);
+    } catch (err) {
+      this.logger.warn(`AC challenge insert failed, ensuring schema: ${err}`);
+      await this.ensureSecuritySchema();
+      return await this.insertChallenge(device.id);
+    }
+  }
+
+  private async insertChallenge(deviceId: string): Promise<{
+    challenge: string;
+    expires_in: number;
+    min_version: string;
+  }> {
     const challenge = randomBytes(32).toString("base64url");
     const expires = new Date(Date.now() + CHALLENGE_TTL_SECONDS * 1000);
 
-    // Drop expired / used rows for this device so the table stays small.
     await this.postgres.query(
       `DELETE FROM public.ac_challenges
        WHERE device_id = $1::uuid
          AND (used_at IS NOT NULL OR expires_at < now())`,
-      [device.id],
+      [deviceId],
     );
 
     await this.postgres.query(
       `INSERT INTO public.ac_challenges (device_id, challenge_hash, expires_at)
        VALUES ($1::uuid, $2, $3)`,
-      [device.id, this.hashChallenge(challenge), expires.toISOString()],
+      [deviceId, this.hashChallenge(challenge), expires.toISOString()],
     );
 
     return {
@@ -706,12 +749,12 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
   } {
     // Advertise real latest so older clients get the update prompt.
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
-    const version = process.env.AC_LAUNCHER_VERSION || "0.3.0";
+    const version = process.env.AC_LAUNCHER_VERSION || "0.3.1";
     return {
       version,
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.3.0/YGuardAC-0.3.0-client.zip",
+        "https://github.com/kianPk/web/releases/download/client-v0.3.1/YGuardAC-0.3.1-client.zip",
       // Force upgrade past unsigned-attest clients.
       mandatory: true,
       min_version: MIN_CLIENT_VERSION,
