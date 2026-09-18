@@ -466,7 +466,7 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     const base = webHost.startsWith("http") ? webHost : `https://${webHost}`;
     return {
       // Bump together with yguard-ac-launcher Version + public/downloads zip.
-      version: process.env.AC_LAUNCHER_VERSION || "0.2.1",
+      version: process.env.AC_LAUNCHER_VERSION || "0.2.2",
       download_url: `${base.replace(/\/$/, "")}/downloads/YGuardAC.zip`,
       mandatory: true,
     };
