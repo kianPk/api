@@ -709,6 +709,23 @@ export class DemoMetadataService {
     }
   }
 
+  /** Wipe every stored demo + playback blob (S3 prefix + DB rows). */
+  public async deleteAllDemos(): Promise<{ objects: number; rows: number }> {
+    const objects = await this.s3.removePrefix("demos/");
+    const deleted = await this.postgres.query<{ count: string }[]>(
+      `WITH gone AS (
+         DELETE FROM public.match_map_demos
+         RETURNING 1
+       )
+       SELECT count(*)::text AS count FROM gone`,
+    );
+    const rows = Number(deleted.at(0)?.count || 0);
+    this.logger.log(
+      `[demo-delete] purged all demos: ${objects} object(s), ${rows} row(s)`,
+    );
+    return { objects, rows };
+  }
+
   public async uploadPlaybackBlob(
     matchId: string,
     matchMapId: string,
