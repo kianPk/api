@@ -26,6 +26,58 @@ select_permissions:
         deleted_at:
           _is_null: true
     comment: ""
+  - role: user
+    permission:
+      columns:
+        - player_steam_id
+        - sanctioned_by_steam_id
+        - reason
+        - type
+        - created_at
+        - remove_sanction_date
+        - id
+        - deleted_at
+      filter: {}
+    comment: ""
+  - role: match_organizer
+    permission:
+      columns:
+        - player_steam_id
+        - sanctioned_by_steam_id
+        - reason
+        - type
+        - created_at
+        - remove_sanction_date
+        - id
+        - deleted_at
+      filter: {}
+    comment: ""
+  - role: moderator
+    permission:
+      columns:
+        - player_steam_id
+        - sanctioned_by_steam_id
+        - reason
+        - type
+        - created_at
+        - remove_sanction_date
+        - id
+        - deleted_at
+      filter: {}
+    comment: ""
+  - role: administrator
+    permission:
+      columns:
+        - player_steam_id
+        - sanctioned_by_steam_id
+        - reason
+        - type
+        - created_at
+        - remove_sanction_date
+        - id
+        - deleted_at
+      filter: {}
+    comment: ""
 update_permissions:
   - role: moderator
     permission:
