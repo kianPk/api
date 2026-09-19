@@ -213,7 +213,9 @@ export class StoreService {
       // Older DBs may lack subscription_tier — still allow checkout.
       const msg = error instanceof Error ? error.message : String(error);
       if (!/subscription_tier/i.test(msg)) throw error;
-      products = await this.postgres.query<StoreProductRow[]>(
+      const legacy = await this.postgres.query<
+        Array<Omit<StoreProductRow, "subscription_tier">>
+      >(
         `SELECT id, title, slug, description, price_irr, image_url, active,
                 ypoint_amount, vip_server_id, vip_duration
          FROM store_products
@@ -221,7 +223,10 @@ export class StoreService {
            AND active = true`,
         [uniqueIds],
       );
-      products = products.map((p) => ({ ...p, subscription_tier: null }));
+      products = legacy.map((p) => ({
+        ...p,
+        subscription_tier: null as string | null,
+      }));
     }
     if (products.length !== uniqueIds.length) {
       throw new NotFoundException("One or more products are unavailable");
