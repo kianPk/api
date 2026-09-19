@@ -162,7 +162,7 @@ describe("permission functions (SQL-driven)", () => {
       ).toBe(true);
     });
 
-    it("only the organizer cancels, and never after the match decided", async () => {
+    it("ranked modes: only administrators cancel; never after decided", async () => {
       const organizer = await fx.player();
       const { match, p1 } = await duelWithPlayers(organizer);
 
@@ -174,10 +174,19 @@ describe("permission functions (SQL-driven)", () => {
           "id",
           session(organizer, "match_organizer"),
         ),
-      ).toBe(true);
+      ).toBe(false);
       expect(
         await boolFn("can_cancel_match", "matches", match.id, "id", session(p1)),
       ).toBe(false);
+      expect(
+        await boolFn(
+          "can_cancel_match",
+          "matches",
+          match.id,
+          "id",
+          session(organizer, "administrator"),
+        ),
+      ).toBe(true);
 
       await postgres.query(
         "UPDATE matches SET winning_lineup_id = lineup_1_id WHERE id = $1",
@@ -189,7 +198,7 @@ describe("permission functions (SQL-driven)", () => {
           "matches",
           match.id,
           "id",
-          session(organizer, "match_organizer"),
+          session(organizer, "administrator"),
         ),
       ).toBe(false);
     });
