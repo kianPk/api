@@ -39,6 +39,18 @@ type StoreProductRow = {
   ypoint_amount: number | null;
   vip_server_id: string | null;
   vip_duration: string | null;
+  subscription_tier: string | null;
+};
+
+/** Snapshot of one cart line stored on store_orders.cart_items */
+type CartItemSnapshot = {
+  product_id: string;
+  title: string;
+  price_irr: number;
+  ypoint_amount: number | null;
+  vip_server_id: string | null;
+  vip_duration: string | null;
+  subscription_tier: string | null;
 };
 
 type StoreOrderRow = {
@@ -146,7 +158,37 @@ export class StoreService {
     return (await this.resolveBale()).webhookSecret || "";
   }
 
-  public async checkout(productId: string, buyerSteamId: string) {
+  public async checkout(
+    productId: string,
+    buyerSteamId: string,
+    opts?: { termsAccepted?: boolean },
+  ) {
+    return this.checkoutCart([productId], buyerSteamId, opts);
+  }
+
+  /**
+   * Create one pending order for 1..N products, then return a Bale deep link.
+   * Multi-item carts are stored in cart_items jsonb; amount_irr is the sum.
+   */
+  public async checkoutCart(
+    productIds: string[],
+    buyerSteamId: string,
+    opts?: { termsAccepted?: boolean },
+  ) {
+    if (!opts?.termsAccepted) {
+      throw new BadRequestException("Terms must be accepted before checkout");
+    }
+
+    const rawIds = (productIds || [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean);
+    if (!rawIds.length) {
+      throw new BadRequestException("productIds required");
+    }
+    if (rawIds.length > 20) {
+      throw new BadRequestException("Too many products in cart");
+    }
+
     const bale = await this.resolveBale();
     if (!bale.botToken || !bale.providerToken) {
       throw new ServiceUnavailableException(
@@ -154,40 +196,75 @@ export class StoreService {
       );
     }
 
+    const uniqueIds = [...new Set(rawIds)];
     const products = await this.postgres.query<StoreProductRow[]>(
-      `SELECT id, title, slug, description, price_irr, image_url, active
+      `SELECT id, title, slug, description, price_irr, image_url, active,
+              ypoint_amount, vip_server_id, vip_duration, subscription_tier
        FROM store_products
-       WHERE id = $1
-       LIMIT 1`,
-      [productId],
+       WHERE id = ANY($1::uuid[])
+         AND active = true`,
+      [uniqueIds],
     );
-    const product = products.at(0);
-    if (!product || !product.active) {
-      throw new NotFoundException("Product not found");
-    }
-    if (product.price_irr < 0) {
-      throw new BadRequestException("Invalid product price");
+    if (products.length !== uniqueIds.length) {
+      throw new NotFoundException("One or more products are unavailable");
     }
 
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const ordered = rawIds.map((id) => {
+      const p = byId.get(id);
+      if (!p) throw new NotFoundException("Product not found");
+      return p;
+    });
+    for (const p of ordered) {
+      if (p.price_irr < 0) {
+        throw new BadRequestException("Invalid product price");
+      }
+    }
+
+    const cartItems: CartItemSnapshot[] = ordered.map((p) => ({
+      product_id: p.id,
+      title: p.title,
+      price_irr: Number(p.price_irr),
+      ypoint_amount: p.ypoint_amount,
+      vip_server_id: p.vip_server_id,
+      vip_duration: p.vip_duration,
+      subscription_tier: p.subscription_tier,
+    }));
+    const amountIrr = cartItems.reduce((sum, i) => sum + i.price_irr, 0);
+    const primary = ordered[0];
     const orderId = randomUUID();
     const payload = `store:${orderId}`;
 
+    await this.cancelPendingOrders(buyerSteamId);
+
     await this.postgres.query(
       `INSERT INTO store_orders
-        (id, product_id, buyer_steam_id, amount_irr, status, bale_payload)
-       VALUES ($1, $2, $3, $4, 'pending', $5)`,
-      [orderId, product.id, buyerSteamId, product.price_irr, payload],
+        (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
+         cart_items, terms_accepted_at)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now())`,
+      [
+        orderId,
+        primary.id,
+        buyerSteamId,
+        amountIrr,
+        payload,
+        JSON.stringify(cartItems),
+      ],
     );
 
     const deepLink = this.buildDeepLink(orderId, bale.botUsername);
+    const productTitle =
+      cartItems.length === 1
+        ? primary.title
+        : `${primary.title} +${cartItems.length - 1}`;
 
     return {
       orderId,
-      amountIrr: product.price_irr,
-      productTitle: product.title,
+      amountIrr,
+      productTitle,
+      itemCount: cartItems.length,
       deepLink,
       botUsername: bale.botUsername || null,
-      // Client opens Bale; /start pay_<orderId> triggers invoice send.
       startParam: `pay_${orderId.replace(/-/g, "")}`,
     };
   }
@@ -198,62 +275,125 @@ export class StoreService {
       throw new BadRequestException("Invalid order");
     }
 
-    // Always re-read the live product price so admin edits apply to unpaid invoices.
-    const synced = await this.postgres.query<
+    const rows = await this.postgres.query<
       Array<{
         id: string;
         status: string;
         amount_irr: number;
         bale_payload: string;
+        cart_items: CartItemSnapshot[] | null;
         title: string;
         description: string;
+        price_irr: number;
+        active: boolean;
       }>
     >(
-      `UPDATE store_orders o
-       SET amount_irr = p.price_irr
-       FROM store_products p
+      `SELECT o.id, o.status, o.amount_irr, o.bale_payload, o.cart_items,
+              p.title, p.description, p.price_irr, p.active
+       FROM store_orders o
+       JOIN store_products p ON p.id = o.product_id
        WHERE o.id = $1
-         AND p.id = o.product_id
-         AND o.status = 'pending'
-         AND p.active = true
-       RETURNING o.id, o.status, o.amount_irr, o.bale_payload,
-                 p.title, p.description`,
+       LIMIT 1`,
       [orderId],
     );
 
-    const order = synced.at(0);
+    const order = rows.at(0);
     if (!order) {
-      const existing = await this.postgres.query<
-        Array<{ status: string }>
-      >(
-        `SELECT status FROM store_orders WHERE id = $1 LIMIT 1`,
-        [orderId],
-      );
-      const row = existing.at(0);
-      if (!row) {
-        throw new NotFoundException("Order not found");
-      }
-      throw new BadRequestException(`Order is ${row.status}`);
+      throw new NotFoundException("Order not found");
+    }
+    if (order.status !== "pending") {
+      throw new BadRequestException(`Order is ${order.status}`);
     }
 
-    const toman = Math.round(Number(order.amount_irr) / 10);
-    const baseDescription = (order.description || order.title).slice(0, 200);
-    const description =
-      `${baseDescription} · ${toman.toLocaleString("en-US")} تومان`.slice(
-        0,
-        255,
-      );
+    const cart = this.normalizeCartItems(order.cart_items);
+    let lines: Array<{ label: string; amount: number }>;
+    let amountIrr: number;
+    let title: string;
+    let description: string;
+
+    if (cart.length > 0) {
+      // Frozen cart snapshot from checkout — don't rewrite prices here.
+      lines = cart.map((i) => ({
+        label: i.title.slice(0, 32),
+        amount: Number(i.price_irr),
+      }));
+      amountIrr = lines.reduce((s, l) => s + l.amount, 0);
+      if (amountIrr !== Number(order.amount_irr)) {
+        await this.postgres.query(
+          `UPDATE store_orders SET amount_irr = $2 WHERE id = $1 AND status = 'pending'`,
+          [order.id, amountIrr],
+        );
+      }
+      title =
+        cart.length === 1
+          ? cart[0].title
+          : `YGuard Store (${cart.length} items)`;
+      const toman = Math.round(amountIrr / 10);
+      description =
+        `${cart.map((i) => i.title).join(" · ").slice(0, 180)} · ${toman.toLocaleString("en-US")} تومان`.slice(
+          0,
+          255,
+        );
+    } else {
+      // Legacy single-product orders: sync live price.
+      if (!order.active) {
+        throw new BadRequestException("Product unavailable");
+      }
+      amountIrr = Number(order.price_irr);
+      if (amountIrr !== Number(order.amount_irr)) {
+        await this.postgres.query(
+          `UPDATE store_orders SET amount_irr = $2 WHERE id = $1 AND status = 'pending'`,
+          [order.id, amountIrr],
+        );
+      }
+      title = order.title;
+      const toman = Math.round(amountIrr / 10);
+      const baseDescription = (order.description || order.title).slice(0, 200);
+      description =
+        `${baseDescription} · ${toman.toLocaleString("en-US")} تومان`.slice(
+          0,
+          255,
+        );
+      lines = [{ label: order.title.slice(0, 32), amount: amountIrr }];
+    }
 
     await this.sendInvoice({
       chatId,
-      title: order.title,
+      title,
       description,
       payload: order.bale_payload,
-      amountIrr: order.amount_irr,
+      prices: lines,
       providerToken: (await this.resolveBale()).providerToken,
     });
 
     return { ok: true };
+  }
+
+  private normalizeCartItems(raw: unknown): CartItemSnapshot[] {
+    if (!raw) return [];
+    const list = Array.isArray(raw)
+      ? raw
+      : typeof raw === "string"
+        ? (JSON.parse(raw) as unknown)
+        : raw;
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((row) => {
+        const r = row as Partial<CartItemSnapshot>;
+        return {
+          product_id: String(r.product_id || ""),
+          title: String(r.title || "Item"),
+          price_irr: Number(r.price_irr || 0),
+          ypoint_amount:
+            r.ypoint_amount == null ? null : Number(r.ypoint_amount),
+          vip_server_id: r.vip_server_id ? String(r.vip_server_id) : null,
+          vip_duration: r.vip_duration ? String(r.vip_duration) : null,
+          subscription_tier: r.subscription_tier
+            ? String(r.subscription_tier)
+            : null,
+        };
+      })
+      .filter((i) => i.product_id && i.price_irr >= 0);
   }
 
   public async handleWebhookUpdate(update: any) {
@@ -303,6 +443,7 @@ export class StoreService {
         vip_granted_at: string | null;
         product_title: string;
         subscription_tier: string | null;
+        cart_items: CartItemSnapshot[] | null;
       }>
     >(
       `UPDATE store_orders o
@@ -315,7 +456,7 @@ export class StoreService {
          AND p.id = o.product_id
        RETURNING o.id, o.buyer_steam_id::text, p.ypoint_amount,
                  p.vip_server_id, p.vip_duration, o.vip_granted_at, p.title AS product_title,
-                 p.subscription_tier`,
+                 p.subscription_tier, o.cart_items`,
       [payload, chargeId || null],
     );
 
@@ -331,11 +472,12 @@ export class StoreService {
           product_title: string;
           ypoint_amount: number | null;
           subscription_tier: string | null;
+          cart_items: CartItemSnapshot[] | null;
         }>
       >(
         `SELECT o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration,
                 o.vip_granted_at, p.title AS product_title, p.ypoint_amount,
-                p.subscription_tier
+                p.subscription_tier, o.cart_items
          FROM store_orders o
          JOIN store_products p ON p.id = o.product_id
          WHERE o.bale_payload = $1 AND o.status = 'paid'
@@ -344,8 +486,7 @@ export class StoreService {
       );
       const paid = existing.at(0);
       if (paid) {
-        await this.grantVipIfNeeded(paid);
-        await this.grantSubscriptionIfNeeded(paid);
+        await this.fulfillOrderBenefits(paid);
         await this.notifyPurchasePaid(paid);
       } else {
         this.logger.log(`Store order already paid or missing payload=${payload}`);
@@ -353,22 +494,71 @@ export class StoreService {
       return;
     }
 
-    const amount = Number(order.ypoint_amount || 0);
-    if (amount > 0) {
-      await this.ypoint.credit({
-        steamId: order.buyer_steam_id,
-        amount,
-        reason: "store_purchase",
-        refType: "store_order",
-        refId: order.id,
-      });
-    }
-
-    await this.grantVipIfNeeded(order);
-    await this.grantSubscriptionIfNeeded(order);
+    await this.fulfillOrderBenefits(order);
     await this.notifyPurchasePaid(order);
 
     this.logger.log(`Store order paid payload=${payload} charge=${chargeId}`);
+  }
+
+  private async fulfillOrderBenefits(order: {
+    id: string;
+    buyer_steam_id: string;
+    ypoint_amount: number | null;
+    vip_server_id: string | null;
+    vip_duration: string | null;
+    vip_granted_at: string | null;
+    product_title: string;
+    subscription_tier: string | null;
+    cart_items?: CartItemSnapshot[] | null;
+  }) {
+    const cart = this.normalizeCartItems(order.cart_items);
+    const lines =
+      cart.length > 0
+        ? cart
+        : [
+            {
+              product_id: "",
+              title: order.product_title,
+              price_irr: 0,
+              ypoint_amount: order.ypoint_amount,
+              vip_server_id: order.vip_server_id,
+              vip_duration: order.vip_duration,
+              subscription_tier: order.subscription_tier,
+            },
+          ];
+
+    let lineIndex = 0;
+    for (const line of lines) {
+      const amount = Number(line.ypoint_amount || 0);
+      if (amount > 0) {
+        await this.ypoint.credit({
+          steamId: order.buyer_steam_id,
+          amount,
+          reason: "store_purchase",
+          refType: "store_order",
+          // Unique per line so multi-item carts credit each pack once.
+          refId: lineIndex === 0 ? order.id : `${order.id}:${lineIndex}`,
+        });
+      }
+
+      await this.grantVipIfNeeded({
+        id: order.id,
+        buyer_steam_id: order.buyer_steam_id,
+        vip_server_id: line.vip_server_id,
+        vip_duration: line.vip_duration,
+        // Only the first VIP line uses vip_granted_at gate on the order row.
+        vip_granted_at: lineIndex === 0 ? order.vip_granted_at : null,
+      });
+
+      await this.grantSubscriptionIfNeeded({
+        id: order.id,
+        buyer_steam_id: order.buyer_steam_id,
+        subscription_tier: line.subscription_tier,
+        vip_duration: line.vip_duration,
+      });
+
+      lineIndex += 1;
+    }
   }
 
   public async cancelPendingOrders(steamId: string, exceptOrderId?: string) {
@@ -401,6 +591,7 @@ export class StoreService {
     vip_duration?: string | null;
     vip_server_id?: string | null;
     subscription_tier?: string | null;
+    cart_items?: CartItemSnapshot[] | null;
   }) {
     try {
       const existing = await this.postgres.query<Array<{ id: string }>>(
@@ -413,15 +604,34 @@ export class StoreService {
       );
       if (existing.length) return;
 
+      const cart = this.normalizeCartItems(order.cart_items);
       const bits: string[] = [
-        `Payment for <b>${NotificationsService.escapeHtml(order.product_title)}</b> succeeded.`,
+        cart.length > 1
+          ? `Payment for <b>${cart.length} store items</b> succeeded.`
+          : `Payment for <b>${NotificationsService.escapeHtml(order.product_title)}</b> succeeded.`,
       ];
-      const yp = Number(order.ypoint_amount || 0);
+      const yp =
+        cart.length > 0
+          ? cart.reduce((s, i) => s + Number(i.ypoint_amount || 0), 0)
+          : Number(order.ypoint_amount || 0);
       if (yp > 0) bits.push(`+${yp} Ypoints credited.`);
-      if (order.vip_server_id && order.vip_duration) {
-        bits.push(`VIP ${NotificationsService.escapeHtml(order.vip_duration)} activated on the server.`);
+      const hasVip =
+        cart.length > 0
+          ? cart.some((i) => i.vip_server_id && i.vip_duration)
+          : Boolean(order.vip_server_id && order.vip_duration);
+      if (hasVip) {
+        bits.push(`VIP activated on the server.`);
       }
-      if (order.subscription_tier === "premium" || order.subscription_tier === "premium_plus") {
+      const hasSub =
+        cart.length > 0
+          ? cart.some(
+              (i) =>
+                i.subscription_tier === "premium" ||
+                i.subscription_tier === "premium_plus",
+            )
+          : order.subscription_tier === "premium" ||
+            order.subscription_tier === "premium_plus";
+      if (hasSub) {
         bits.push(`Challenges unlocked. <a href="/challenges">Open Challenges</a>`);
       }
       bits.push(`<a href="/store">Open Store</a>`);
@@ -635,9 +845,13 @@ export class StoreService {
     title: string;
     description: string;
     payload: string;
-    amountIrr: number;
+    prices: Array<{ label: string; amount: number }>;
     providerToken: string;
   }) {
+    const prices = args.prices.filter((p) => p.amount >= 0);
+    if (!prices.length) {
+      throw new BadRequestException("Invoice has no line items");
+    }
     const body = {
       chat_id: args.chatId,
       title: args.title.slice(0, 32),
@@ -645,12 +859,10 @@ export class StoreService {
       payload: args.payload,
       provider_token: args.providerToken,
       currency: "IRR",
-      prices: [
-        {
-          label: args.title.slice(0, 32),
-          amount: args.amountIrr,
-        },
-      ],
+      prices: prices.map((p) => ({
+        label: p.label.slice(0, 32),
+        amount: p.amount,
+      })),
     };
 
     await this.baleApi("sendInvoice", body);

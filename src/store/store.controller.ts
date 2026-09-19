@@ -74,13 +74,24 @@ export class StoreController {
   @Post("checkout")
   public async checkout(
     @Req() request: Request,
-    @Body() body: { productId?: string },
+    @Body()
+    body: {
+      productId?: string;
+      productIds?: string[];
+      termsAccepted?: boolean;
+    },
   ) {
     const user = this.requireUser(request);
-    if (!body?.productId) {
-      throw new BadRequestException("productId required");
+    const ids = [
+      ...(Array.isArray(body?.productIds) ? body.productIds : []),
+      ...(body?.productId ? [body.productId] : []),
+    ];
+    if (!ids.length) {
+      throw new BadRequestException("productId or productIds required");
     }
-    return this.store.checkout(body.productId, user.steam_id);
+    return this.store.checkoutCart(ids, user.steam_id, {
+      termsAccepted: Boolean(body?.termsAccepted),
+    });
   }
 
   @Post("cancel-pending")
