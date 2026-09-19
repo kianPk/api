@@ -196,15 +196,33 @@ export class StoreService {
       );
     }
 
+    await this.ensureCartSchema();
+
     const uniqueIds = [...new Set(rawIds)];
-    const products = await this.postgres.query<StoreProductRow[]>(
-      `SELECT id, title, slug, description, price_irr, image_url, active,
-              ypoint_amount, vip_server_id, vip_duration, subscription_tier
-       FROM store_products
-       WHERE id = ANY($1::uuid[])
-         AND active = true`,
-      [uniqueIds],
-    );
+    let products: StoreProductRow[];
+    try {
+      products = await this.postgres.query<StoreProductRow[]>(
+        `SELECT id, title, slug, description, price_irr, image_url, active,
+                ypoint_amount, vip_server_id, vip_duration, subscription_tier
+         FROM store_products
+         WHERE id = ANY($1::uuid[])
+           AND active = true`,
+        [uniqueIds],
+      );
+    } catch (error) {
+      // Older DBs may lack subscription_tier — still allow checkout.
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!/subscription_tier/i.test(msg)) throw error;
+      products = await this.postgres.query<StoreProductRow[]>(
+        `SELECT id, title, slug, description, price_irr, image_url, active,
+                ypoint_amount, vip_server_id, vip_duration
+         FROM store_products
+         WHERE id = ANY($1::uuid[])
+           AND active = true`,
+        [uniqueIds],
+      );
+      products = products.map((p) => ({ ...p, subscription_tier: null }));
+    }
     if (products.length !== uniqueIds.length) {
       throw new NotFoundException("One or more products are unavailable");
     }
@@ -228,7 +246,7 @@ export class StoreService {
       ypoint_amount: p.ypoint_amount,
       vip_server_id: p.vip_server_id,
       vip_duration: p.vip_duration,
-      subscription_tier: p.subscription_tier,
+      subscription_tier: p.subscription_tier ?? null,
     }));
     const amountIrr = cartItems.reduce((sum, i) => sum + i.price_irr, 0);
     const primary = ordered[0];
@@ -237,20 +255,28 @@ export class StoreService {
 
     await this.cancelPendingOrders(buyerSteamId);
 
-    await this.postgres.query(
-      `INSERT INTO store_orders
-        (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
-         cart_items, terms_accepted_at)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now())`,
-      [
-        orderId,
-        primary.id,
-        buyerSteamId,
-        amountIrr,
-        payload,
-        JSON.stringify(cartItems),
-      ],
-    );
+    try {
+      await this.postgres.query(
+        `INSERT INTO store_orders
+          (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
+           cart_items, terms_accepted_at)
+         VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now())`,
+        [
+          orderId,
+          primary.id,
+          buyerSteamId,
+          amountIrr,
+          payload,
+          JSON.stringify(cartItems),
+        ],
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Store checkout insert failed: ${msg}`);
+      throw new BadRequestException(
+        `Checkout failed: ${msg.slice(0, 180)}`,
+      );
+    }
 
     const deepLink = this.buildDeepLink(orderId, bale.botUsername);
     const productTitle =
@@ -267,6 +293,21 @@ export class StoreService {
       botUsername: bale.botUsername || null,
       startParam: `pay_${orderId.replace(/-/g, "")}`,
     };
+  }
+
+  /** Idempotent: add cart columns if a previous deploy skipped the SQL script. */
+  private async ensureCartSchema() {
+    try {
+      await this.postgres.query(`
+        ALTER TABLE public.store_orders
+          ADD COLUMN IF NOT EXISTS cart_items jsonb,
+          ADD COLUMN IF NOT EXISTS terms_accepted_at timestamptz
+      `);
+    } catch (error) {
+      this.logger.warn(
+        `ensureCartSchema: ${error instanceof Error ? error.message : error}`,
+      );
+    }
   }
 
   public async handleStartPay(chatId: number | string, orderKey: string) {
