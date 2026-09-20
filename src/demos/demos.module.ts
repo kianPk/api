@@ -9,7 +9,6 @@ import { DemoQueues } from "./enums/DemoQueues";
 import { loggerFactory } from "../utilities/LoggerFactory";
 import { Queue } from "bullmq";
 import { CleanDemos } from "./jobs/CleanDemos";
-import { PurgeAllDemosDaily } from "./jobs/PurgeAllDemosDaily";
 import { ReparseAllDemos } from "./jobs/ReparseAllDemos";
 import { S3Module } from "src/s3/s3.module";
 import { AuthModule } from "src/auth/auth.module";
@@ -47,7 +46,6 @@ import { DemoReparseService } from "./demo-reparse.service";
   controllers: [DemosController, DemoReparseController],
   providers: [
     CleanDemos,
-    PurgeAllDemosDaily,
     ReparseAllDemos,
     DemoMetadataService,
     DemoParserService,
@@ -70,18 +68,6 @@ export class DemosModule {
         repeat: {
           pattern: "0 * * * *",
         },
-      },
-    );
-
-    // Full demo wipe once a day (03:00 UTC) — keeps S3 from filling the VPS.
-    void cleanDemosQueue.add(
-      PurgeAllDemosDaily.name,
-      {},
-      {
-        repeat: {
-          pattern: "0 3 * * *",
-        },
-        jobId: "purge-all-demos-daily",
       },
     );
   }

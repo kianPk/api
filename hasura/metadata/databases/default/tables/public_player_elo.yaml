@@ -15,7 +15,6 @@ select_permissions:
   - role: guest
     permission:
       columns:
-        - id
         - steam_id
         - change
         - current

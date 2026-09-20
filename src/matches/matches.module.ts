@@ -35,7 +35,6 @@ import { CheckForScheduledMatches } from "./jobs/CheckForScheduledMatches";
 import { CancelExpiredMatches } from "./jobs/CancelExpiredMatches";
 import { AutoPickExpiredVeto } from "./jobs/AutoPickExpiredVeto";
 import { RemoveCancelledMatches } from "./jobs/RemoveCancelledMatches";
-import { PurgeOldMatchesDaily } from "./jobs/PurgeOldMatchesDaily";
 import { CheckForTournamentStart } from "./jobs/CheckForTournamentStart";
 import { CheckForScheduledTournamentBrackets } from "./jobs/CheckForScheduledTournamentBrackets";
 import { CheckLeagueSeasonTransitions } from "./jobs/CheckLeagueSeasonTransitions";
@@ -189,7 +188,6 @@ import { AnticheatModule } from "../anticheat/anticheat.module";
     EventReminders,
     CheckForScheduledMatches,
     RemoveCancelledMatches,
-    PurgeOldMatchesDaily,
     StopOnDemandServer,
     CancelInvalidTournaments,
     CleanAbandonedMatches,
@@ -321,19 +319,6 @@ export class MatchesModule implements NestModule {
         repeat: {
           pattern: "* * * * *",
         },
-      },
-    );
-
-    // Finished non-tournament matches older than match_purge_after_hours.
-    // player_elo survives match delete (SET NULL on match_id).
-    void scheduleMatchQueue.add(
-      PurgeOldMatchesDaily.name,
-      {},
-      {
-        repeat: {
-          pattern: "15 3 * * *",
-        },
-        jobId: "purge-old-matches-daily",
       },
     );
 
