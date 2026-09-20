@@ -786,12 +786,12 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
   } {
     // Advertise real latest so older clients get the update prompt.
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
-    const version = process.env.AC_LAUNCHER_VERSION || "0.4.0";
+    const version = process.env.AC_LAUNCHER_VERSION || "0.4.1";
     return {
       version,
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.4.0/YGuardAC-0.4.0-client.zip",
+        "https://github.com/kianPk/web/releases/download/client-v0.4.1/YGuardAC-0.4.1-client.zip",
       // Force upgrade past clients that still show the old pair-again 401 text.
       mandatory: true,
       min_version: MIN_CLIENT_VERSION,
