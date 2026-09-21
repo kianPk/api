@@ -64,6 +64,12 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`AC security-ban cleanup failed: ${err}`),
     );
 
+    // 0.4.0 folder-name scanner banned anyone with Desktop/Documents folders
+    // named Midnight / Nemesis / Osiris / skeet / etc. Lift those once.
+    void this.liftAmbiguousSignatureFalseBans().catch((err) =>
+      this.logger.warn(`AC ambiguous-ban cleanup failed: ${err}`),
+    );
+
     // Ensure challenge / hardware-bind columns exist even if Hasura migrate
     // was skipped on the panel — otherwise 0.3.x clients get "Connection refused".
     void this.ensureSecuritySchema().catch((err) =>
@@ -786,12 +792,12 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
   } {
     // Advertise real latest so older clients get the update prompt.
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
-    const version = process.env.AC_LAUNCHER_VERSION || "0.4.1";
+    const version = process.env.AC_LAUNCHER_VERSION || "0.4.2";
     return {
       version,
       download_url:
         process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.4.1/YGuardAC-0.4.1-client.zip",
+        "https://github.com/kianPk/web/releases/download/client-v0.4.2/YGuardAC-0.4.2-client.zip",
       // Force upgrade past clients that still show the old pair-again 401 text.
       mandatory: true,
       min_version: MIN_CLIENT_VERSION,
@@ -999,6 +1005,48 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     );
     if (result.length > 0) {
       this.logger.log(`AC cleaned ${result.length} leftover security ban(s)`);
+    }
+  }
+
+  /**
+   * One-shot recovery: 0.4.0 treated Desktop/AppData folders named Midnight /
+   * Nemesis / Osiris / skeet / Spirt / Gamesense / Interium / Primordial as
+   * cheat installs. Soft-delete those auto-bans (real ExLoader etc. stay).
+   */
+  private async liftAmbiguousSignatureFalseBans(): Promise<void> {
+    const result = await this.postgres.query<Array<{ id: string }>>(
+      `UPDATE public.player_sanctions
+       SET deleted_at = now()
+       WHERE type = 'ban'
+         AND deleted_at IS NULL
+         AND reason LIKE $1
+         AND reason <> $2
+         AND created_at > now() - interval '14 days'
+         AND (
+           reason ILIKE '%midnight%'
+           OR reason ILIKE '%nemesis%'
+           OR reason ILIKE '%osiris%'
+           OR reason ILIKE '%gamesense%'
+           OR reason ILIKE '%skeet%'
+           OR reason ILIKE '%spirt%'
+           OR reason ILIKE '%interium%'
+           OR reason ILIKE '%primordial%'
+         )
+         AND reason NOT ILIKE '%exloader%'
+         AND reason NOT ILIKE '%neverlose%'
+         AND reason NOT ILIKE '%fatality%'
+         AND reason NOT ILIKE '%nixware%'
+         AND reason NOT ILIKE '%onetap%'
+         AND reason NOT ILIKE '%aimjunkies%'
+         AND reason NOT ILIKE '%rawetrip%'
+         AND reason NOT ILIKE '%cheatengine%'
+       RETURNING id::text`,
+      [AnticheatService.AcBanPrefix + "%", AnticheatService.AcSecurityBanReason],
+    );
+    if (result.length > 0) {
+      this.logger.warn(
+        `AC lifted ${result.length} likely false-positive ambiguous-signature ban(s)`,
+      );
     }
   }
 
