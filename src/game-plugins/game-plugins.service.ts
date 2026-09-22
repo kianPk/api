@@ -285,7 +285,7 @@ export class GamePluginsService {
       );
     }
 
-    const { sha256, size } = await this.digestOf(resolved.download);
+    const { sha256, size, downloadUrl } = await this.digestOf(resolved.download);
 
     await this.postgres.query(
       `INSERT INTO public.game_plugins
@@ -324,7 +324,9 @@ export class GamePluginsService {
         slug,
         runtime,
         version,
-        resolved.download,
+        // Prefer the URL that actually downloaded (may be a GitHub mirror when
+        // github.com is unreachable from the panel VPS / game nodes).
+        downloadUrl,
         sha256,
         size,
         resolved.publishedAt ?? new Date().toISOString(),
@@ -505,19 +507,92 @@ export class GamePluginsService {
   // Hashed here, once, rather than trusted on each node: the digest is what
   // every node checks its download against, so it has to be established by
   // something that saw the bytes.
+  //
+  // GitHub release assets are often unreachable from some regions (Node then
+  // surfaces a bare "fetch failed"). Try the URL first, then optional mirrors
+  // so Plugin Directory → Add still works with a normal github.com link.
   private async digestOf(
     url: string,
+  ): Promise<{ sha256: string; size: number; downloadUrl: string }> {
+    const candidates = this.downloadUrlCandidates(url);
+    const errors: string[] = [];
+
+    for (const candidate of candidates) {
+      try {
+        const result = await this.hashRemoteArchive(candidate);
+        if (candidate !== url) {
+          this.logger.warn(
+            `downloaded plugin archive via mirror ${candidate} (direct fetch of ${url} failed)`,
+          );
+        }
+        return { ...result, downloadUrl: candidate };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        errors.push(`${candidate}: ${message}`);
+      }
+    }
+
+    throw new BadRequestException(
+      `could not download plugin archive. Tried ${candidates.length} URL(s). ${errors.join(" | ")}`,
+    );
+  }
+
+  private downloadUrlCandidates(url: string): string[] {
+    const out = [url];
+    let host = "";
+    try {
+      host = new URL(url).hostname.toLowerCase();
+    } catch {
+      return out;
+    }
+
+    const isGithubAsset =
+      host === "github.com" ||
+      host.endsWith(".githubusercontent.com") ||
+      host === "objects.githubusercontent.com" ||
+      host === "release-assets.githubusercontent.com";
+
+    if (!isGithubAsset) {
+      return out;
+    }
+
+    const proxies = [
+      process.env.GITHUB_DOWNLOAD_PROXY?.trim(),
+      // Public mirrors commonly used when github.com is blocked from the VPS.
+      "https://ghfast.top/",
+      "https://mirror.ghproxy.com/",
+    ].filter((value): value is string => !!value);
+
+    for (const proxy of proxies) {
+      const base = proxy.endsWith("/") ? proxy : `${proxy}/`;
+      out.push(`${base}${url}`);
+    }
+
+    return [...new Set(out)];
+  }
+
+  private async hashRemoteArchive(
+    url: string,
   ): Promise<{ sha256: string; size: number }> {
-    const response = await fetch(url, {
-      headers: { "User-Agent": "5stack-panel" },
-      redirect: "follow",
-      signal: AbortSignal.timeout(10 * 60 * 1000),
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: { "User-Agent": "5stack-panel" },
+        redirect: "follow",
+        signal: AbortSignal.timeout(10 * 60 * 1000),
+      });
+    } catch (error) {
+      const cause =
+        error instanceof Error && "cause" in error
+          ? String((error as Error & { cause?: unknown }).cause)
+          : "";
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(cause ? `${message} (${cause})` : message);
+    }
 
     if (!response.ok || !response.body) {
-      throw new BadRequestException(
-        `could not download ${url} (${response.status})`,
-      );
+      throw new Error(`HTTP ${response.status}`);
     }
 
     const hash = createHash("sha256");
@@ -536,7 +611,7 @@ export class GamePluginsService {
     }
 
     if (size === 0) {
-      throw new BadRequestException(`${url} returned an empty file`);
+      throw new Error("empty file");
     }
 
     return { sha256: hash.digest("hex"), size };
