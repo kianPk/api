@@ -180,30 +180,35 @@ export class CancelExpiredMatches extends WorkerHost {
   // rather than per team, since a lobby can die with any mix of the two and
   // there's no honest team-level answer to who was at fault.
   //
-  // Leaving a match that did start is a different thing and is already handled
-  // elsewhere.
+  // Mid-game disconnect cancels (short reconnect fuse) also land here for
+  // whoever is still offline. The long hung-live safety net does not: by then
+  // everyone has disconnected and must not all be marked as abandoners.
   private async recordNoShows(
     match: Awaited<ReturnType<typeof this.getExpiredMatches>>[number],
   ) {
-    // cancels_at is also the hung-live-match safety net, so a match that played
-    // out and then stalled lands here too. Nobody no-showed that one -- they
-    // all turned up -- and by the time it expires they have long since
-    // disconnected, so is_connected would read every one of them as absent.
-    if (!this.isAwaitingWarmup(match)) {
-      return;
-    }
-
     // No server was ever assigned, so nobody could have connected. Penalising
     // the whole lobby for that would be blaming them for our own failure.
     if (!match.server_id) {
       return;
     }
 
-    const noShows = [
+    const roster = [
       ...(match.lineup_1.lineup_players ?? []),
       ...(match.lineup_2.lineup_players ?? []),
-    ].filter(
-      (lineupPlayer) => lineupPlayer.steam_id && !lineupPlayer.is_connected,
+    ].filter((lineupPlayer) => lineupPlayer.steam_id);
+
+    if (!this.isAwaitingWarmup(match)) {
+      const anyoneStillHere = roster.some(
+        (lineupPlayer) => lineupPlayer.is_connected,
+      );
+      // Hung live timeout: everyone long gone. Mid-game leave: some remain.
+      if (!anyoneStillHere) {
+        return;
+      }
+    }
+
+    const noShows = roster.filter(
+      (lineupPlayer) => !lineupPlayer.is_connected,
     );
 
     if (noShows.length === 0) {
@@ -224,7 +229,7 @@ export class CancelExpiredMatches extends WorkerHost {
       });
 
       this.logger.log(
-        `recorded ${noShows.length} no-show(s) for canceled match ${match.id}`,
+        `recorded ${noShows.length} no-show/abandon(s) for canceled match ${match.id}`,
       );
     } catch (error) {
       // The cancellation itself matters more than the bookkeeping.
@@ -249,9 +254,11 @@ export class CancelExpiredMatches extends WorkerHost {
         return;
       }
 
-      await rcon.send(
-        'say Match canceled - not everyone showed up before the deadline.',
-      );
+      const message = this.isAwaitingWarmup(match)
+        ? "say Match canceled - not everyone showed up before the deadline."
+        : "say Match canceled - a player left and did not reconnect in time.";
+
+      await rcon.send(message);
     } catch (error) {
       // Never let this stop the cancellation itself.
       this.logger.warn(
