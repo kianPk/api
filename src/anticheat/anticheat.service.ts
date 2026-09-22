@@ -1052,8 +1052,8 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Game-server plugin gate: Bearer = servers.api_password.
-   * When AC is required, every connecting player (ranked / custom / public)
-   * must have a live AC launcher — not only match lineup roster.
+   * Ranked pods only — Public / Custom / Practice / casual types never require
+   * the launcher (players just want to spawn and play).
    */
   public async checkPlayerForServer(
     serverId: string,
@@ -1070,9 +1070,9 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
       .replace(/^Bearer\s+/i, "")
       .trim();
     const servers = await this.postgres.query<
-      Array<{ api_password: string | null }>
+      Array<{ api_password: string | null; type: string | null }>
     >(
-      `SELECT api_password::text AS api_password
+      `SELECT api_password::text AS api_password, type::text AS type
        FROM public.servers
        WHERE id = $1::uuid
        LIMIT 1`,
@@ -1081,6 +1081,15 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     const row = servers.at(0);
     if (!row || !timingSafeStringEqual(row.api_password, apiPassword)) {
       throw new UnauthorizedException("Invalid server credentials");
+    }
+
+    // Casual public boxes (Custom / Deathmatch / Retake / …) skip the gate.
+    if (
+      row.type &&
+      row.type !== "Ranked" &&
+      row.type.toLowerCase() !== "ranked"
+    ) {
+      return { required: false, allowed: true };
     }
 
     const req = await this.getRequirements();
