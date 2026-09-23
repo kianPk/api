@@ -800,7 +800,7 @@ UNIT
 
   @Get("/ping/:serverId")
   public async ping(@Req() request: Request) {
-    const map = request.query.map;
+    const map = String(request.query.map ?? "");
     const serverId = request.params.serverId;
 
     let { steamRelay, pluginVersion, steamID } = request.query as {
@@ -840,6 +840,7 @@ UNIT
         is_dedicated: true,
         game_server_node_id: true,
         current_match: {
+          status: true,
           current_match_map_id: true,
           match_maps: {
             id: true,
@@ -901,17 +902,39 @@ UNIT
       });
     }
 
+    // On-demand ranked pods boot with EXTRA_GAME_PARAMS +map <name>, then the
+    // plugin pings every 15s. WaitingForServer cannot become Live until
+    // connected=true, and connected was gated on map name matching. CS2's
+    // GetAddonName / Server.MapName often reports a workshop id or empty
+    // string for official maps, so the gate never opened and UI stuck on
+    // Booting. Skip the gate while we are still waiting for the server; once
+    // Live, keep waiting until the reported map matches before refreshing
+    // heartbeat metadata.
     if (server.current_match && !server.is_dedicated) {
+      const matchStatus = server.current_match.status as string | null;
       const currentMap = server.current_match?.match_maps.find((match_map) => {
         return match_map.id === server.current_match.current_match_map_id;
       });
+      const expectedName = currentMap?.map.name ?? null;
+      const expectedWorkshop = currentMap?.map.workshop_map_id ?? null;
+      const mapMatches =
+        !!map &&
+        (map === expectedName ||
+          map === expectedWorkshop ||
+          (!!expectedName && map.includes(expectedName)) ||
+          (!!expectedWorkshop && map.includes(expectedWorkshop)));
 
-      if (
-        map !== currentMap?.map.name &&
-        map !== currentMap?.map.workshop_map_id
-      ) {
-        this.logger.warn(`server is still loading the map`);
+      if (matchStatus !== "WaitingForServer" && !mapMatches) {
+        this.logger.warn(
+          `server ${serverId} still loading the map: got=${map || "<empty>"} expected=${expectedName ?? "<none>"}/${expectedWorkshop ?? "<none>"} match_status=${matchStatus ?? "<none>"}`,
+        );
         return;
+      }
+
+      if (matchStatus === "WaitingForServer" && !mapMatches) {
+        this.logger.verbose(
+          `server ${serverId} WaitingForServer map mismatch tolerated: got=${map || "<empty>"} expected=${expectedName ?? "<none>"}/${expectedWorkshop ?? "<none>"}`,
+        );
       }
     }
 

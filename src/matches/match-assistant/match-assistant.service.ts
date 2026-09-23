@@ -1166,7 +1166,7 @@ export class MatchAssistantService {
                           },
                           {
                             name: "EXTRA_GAME_PARAMS",
-                            value: `-maxplayers ${match.max_players_per_lineup * 2 + 3} ${map.workshop_map_id ? `+map de_inferno` : `+map ${map.name}`} +game_type 0 +game_mode ${MatchAssistantService.getGameMode(match.options?.type)} +sv_password ${match.password}${gameMode?.extraGameParams ? ` ${gameMode.extraGameParams}` : ""}`,
+                            value: `-maxplayers ${match.max_players_per_lineup * 2 + 3} ${map.workshop_map_id ? `+host_workshop_map ${map.workshop_map_id}` : `+map ${map.name}`} +game_type 0 +game_mode ${MatchAssistantService.getGameMode(match.options?.type)} +sv_password ${match.password}${gameMode?.extraGameParams ? ` ${gameMode.extraGameParams}` : ""}`,
                           },
                           { name: "SERVER_ID", value: server.id },
                           {
