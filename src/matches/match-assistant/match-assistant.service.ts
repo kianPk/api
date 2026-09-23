@@ -1083,6 +1083,19 @@ export class MatchAssistantService {
           const gameModeEnvironment =
             this.gameModesService.environmentFor(gameMode);
 
+          // Ranked matchmaking has no Game Mode row, so Extra Game Params never
+          // run. A panel/SQL setting carries the GSLT for public joins.
+          const { settings_by_pk: gsltSetting } = await this.hasura.query({
+            settings_by_pk: {
+              __args: {
+                name: SystemSettingName.Cs2Gslt,
+              },
+              value: true,
+            },
+          });
+          const gslt = (gsltSetting?.value ?? "").trim();
+          const gsltParam = gslt ? ` +sv_setsteamaccount ${gslt}` : "";
+
           await batch.createNamespacedJob({
             namespace: this.namespace,
             body: {
@@ -1166,7 +1179,7 @@ export class MatchAssistantService {
                           },
                           {
                             name: "EXTRA_GAME_PARAMS",
-                            value: `-maxplayers ${match.max_players_per_lineup * 2 + 3} ${map.workshop_map_id ? `+host_workshop_map ${map.workshop_map_id}` : `+map ${map.name}`} +game_type 0 +game_mode ${MatchAssistantService.getGameMode(match.options?.type)} +sv_password ${match.password}${gameMode?.extraGameParams ? ` ${gameMode.extraGameParams}` : ""}`,
+                            value: `-maxplayers ${match.max_players_per_lineup * 2 + 3} ${map.workshop_map_id ? `+host_workshop_map ${map.workshop_map_id}` : `+map ${map.name}`} +game_type 0 +game_mode ${MatchAssistantService.getGameMode(match.options?.type)} +sv_password ${match.password}${gsltParam}${gameMode?.extraGameParams ? ` ${gameMode.extraGameParams}` : ""}`,
                           },
                           { name: "SERVER_ID", value: server.id },
                           {

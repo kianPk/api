@@ -30,6 +30,11 @@ export enum SystemSettingName {
   AcRequireHvci = "public.ac_require_hvci",
   AcRequireIommu = "public.ac_require_iommu",
   AcRequireWindowsUpdates = "public.ac_require_windows_updates",
+  // Injected as +sv_setsteamaccount on on-demand / node CS2 pods. Ranked
+  // matchmaking has no Game Mode row, so Extra Game Params cannot carry a
+  // GSLT — this setting is the panel/SQL knob for public internet joins.
+  // One token per concurrent server; reuse kicks the other instance.
+  Cs2Gslt = "cs2_gslt",
   DemoNetworkLimiter = "demo_network_limiter",
   PublicDefaultModels = "public.default_models",
   VetoPickTimeout = "public.veto_pick_timeout",
