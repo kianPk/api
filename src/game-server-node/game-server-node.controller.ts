@@ -902,44 +902,21 @@ UNIT
       });
     }
 
-    // On-demand ranked pods boot with EXTRA_GAME_PARAMS +map <name>, then the
-    // plugin pings every 15s. connected=true is what promotes the lobby past
-    // Booting. Two races made the old map-name gate hang forever:
-    // 1) CS2 often reports a workshop id / empty string instead of map.name
-    // 2) assigning server_id flips WaitingForServer -> Live in a DB trigger
-    //    before the container has finished loading the map, so a Live+!connected
-    //    server never got past the gate either.
-    // Tolerate mismatches until the first successful connected=true; once
-    // Live and connected, keep waiting for the right map on later pings.
+    // Wait until CS2 reports the match map before marking connected. Premature
+    // connected=true (yesterday's Booting workaround) exposes Join while Steam
+    // / the map are still coming up, which surfaces as Connection availability.
+    // FiveStack now reports map names correctly again, so keep the strict gate.
     if (server.current_match && !server.is_dedicated) {
-      const matchStatus = server.current_match.status as string | null;
       const currentMap = server.current_match?.match_maps.find((match_map) => {
         return match_map.id === server.current_match.current_match_map_id;
       });
-      const expectedName = currentMap?.map.name ?? null;
-      const expectedWorkshop = currentMap?.map.workshop_map_id ?? null;
-      const mapMatches =
-        !!map &&
-        (map === expectedName ||
-          map === expectedWorkshop ||
-          (!!expectedName && map.includes(expectedName)) ||
-          (!!expectedWorkshop && map.includes(expectedWorkshop)));
 
-      const allowMapMismatch =
-        !server.connected ||
-        matchStatus === "WaitingForServer";
-
-      if (!allowMapMismatch && !mapMatches) {
-        this.logger.warn(
-          `server ${serverId} still loading the map: got=${map || "<empty>"} expected=${expectedName ?? "<none>"}/${expectedWorkshop ?? "<none>"} match_status=${matchStatus ?? "<none>"}`,
-        );
+      if (
+        map !== currentMap?.map.name &&
+        map !== currentMap?.map.workshop_map_id
+      ) {
+        this.logger.warn(`server is still loading the map`);
         return;
-      }
-
-      if (allowMapMismatch && !mapMatches) {
-        this.logger.verbose(
-          `server ${serverId} map mismatch tolerated (connected=${server.connected} status=${matchStatus ?? "<none>"}): got=${map || "<empty>"} expected=${expectedName ?? "<none>"}/${expectedWorkshop ?? "<none>"}`,
-        );
       }
     }
 

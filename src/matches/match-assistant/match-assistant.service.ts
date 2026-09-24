@@ -1085,6 +1085,8 @@ export class MatchAssistantService {
 
           // Ranked matchmaking has no Game Mode row, so Extra Game Params never
           // run. A panel/SQL setting carries the GSLT for public joins.
+          // One token per concurrent server — reuse with the public node kicks
+          // the other instance and clients see Connection availability.
           const { settings_by_pk: gsltSetting } = await this.hasura.query({
             settings_by_pk: {
               __args: {
@@ -1094,7 +1096,16 @@ export class MatchAssistantService {
             },
           });
           const gslt = (gsltSetting?.value ?? "").trim();
-          const gsltParam = gslt ? ` +sv_setsteamaccount ${gslt}` : "";
+          const alreadyHasGslt = /\bsv_setsteamaccount\b/i.test(
+            gameMode?.extraGameParams ?? "",
+          );
+          const gsltParam =
+            !alreadyHasGslt && gslt ? ` +sv_setsteamaccount ${gslt}` : "";
+          if (!gsltParam && !alreadyHasGslt) {
+            this.logger.warn(
+              `ranked match ${matchId}: cs2_gslt unset — on-demand server may reject public joins`,
+            );
+          }
 
           await batch.createNamespacedJob({
             namespace: this.namespace,
