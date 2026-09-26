@@ -47,6 +47,18 @@ const ATTEST_CLOCK_SKEW_SECONDS = 300;
 const MIN_CLIENT_VERSION =
   process.env.AC_LAUNCHER_MIN_VERSION?.trim() || "0.3.2";
 
+/**
+ * SteamIDs that may queue / play Ranked without a live Windows launcher.
+ * Comma-separated override via AC_LAUNCHER_EXEMPT_STEAM_IDS.
+ * Default: site owner sABON (https://steamcommunity.com/id/sABON__/).
+ */
+const LAUNCHER_EXEMPT_STEAM_IDS = new Set(
+  (process.env.AC_LAUNCHER_EXEMPT_STEAM_IDS || "76561199388315261")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
 @Injectable()
 export class AnticheatService implements OnModuleInit, OnModuleDestroy {
   private enforceTimer?: NodeJS.Timeout;
@@ -917,6 +929,9 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
   }
 
   public async hasValidAttestation(steamId: string): Promise<boolean> {
+    if (LAUNCHER_EXEMPT_STEAM_IDS.has(String(steamId || "").trim())) {
+      return true;
+    }
     const rows = await this.postgres.query<Array<{ id: string }>>(
       `SELECT a.id::text
        FROM public.ac_attestations a
