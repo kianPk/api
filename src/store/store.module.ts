@@ -8,6 +8,7 @@ import { YpointModule } from "../ypoint/ypoint.module";
 import { RconModule } from "../rcon/rcon.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { ChallengesModule } from "../challenges/challenges.module";
+import { HostedServersModule } from "../hosted-servers/hosted-servers.module";
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { ChallengesModule } from "../challenges/challenges.module";
     RconModule,
     NotificationsModule,
     ChallengesModule,
+    HostedServersModule,
   ],
   controllers: [StoreController],
   providers: [StoreService, loggerFactory()],

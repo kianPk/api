@@ -61,6 +61,7 @@ import { LeaguesModule } from "./leagues/leagues.module";
 import { PluginsModule } from "./plugins/plugins.module";
 import { UtilityModule } from "./utility/utility.module";
 import { StoreModule } from "./store/store.module";
+import { HostedServersModule } from "./hosted-servers/hosted-servers.module";
 import { YpointModule } from "./ypoint/ypoint.module";
 import { AnticheatModule } from "./anticheat/anticheat.module";
 import { ChallengesModule } from "./challenges/challenges.module";
@@ -160,6 +161,7 @@ import { ChallengesModule } from "./challenges/challenges.module";
     SteamPresenceModule,
     NewsModule,
     StoreModule,
+    HostedServersModule,
     YpointModule,
     AnticheatModule,
     ChallengesModule,

@@ -28,6 +28,7 @@ type Modules =
   | "DraftGames"
   | "Telemetry"
   | "DedicatedServers"
+  | "HostedServers"
   | "SteamMatchHistory"
   | "Faceit"
   | "S3Scan"

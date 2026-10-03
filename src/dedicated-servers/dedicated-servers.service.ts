@@ -12,6 +12,7 @@ import { Redis } from "ioredis";
 import { SystemService } from "src/system/system.service";
 import { PluginRuntimeService } from "src/plugin-runtime/plugin-runtime.service";
 import { GameModesService } from "../game-plugins/game-modes.service";
+import { PostgresService } from "../postgres/postgres.service";
 
 @Injectable()
 export class DedicatedServersService {
@@ -34,6 +35,7 @@ export class DedicatedServersService {
     private readonly systemService: SystemService,
     private readonly pluginRuntimeService: PluginRuntimeService,
     private readonly gameModesService: GameModesService,
+    private readonly postgres: PostgresService,
   ) {
     this.redis = this.redisManager.getConnection();
 
@@ -168,6 +170,21 @@ export class DedicatedServersService {
       const dedicatedServerDeploymentName =
         this.getDedicatedServerDeploymentName(serverId);
 
+      const { steamAccountToken, isHosted } =
+        await this.getServerHostingInfo(serverId);
+
+      const launchExtras = [
+        // Without this the server hibernates before its Steam logon finishes
+        // and sits at "Waiting for Steam login" with nobody able to join.
+        server.type !== "Ranked" ? "+sv_hibernate_when_empty 0" : "",
+        steamAccountToken &&
+        !/\bsv_setsteamaccount\b/i.test(gameMode?.extraGameParams || "")
+          ? `+sv_setsteamaccount ${steamAccountToken}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
       await this.apps.createNamespacedDeployment({
         namespace: this.namespace,
         body: {
@@ -220,6 +237,28 @@ export class DedicatedServersService {
                     },
                   },
                 },
+                ...(isHosted
+                  ? {
+                      initContainers: [
+                        {
+                          name: "hosted-plugins",
+                          image: pluginImage,
+                          command: ["sh", "-c", this.hostedPluginInitScript()],
+                          volumeMounts: [
+                            {
+                              name: `dedicated-server-data-${server.id}`,
+                              mountPath: "/opt/custom-plugins",
+                            },
+                            {
+                              name: `hosted-template-${sanitizedGameServerNodeId}`,
+                              mountPath: "/opt/hosted-template",
+                              readOnly: true,
+                            },
+                          ],
+                        },
+                      ],
+                    }
+                  : {}),
                 containers: [
                   {
                     name: "game-server",
@@ -272,7 +311,11 @@ export class DedicatedServersService {
                       // TODO - number of players
                       {
                         name: "EXTRA_GAME_PARAMS",
-                        value: `-maxplayers ${server.type === "Ranked" ? 16 : server.max_players} +map de_dust2 +game_type ${this.getGameType(server.type)} +game_mode ${this.getGameMode(server.type)} +sv_skirmish_id ${this.getWarGameType(server.type)} ${server.connect_password ? ` +sv_password ${server.connect_password}` : ""}${gameMode?.extraGameParams ? ` ${gameMode.extraGameParams}` : ""}`,
+                        // Public/custom need a Valve stock mapgroup (e.g. mg_active)
+                        // for endmatch VOTING UI with real names/thumbnails.
+                        // Custom mg_* in gamemodes_server.txt often shows "undefined".
+                        // Ranked picks maps from the match, so leave mapgroup off there.
+                        value: `-maxplayers ${server.type === "Ranked" ? 16 : server.max_players} +map de_dust2${server.type === "Ranked" ? "" : " +mapgroup mg_active"} +game_type ${this.getGameType(server.type)} +game_mode ${this.getGameMode(server.type)} +sv_skirmish_id ${this.getWarGameType(server.type)} ${server.connect_password ? ` +sv_password ${server.connect_password}` : ""}${launchExtras ? ` ${launchExtras}` : ""}${gameMode?.extraGameParams ? ` ${gameMode.extraGameParams}` : ""}`,
                       },
                       { name: "SERVER_ID", value: server.id },
                       {
@@ -363,6 +406,17 @@ export class DedicatedServersService {
                       path: `/opt/5stack/custom-plugins`,
                     },
                   },
+                  ...(isHosted
+                    ? [
+                        {
+                          name: `hosted-template-${sanitizedGameServerNodeId}`,
+                          hostPath: {
+                            type: "DirectoryOrCreate",
+                            path: `/opt/5stack/hosted-template`,
+                          },
+                        },
+                      ]
+                    : []),
                 ],
               },
             },
@@ -448,12 +502,15 @@ export class DedicatedServersService {
       case "Casual":
       case "Competitive":
       case "Wingman":
+      // Public/Custom dedicated boxes need Classic (0) so Valve endmatch
+      // map vote (VOTING / thumbnails) works. game_type 3 = Custom mode
+      // skips that UI entirely.
+      case "Custom":
         return 0;
       case "Deathmatch":
       case "ArmsRace":
         return 1;
       case "Retake":
-      case "Custom":
         return 3;
     }
   }
@@ -588,7 +645,10 @@ export class DedicatedServersService {
         );
         return false;
       }
-      const safe = reason.replace(/[\r\n";]/g, " ").trim().slice(0, 120);
+      const safe = reason
+        .replace(/[\r\n";]/g, " ")
+        .trim()
+        .slice(0, 120);
       await rcon.send(`kickid ${userid} ${safe}`);
       return true;
     } finally {
@@ -893,6 +953,51 @@ export class DedicatedServersService {
 
   private getDedicatedServerDeploymentName(serverId: string): string {
     return `dedicated-server-${serverId}`;
+  }
+
+  private async getServerHostingInfo(
+    serverId: string,
+  ): Promise<{ steamAccountToken: string | null; isHosted: boolean }> {
+    try {
+      const [row] = await this.postgres.query<
+        Array<{ steam_account_token: string | null; is_hosted: boolean }>
+      >(
+        `SELECT s.steam_account_token,
+                EXISTS (
+                  SELECT 1 FROM hosted_servers h
+                  WHERE h.server_id = s.id OR h.pending_server_id = s.id
+                ) AS is_hosted
+         FROM servers s WHERE s.id = $1`,
+        [serverId],
+      );
+      const token = row?.steam_account_token?.trim() || null;
+      return {
+        steamAccountToken:
+          token && /^[A-F0-9]{32}$/i.test(token) ? token : null,
+        isHosted: Boolean(row?.is_hosted),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `[${serverId}] hosting info unavailable: ${error?.message || error}`,
+      );
+      return { steamAccountToken: null, isHosted: false };
+    }
+  }
+
+  // Seeds a rented server's own plugin directory from the node's template once,
+  // and always shadows FiveStack: the node directory carries the ranked match
+  // plugin, which must never load on a non-match server.
+  private hostedPluginInitScript(): string {
+    return [
+      "set -e",
+      "dest=/opt/custom-plugins",
+      'if [ ! -f "$dest/.hosted-template-applied" ]; then',
+      '  cp -a /opt/hosted-template/. "$dest"/ 2>/dev/null || true',
+      '  touch "$dest/.hosted-template-applied"',
+      "fi",
+      'mkdir -p "$dest/addons/counterstrikesharp/plugins/FiveStack"',
+      'find "$dest/addons/counterstrikesharp/plugins/FiveStack" -mindepth 1 -delete 2>/dev/null || true',
+    ].join("\n");
   }
 
   private async waitForPodReady(

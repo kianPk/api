@@ -94,6 +94,30 @@ export class StoreController {
     });
   }
 
+  @Post("hosted-checkout")
+  public async hostedCheckout(
+    @Req() request: Request,
+    @Body()
+    body: {
+      productId?: string;
+      hostedServerId?: string;
+      type?: string;
+      label?: string;
+      termsAccepted?: boolean;
+    },
+  ) {
+    const user = this.requireUser(request);
+    if (!body?.productId) {
+      throw new BadRequestException("productId required");
+    }
+    return this.store.checkoutHosted(body.productId, user.steam_id, {
+      termsAccepted: Boolean(body?.termsAccepted),
+      hostedServerId: body.hostedServerId || undefined,
+      type: body.type,
+      label: body.label,
+    });
+  }
+
   @Post("cancel-pending")
   public async cancelPending(
     @Req() request: Request,

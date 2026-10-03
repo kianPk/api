@@ -1,0 +1,48 @@
+table:
+  name: hosted_servers
+  schema: public
+object_relationships:
+  - name: server
+    using:
+      foreign_key_constraint_on: server_id
+  - name: owner
+    using:
+      foreign_key_constraint_on: owner_steam_id
+  - name: product
+    using:
+      foreign_key_constraint_on: product_id
+select_permissions:
+  - role: administrator
+    permission:
+      columns:
+        - id
+        - server_id
+        - owner_steam_id
+        - product_id
+        - slots
+        - label
+        - status
+        - status_detail
+        - expires_at
+        - gslt_steam_id
+        - reminded_at
+        - created_at
+        - updated_at
+      filter: {}
+      allow_aggregations: true
+  - role: user
+    permission:
+      columns:
+        - id
+        - server_id
+        - owner_steam_id
+        - product_id
+        - slots
+        - label
+        - status
+        - status_detail
+        - expires_at
+        - created_at
+      filter:
+        owner_steam_id:
+          _eq: X-Hasura-User-Id

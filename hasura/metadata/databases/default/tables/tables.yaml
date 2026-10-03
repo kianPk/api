@@ -89,6 +89,7 @@
 - "!include public_game_server_nodes.yaml"
 - "!include public_game_versions.yaml"
 - "!include public_gamedata_signature_validations.yaml"
+- "!include public_hosted_servers.yaml"
 - "!include public_leaderboard_entries.yaml"
 - "!include public_league_divisions.yaml"
 - "!include public_league_match_weeks.yaml"

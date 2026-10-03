@@ -64,6 +64,7 @@ insert_permissions:
         - port
         - rcon_password
         - region
+        - steam_account_token
         - tv_port
         - type
         - game_mode_id
@@ -92,6 +93,7 @@ select_permissions:
         - rcon_status
         - region
         - reserved_by_match_id
+        - steam_account_token
         - tv_port
         - type
         - game_mode_id
@@ -177,6 +179,7 @@ update_permissions:
         - port
         - rcon_password
         - region
+        - steam_account_token
         - tv_port
         - type
         - game_mode_id
@@ -231,6 +234,7 @@ event_triggers:
           - game_server_node_id
           - type
           - game_mode_id
+          - steam_account_token
     retry_conf:
       interval_sec: 10
       num_retries: 6

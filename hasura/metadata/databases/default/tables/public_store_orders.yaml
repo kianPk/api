@@ -21,6 +21,11 @@ select_permissions:
         - bale_payment_charge_id
         - created_at
         - paid_at
+        - hosted_kind
+        - hosted_server_id
+        - hosted_type
+        - hosted_label
+        - hosted_fulfilled_at
       filter: {}
       allow_aggregations: true
   - role: user
@@ -33,6 +38,9 @@ select_permissions:
         - status
         - created_at
         - paid_at
+        - hosted_kind
+        - hosted_server_id
+        - hosted_fulfilled_at
       filter:
         buyer_steam_id:
           _eq: X-Hasura-User-Id

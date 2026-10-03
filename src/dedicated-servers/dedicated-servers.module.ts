@@ -16,6 +16,7 @@ import { RedisModule } from "src/redis/redis.module";
 import { SystemModule } from "src/system/system.module";
 import { PluginRuntimeModule } from "src/plugin-runtime/plugin-runtime.module";
 import { GamePluginsModule } from "../game-plugins/game-plugins.module";
+import { PostgresModule } from "../postgres/postgres.module";
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { GamePluginsModule } from "../game-plugins/game-plugins.module";
     SystemModule,
     PluginRuntimeModule,
     GamePluginsModule,
+    PostgresModule,
   ],
   providers: [
     DedicatedServersService,

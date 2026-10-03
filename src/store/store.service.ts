@@ -19,6 +19,7 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { e_notification_types_enum } from "../../generated/schema";
 import { ChallengesService } from "../challenges/challenges.service";
 import type { ChallengeTier } from "../challenges/challenge-catalog";
+import { HostedServersService } from "../hosted-servers/hosted-servers.service";
 
 const IMAGE_PREFIX = "store";
 const EXTENSION_BY_MIMETYPE: Record<string, string> = {
@@ -76,6 +77,7 @@ export class StoreService {
     private readonly notifications: NotificationsService,
     private readonly s3: S3Service,
     private readonly challenges: ChallengesService,
+    private readonly hostedServers: HostedServersService,
   ) {
     this.envBale = this.configService.get<BaleConfig>("bale");
     this.app = this.configService.get<AppConfig>("app");
@@ -126,17 +128,28 @@ export class StoreService {
 
   /** Env wins; settings (`bale.*`) fill gaps so tokens can be set without kubectl. */
   private async resolveBale(): Promise<BaleConfig> {
-    const rows = await this.postgres.query<Array<{ name: string; value: string }>>(
+    const rows = await this.postgres.query<
+      Array<{ name: string; value: string }>
+    >(
       `SELECT name, value FROM settings
        WHERE name = ANY($1::text[])`,
-      [["bale.bot_token", "bale.provider_token", "bale.bot_username", "bale.webhook_secret"]],
+      [
+        [
+          "bale.bot_token",
+          "bale.provider_token",
+          "bale.bot_username",
+          "bale.webhook_secret",
+        ],
+      ],
     );
     const map = Object.fromEntries(rows.map((r) => [r.name, r.value ?? ""]));
     return {
       botToken: this.envBale.botToken || map["bale.bot_token"] || "",
-      providerToken: this.envBale.providerToken || map["bale.provider_token"] || "",
+      providerToken:
+        this.envBale.providerToken || map["bale.provider_token"] || "",
       botUsername: this.envBale.botUsername || map["bale.bot_username"] || "",
-      webhookSecret: this.envBale.webhookSecret || map["bale.webhook_secret"] || "",
+      webhookSecret:
+        this.envBale.webhookSecret || map["bale.webhook_secret"] || "",
     };
   }
 
@@ -278,9 +291,7 @@ export class StoreService {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Store checkout insert failed: ${msg}`);
-      throw new BadRequestException(
-        `Checkout failed: ${msg.slice(0, 180)}`,
-      );
+      throw new BadRequestException(`Checkout failed: ${msg.slice(0, 180)}`);
     }
 
     const deepLink = this.buildDeepLink(orderId, bale.botUsername);
@@ -297,6 +308,125 @@ export class StoreService {
       deepLink,
       botUsername: bale.botUsername || null,
       startParam: `pay_${orderId.replace(/-/g, "")}`,
+    };
+  }
+
+  /**
+   * Checkout for a hosted server plan. A new purchase is capacity-checked
+   * here so buyers are not charged for a server the node can't run; renewals
+   * target one of the buyer's existing hosted servers.
+   */
+  public async checkoutHosted(
+    productId: string,
+    buyerSteamId: string,
+    opts: {
+      termsAccepted?: boolean;
+      hostedServerId?: string;
+      type?: string;
+      label?: string;
+    },
+  ) {
+    if (!opts?.termsAccepted) {
+      throw new BadRequestException("Terms must be accepted before checkout");
+    }
+
+    const bale = await this.resolveBale();
+    if (!bale.botToken || !bale.providerToken) {
+      throw new ServiceUnavailableException(
+        "Bale Pay is not configured. Set BALE_BOT_TOKEN and BALE_PROVIDER_TOKEN.",
+      );
+    }
+
+    await this.ensureCartSchema();
+
+    const [product] = await this.postgres.query<
+      Array<{
+        id: string;
+        title: string;
+        price_irr: number;
+        hosted_slots: number | null;
+      }>
+    >(
+      `SELECT id, title, price_irr, hosted_slots
+       FROM store_products
+       WHERE id = $1 AND active = true AND hosted_slots IS NOT NULL`,
+      [String(productId || "").trim()],
+    );
+    if (!product) {
+      throw new NotFoundException("Plan not found");
+    }
+
+    let kind: "new" | "renew" = "new";
+    let hostedServerId: string | null = null;
+    let type: string | null = null;
+    let label: string | null = null;
+
+    if (opts.hostedServerId) {
+      const hosted = await this.hostedServers.assertCanRenew(
+        opts.hostedServerId,
+        buyerSteamId,
+      );
+      if (hosted.slots !== product.hosted_slots) {
+        throw new BadRequestException(
+          "Renew with a plan that has the same number of slots",
+        );
+      }
+      kind = "renew";
+      hostedServerId = hosted.id;
+    } else {
+      await this.hostedServers.assertCanSellNew();
+      type = opts.type || "Casual";
+      if (!HostedServersService.isHostedType(type)) {
+        throw new BadRequestException("Unsupported server mode");
+      }
+      label = (opts.label || "")
+        .replace(/[\r\n"';\\]/g, " ")
+        .trim()
+        .slice(0, 64);
+    }
+
+    const cartItems: CartItemSnapshot[] = [
+      {
+        product_id: product.id,
+        title: product.title,
+        price_irr: Number(product.price_irr),
+        ypoint_amount: null,
+        vip_server_id: null,
+        vip_duration: null,
+        subscription_tier: null,
+      },
+    ];
+    const orderId = randomUUID();
+    const payload = `store:${orderId}`;
+
+    await this.cancelPendingOrders(buyerSteamId);
+
+    await this.postgres.query(
+      `INSERT INTO store_orders
+        (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
+         cart_items, terms_accepted_at, hosted_kind, hosted_server_id,
+         hosted_type, hosted_label)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now(), $7, $8, $9, $10)`,
+      [
+        orderId,
+        product.id,
+        buyerSteamId,
+        Number(product.price_irr),
+        payload,
+        JSON.stringify(cartItems),
+        kind,
+        hostedServerId,
+        type,
+        label,
+      ],
+    );
+
+    return {
+      orderId,
+      amountIrr: Number(product.price_irr),
+      productTitle: product.title,
+      deepLink: this.buildDeepLink(orderId, bale.botUsername),
+      botUsername: bale.botUsername || null,
     };
   }
 
@@ -375,11 +505,10 @@ export class StoreService {
           ? cart[0].title
           : `YGuard Store (${cart.length} items)`;
       const toman = Math.round(amountIrr / 10);
-      description =
-        `${cart.map((i) => i.title).join(" · ").slice(0, 180)} · ${toman.toLocaleString("en-US")} تومان`.slice(
-          0,
-          255,
-        );
+      description = `${cart
+        .map((i) => i.title)
+        .join(" · ")
+        .slice(0, 180)} · ${toman.toLocaleString("en-US")} تومان`.slice(0, 255);
     } else {
       // Legacy single-product orders: sync live price.
       if (!order.active) {
@@ -460,12 +589,15 @@ export class StoreService {
     }
 
     const payment =
-      update?.message?.successful_payment ||
-      update?.successful_payment;
+      update?.message?.successful_payment || update?.successful_payment;
     if (payment) {
       await this.markPaid(
         String(payment.invoice_payload || ""),
-        String(payment.telegram_payment_charge_id || payment.provider_payment_charge_id || ""),
+        String(
+          payment.telegram_payment_charge_id ||
+            payment.provider_payment_charge_id ||
+            "",
+        ),
       );
       return { ok: true };
     }
@@ -535,7 +667,9 @@ export class StoreService {
         await this.fulfillOrderBenefits(paid);
         await this.notifyPurchasePaid(paid);
       } else {
-        this.logger.log(`Store order already paid or missing payload=${payload}`);
+        this.logger.log(
+          `Store order already paid or missing payload=${payload}`,
+        );
       }
       return;
     }
@@ -604,6 +738,15 @@ export class StoreService {
       });
 
       lineIndex += 1;
+    }
+
+    try {
+      await this.hostedServers.fulfillOrder(order.id);
+    } catch (error) {
+      this.logger.error(
+        `Hosted server fulfillment failed order=${order.id}`,
+        error instanceof Error ? error.stack : error,
+      );
     }
   }
 
@@ -678,7 +821,9 @@ export class StoreService {
           : order.subscription_tier === "premium" ||
             order.subscription_tier === "premium_plus";
       if (hasSub) {
-        bits.push(`Challenges unlocked. <a href="/challenges">Open Challenges</a>`);
+        bits.push(
+          `Challenges unlocked. <a href="/challenges">Open Challenges</a>`,
+        );
       }
       bits.push(`<a href="/store">Open Store</a>`);
 
@@ -914,7 +1059,11 @@ export class StoreService {
     await this.baleApi("sendInvoice", body);
   }
 
-  private async answerPreCheckoutQuery(id: string, ok: boolean, errorMessage?: string) {
+  private async answerPreCheckoutQuery(
+    id: string,
+    ok: boolean,
+    errorMessage?: string,
+  ) {
     await this.baleApi("answerPreCheckoutQuery", {
       pre_checkout_query_id: id,
       ok,
