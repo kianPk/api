@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomBytes, randomUUID } from "crypto";
@@ -14,6 +15,7 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { DedicatedServersService } from "../dedicated-servers/dedicated-servers.service";
 import { SteamConfig } from "../configs/types/SteamConfig";
 import { User } from "../auth/types/User";
+import { timingSafeStringEqual } from "../utilities/timingSafeStringEqual";
 import {
   e_notification_types_enum,
   e_server_types_enum,
@@ -43,6 +45,8 @@ const HOSTED_STATUSES_HOLDING_SLOT = [
 // token; an owner changing either would cut the server off from the panel.
 const BLOCKED_RCON_COMMANDS =
   /^\s*(rcon_password|sv_setsteamaccount|hostport|hostip|ip|sv_lan|net_public_adr|tv_port|sv_hibernate_when_empty)\b/i;
+
+const MAX_HOSTED_ADMINS = 32;
 
 type HostedSettings = {
   enabled: boolean;
@@ -890,6 +894,270 @@ export class HostedServersService {
     }
     const result = await rcon.send(trimmed);
     return { result: String(result ?? "") };
+  }
+
+  public async listAdmins(hosted: HostedRow) {
+    const admins = await this.postgres.query<
+      Array<{
+        steam_id: string;
+        name: string | null;
+        avatar_url: string | null;
+        created_at: string;
+      }>
+    >(
+      `SELECT a.steam_id::text AS steam_id, p.name, p.avatar_url, a.created_at
+       FROM hosted_server_admins a
+       LEFT JOIN players p ON p.steam_id = a.steam_id
+       WHERE a.hosted_server_id = $1
+       ORDER BY a.created_at ASC`,
+      [hosted.id],
+    );
+    return { owner_steam_id: String(hosted.owner_steam_id), admins };
+  }
+
+  public async addAdmin(hosted: HostedRow, steamIdInput: unknown, by: User) {
+    const steamId = HostedServersService.parseSteamId(steamIdInput);
+    if (steamId === String(hosted.owner_steam_id)) {
+      throw new BadRequestException("The owner is always an admin");
+    }
+    const [{ count }] = await this.postgres.query<Array<{ count: number }>>(
+      `SELECT count(*)::int AS count FROM hosted_server_admins WHERE hosted_server_id = $1`,
+      [hosted.id],
+    );
+    if (count >= MAX_HOSTED_ADMINS) {
+      throw new BadRequestException(
+        `A server can have at most ${MAX_HOSTED_ADMINS} admins`,
+      );
+    }
+    await this.postgres.query(
+      `INSERT INTO hosted_server_admins (hosted_server_id, steam_id, added_by)
+       VALUES ($1, $2::bigint, $3::bigint)
+       ON CONFLICT DO NOTHING`,
+      [hosted.id, steamId, by.steam_id],
+    );
+    await this.nudgeAdminPlugin(hosted);
+    return this.listAdmins(hosted);
+  }
+
+  public async removeAdmin(hosted: HostedRow, steamIdInput: unknown) {
+    const steamId = HostedServersService.parseSteamId(steamIdInput);
+    await this.postgres.query(
+      `DELETE FROM hosted_server_admins WHERE hosted_server_id = $1 AND steam_id = $2::bigint`,
+      [hosted.id, steamId],
+    );
+    await this.nudgeAdminPlugin(hosted);
+    return this.listAdmins(hosted);
+  }
+
+  public async listBans(hosted: HostedRow) {
+    await this.postgres.query(
+      `DELETE FROM hosted_server_bans
+       WHERE hosted_server_id = $1 AND expires_at IS NOT NULL AND expires_at <= now()`,
+      [hosted.id],
+    );
+    return this.postgres.query<
+      Array<{
+        steam_id: string;
+        name: string;
+        reason: string;
+        banned_by_name: string;
+        expires_at: string | null;
+        created_at: string;
+      }>
+    >(
+      `SELECT steam_id::text AS steam_id, name, reason, banned_by_name, expires_at, created_at
+       FROM hosted_server_bans
+       WHERE hosted_server_id = $1
+       ORDER BY created_at DESC`,
+      [hosted.id],
+    );
+  }
+
+  public async removeBan(hosted: HostedRow, steamIdInput: unknown) {
+    const steamId = HostedServersService.parseSteamId(steamIdInput);
+    await this.postgres.query(
+      `DELETE FROM hosted_server_bans WHERE hosted_server_id = $1 AND steam_id = $2::bigint`,
+      [hosted.id, steamId],
+    );
+    await this.nudgeAdminPlugin(hosted);
+    return this.listBans(hosted);
+  }
+
+  /**
+   * Game-server side of the admin plugin. The pod proves its identity with
+   * its own api_password, the same way the match and anticheat plugins do.
+   */
+  public async pluginState(serverId: string, authorization: unknown) {
+    const hosted = await this.authenticatePluginServer(serverId, authorization);
+    if (!hosted) {
+      return { hosted: false, admins: [] as string[], bans: [] as never[] };
+    }
+    const [admins, bans] = await Promise.all([
+      this.postgres.query<Array<{ steam_id: string }>>(
+        `SELECT steam_id::text AS steam_id FROM hosted_server_admins WHERE hosted_server_id = $1`,
+        [hosted.id],
+      ),
+      this.listBans(hosted),
+    ]);
+    return {
+      hosted: true,
+      owner_steam_id: String(hosted.owner_steam_id),
+      admins: [
+        String(hosted.owner_steam_id),
+        ...admins.map((row) => row.steam_id),
+      ],
+      bans: bans.map((ban) => ({
+        steam_id: ban.steam_id,
+        reason: ban.reason,
+        expires_at: ban.expires_at,
+      })),
+    };
+  }
+
+  public async pluginBan(
+    authorization: unknown,
+    body: {
+      server_id?: string;
+      steam_id?: string;
+      name?: string;
+      reason?: string;
+      minutes?: number;
+      admin_steam_id?: string;
+      admin_name?: string;
+    },
+  ) {
+    const hosted = await this.requirePluginAdmin(authorization, body);
+    const steamId = HostedServersService.parseSteamId(body.steam_id);
+    if (
+      steamId === String(hosted.owner_steam_id) ||
+      (await this.isHostedAdmin(hosted.id, steamId))
+    ) {
+      throw new BadRequestException("Admins cannot be banned");
+    }
+    const minutes = Math.max(0, Math.floor(Number(body.minutes) || 0));
+    await this.postgres.query(
+      `INSERT INTO hosted_server_bans
+         (hosted_server_id, steam_id, name, reason, banned_by, banned_by_name, expires_at)
+       VALUES ($1, $2::bigint, $3, $4, $5::bigint, $6,
+               CASE WHEN $7::int > 0 THEN now() + ($7::int * interval '1 minute') END)
+       ON CONFLICT (hosted_server_id, steam_id) DO UPDATE
+       SET name = EXCLUDED.name,
+           reason = EXCLUDED.reason,
+           banned_by = EXCLUDED.banned_by,
+           banned_by_name = EXCLUDED.banned_by_name,
+           expires_at = EXCLUDED.expires_at,
+           created_at = now()`,
+      [
+        hosted.id,
+        steamId,
+        String(body.name || "").slice(0, 64),
+        String(body.reason || "").slice(0, 200),
+        /^\d{17}$/.test(String(body.admin_steam_id || ""))
+          ? String(body.admin_steam_id)
+          : null,
+        String(body.admin_name || "").slice(0, 64),
+        Math.min(minutes, 60 * 24 * 365 * 10),
+      ],
+    );
+    return { success: true };
+  }
+
+  public async pluginUnban(
+    authorization: unknown,
+    body: { server_id?: string; steam_id?: string; admin_steam_id?: string },
+  ) {
+    const hosted = await this.requirePluginAdmin(authorization, body);
+    const steamId = HostedServersService.parseSteamId(body.steam_id);
+    const removed = await this.postgres.query<Array<{ steam_id: string }>>(
+      `DELETE FROM hosted_server_bans
+       WHERE hosted_server_id = $1 AND steam_id = $2::bigint
+       RETURNING steam_id::text AS steam_id`,
+      [hosted.id, steamId],
+    );
+    return { success: true, removed: removed.length > 0 };
+  }
+
+  private async requirePluginAdmin(
+    authorization: unknown,
+    body: { server_id?: string; admin_steam_id?: string },
+  ): Promise<HostedRow> {
+    const hosted = await this.authenticatePluginServer(
+      String(body?.server_id || ""),
+      authorization,
+    );
+    if (!hosted) {
+      throw new ForbiddenException("Not a hosted server");
+    }
+    // Empty admin = the server console, which only the owner reaches (panel RCON).
+    const admin = String(body?.admin_steam_id || "");
+    if (
+      admin &&
+      admin !== String(hosted.owner_steam_id) &&
+      !(await this.isHostedAdmin(hosted.id, admin))
+    ) {
+      throw new ForbiddenException("Not an admin on this server");
+    }
+    return hosted;
+  }
+
+  private async isHostedAdmin(hostedId: string, steamId: string) {
+    if (!/^\d{17}$/.test(steamId)) {
+      return false;
+    }
+    const rows = await this.postgres.query<Array<{ ok: number }>>(
+      `SELECT 1 AS ok FROM hosted_server_admins
+       WHERE hosted_server_id = $1 AND steam_id = $2::bigint`,
+      [hostedId, steamId],
+    );
+    return rows.length > 0;
+  }
+
+  private async authenticatePluginServer(
+    serverId: string,
+    authorization: unknown,
+  ): Promise<HostedRow | null> {
+    if (!/^[0-9a-f-]{36}$/i.test(serverId || "")) {
+      throw new UnauthorizedException("Invalid server");
+    }
+    const token = String(authorization || "").replace(/^Bearer\s+/i, "");
+    const [server] = await this.postgres.query<
+      Array<{ api_password: string | null }>
+    >(`SELECT api_password::text AS api_password FROM servers WHERE id = $1`, [
+      serverId,
+    ]);
+    if (!server || !timingSafeStringEqual(server.api_password ?? "", token)) {
+      throw new UnauthorizedException("Invalid server");
+    }
+    const [row] = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id FROM hosted_servers
+       WHERE (server_id = $1 OR pending_server_id = $1) AND status <> 'deleted'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [serverId],
+    );
+    return row ? this.getHosted(row.id) : null;
+  }
+
+  private async nudgeAdminPlugin(hosted: HostedRow) {
+    if (hosted.status !== "active" || !hosted.server_id) {
+      return;
+    }
+    try {
+      const rcon = await this.rcon.connect(hosted.server_id);
+      await rcon?.send("css_yadmin_reload");
+    } catch {
+      // The plugin polls on its own; this only makes the change instant.
+    }
+  }
+
+  private static parseSteamId(input: unknown): string {
+    const match = String(input ?? "").match(/\b(7656119\d{10})\b/);
+    if (!match) {
+      throw new BadRequestException(
+        "Enter a SteamID64 (7656119...) or a steamcommunity.com/profiles/ link",
+      );
+    }
+    return match[1];
   }
 
   public async adminExtend(hostedId: string, days: number) {

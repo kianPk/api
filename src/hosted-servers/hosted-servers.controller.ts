@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Req,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -129,6 +130,49 @@ export class HostedServersController {
     return this.hostedServers.adminSetGslt(id, String(body?.token || ""));
   }
 
+  @Get("plugin/state")
+  public async pluginState(
+    @Req() request: Request,
+    @Query("server_id") serverId: string,
+  ) {
+    return this.hostedServers.pluginState(
+      String(serverId || ""),
+      request.headers.authorization,
+    );
+  }
+
+  @Post("plugin/ban")
+  public async pluginBan(
+    @Req() request: Request,
+    @Body()
+    body: {
+      server_id?: string;
+      steam_id?: string;
+      name?: string;
+      reason?: string;
+      minutes?: number;
+      admin_steam_id?: string;
+      admin_name?: string;
+    },
+  ) {
+    return this.hostedServers.pluginBan(
+      request.headers.authorization,
+      body || {},
+    );
+  }
+
+  @Post("plugin/unban")
+  public async pluginUnban(
+    @Req() request: Request,
+    @Body()
+    body: { server_id?: string; steam_id?: string; admin_steam_id?: string },
+  ) {
+    return this.hostedServers.pluginUnban(
+      request.headers.authorization,
+      body || {},
+    );
+  }
+
   @Get(":id")
   public async get(@Req() request: Request, @Param("id") id: string) {
     const user = this.requireUser(request);
@@ -179,6 +223,53 @@ export class HostedServersController {
     const user = this.requireUser(request);
     const hosted = await this.hostedServers.requireAccess(id, user);
     return this.hostedServers.sendRcon(hosted, String(body?.command || ""));
+  }
+
+  @Get(":id/admins")
+  public async admins(@Req() request: Request, @Param("id") id: string) {
+    const user = this.requireUser(request);
+    const hosted = await this.hostedServers.requireAccess(id, user);
+    return this.hostedServers.listAdmins(hosted);
+  }
+
+  @Post(":id/admins")
+  public async addAdmin(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Body() body: { steam_id?: string },
+  ) {
+    const user = this.requireUser(request);
+    const hosted = await this.hostedServers.requireAccess(id, user);
+    return this.hostedServers.addAdmin(hosted, body?.steam_id, user);
+  }
+
+  @Post(":id/admins/:steamId/delete")
+  public async removeAdmin(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Param("steamId") steamId: string,
+  ) {
+    const user = this.requireUser(request);
+    const hosted = await this.hostedServers.requireAccess(id, user);
+    return this.hostedServers.removeAdmin(hosted, steamId);
+  }
+
+  @Get(":id/bans")
+  public async bans(@Req() request: Request, @Param("id") id: string) {
+    const user = this.requireUser(request);
+    const hosted = await this.hostedServers.requireAccess(id, user);
+    return this.hostedServers.listBans(hosted);
+  }
+
+  @Post(":id/bans/:steamId/delete")
+  public async removeBan(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Param("steamId") steamId: string,
+  ) {
+    const user = this.requireUser(request);
+    const hosted = await this.hostedServers.requireAccess(id, user);
+    return this.hostedServers.removeBan(hosted, steamId);
   }
 
   private requireUser(request: Request): User {
