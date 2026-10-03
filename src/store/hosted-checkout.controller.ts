@@ -43,4 +43,29 @@ export class HostedCheckoutController {
       payWith: body.payWith === "ypoint" ? "ypoint" : "bale",
     });
   }
+
+  @Post("slots-checkout")
+  public async slotsCheckout(
+    @Req() request: Request,
+    @Body()
+    body: {
+      hostedServerId?: string;
+      count?: number;
+      termsAccepted?: boolean;
+      payWith?: "bale" | "ypoint";
+    },
+  ) {
+    const user = request.user as User | undefined;
+    if (!user?.steam_id) {
+      throw new UnauthorizedException("Authentication required");
+    }
+    if (!body?.hostedServerId) {
+      throw new BadRequestException("hostedServerId required");
+    }
+    return this.store.checkoutHostedSlots(body.hostedServerId, user.steam_id, {
+      count: Number(body.count),
+      termsAccepted: Boolean(body.termsAccepted),
+      payWith: body.payWith === "ypoint" ? "ypoint" : "bale",
+    });
+  }
 }

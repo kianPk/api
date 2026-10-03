@@ -51,6 +51,9 @@ export class HostedServersController {
       grace_days?: number;
       gslt_pool?: string;
       steam_api_key?: string;
+      slot_price_irr?: number;
+      slot_price_ypoint?: number;
+      max_slots?: number;
     },
   ) {
     this.requireAdmin(request);
@@ -223,6 +226,17 @@ export class HostedServersController {
     const user = this.requireUser(request);
     const hosted = await this.hostedServers.requireAccess(id, user);
     return this.hostedServers.sendRcon(hosted, String(body?.command || ""));
+  }
+
+  @Get(":id/slots-quote")
+  public async slotsQuote(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Query("count") count: string,
+  ) {
+    const user = this.requireUser(request);
+    const hosted = await this.hostedServers.requireAccess(id, user);
+    return this.hostedServers.quoteExtraSlots(hosted, Number(count));
   }
 
   @Get(":id/admins")

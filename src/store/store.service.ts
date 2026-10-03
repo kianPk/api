@@ -352,9 +352,10 @@ export class StoreService {
         price_irr: number;
         price_ypoint: number | null;
         hosted_slots: number | null;
+        vip_duration: string | null;
       }>
     >(
-      `SELECT id, title, price_irr, price_ypoint, hosted_slots
+      `SELECT id, title, price_irr, price_ypoint, hosted_slots, vip_duration
        FROM store_products
        WHERE id = $1 AND active = true AND hosted_slots IS NOT NULL`,
       [String(productId || "").trim()],
@@ -362,7 +363,7 @@ export class StoreService {
     if (!product) {
       throw new NotFoundException("Plan not found");
     }
-    const priceYpoint = Number(product.price_ypoint || 0);
+    let priceYpoint = Number(product.price_ypoint || 0);
     if (payWithYpoint && priceYpoint <= 0) {
       throw new BadRequestException("This plan cannot be bought with Ypoints");
     }
@@ -371,17 +372,31 @@ export class StoreService {
     let hostedServerId: string | null = null;
     let type: string | null = null;
     let label: string | null = null;
+    let extraSlots = 0;
+    let extraSlotsIrr = 0;
 
     if (opts.hostedServerId) {
       const hosted = await this.hostedServers.assertCanRenew(
         opts.hostedServerId,
         buyerSteamId,
       );
-      if (hosted.slots !== product.hosted_slots) {
+      if (hosted.slots - hosted.extra_slots !== product.hosted_slots) {
         throw new BadRequestException(
           "Renew with a plan that has the same number of slots",
         );
       }
+      const extras = await this.hostedServers.extraSlotsRenewalCost(
+        hosted,
+        HostedServersService.durationMs(product.vip_duration || "30d"),
+      );
+      if (payWithYpoint && hosted.extra_slots > 0 && !extras.price_ypoint) {
+        throw new BadRequestException(
+          "The extra slots on this server cannot be paid with Ypoints",
+        );
+      }
+      extraSlots = hosted.extra_slots;
+      extraSlotsIrr = extras.price_irr;
+      priceYpoint += extras.price_ypoint;
       kind = "renew";
       hostedServerId = hosted.id;
     } else {
@@ -407,6 +422,18 @@ export class StoreService {
         subscription_tier: null,
       },
     ];
+    if (extraSlotsIrr > 0) {
+      cartItems.push({
+        product_id: product.id,
+        title: `+${extraSlots} extra slots`,
+        price_irr: extraSlotsIrr,
+        ypoint_amount: null,
+        vip_server_id: null,
+        vip_duration: null,
+        subscription_tier: null,
+      });
+    }
+    const amountIrr = Number(product.price_irr) + extraSlotsIrr;
     const orderId = randomUUID();
     const payload = payWithYpoint ? `ypoint:${orderId}` : `store:${orderId}`;
 
@@ -425,7 +452,7 @@ export class StoreService {
         orderId,
         product.id,
         buyerSteamId,
-        payWithYpoint ? 0 : Number(product.price_irr),
+        payWithYpoint ? 0 : amountIrr,
         payload,
         JSON.stringify(cartItems),
         kind,
@@ -459,8 +486,117 @@ export class StoreService {
     return {
       orderId,
       paid: false,
-      amountIrr: Number(product.price_irr),
+      amountIrr,
       productTitle: product.title,
+      deepLink: this.buildDeepLink(orderId, bale!.botUsername),
+      botUsername: bale!.botUsername || null,
+    };
+  }
+
+  /** Buy extra slots for a rented server, priced for the days it has left. */
+  public async checkoutHostedSlots(
+    hostedServerId: string,
+    buyerSteamId: string,
+    opts: { count: number; termsAccepted?: boolean; payWith?: string },
+  ) {
+    if (!opts?.termsAccepted) {
+      throw new BadRequestException("Terms must be accepted before checkout");
+    }
+    const payWithYpoint = opts.payWith === "ypoint";
+    const bale = payWithYpoint ? null : await this.resolveBale();
+    if (bale && (!bale.botToken || !bale.providerToken)) {
+      throw new ServiceUnavailableException(
+        "Bale Pay is not configured. Set BALE_BOT_TOKEN and BALE_PROVIDER_TOKEN.",
+      );
+    }
+    await this.ensureCartSchema();
+
+    const hosted = await this.hostedServers.getHosted(hostedServerId);
+    if (!hosted || String(hosted.owner_steam_id) !== String(buyerSteamId)) {
+      throw new NotFoundException("Server not found");
+    }
+    const quote = await this.hostedServers.quoteExtraSlots(hosted, opts.count);
+    if (payWithYpoint && quote.price_ypoint <= 0) {
+      throw new BadRequestException(
+        "Extra slots cannot be bought with Ypoints",
+      );
+    }
+
+    // The payment paths read the order through its product, so the order
+    // borrows the server's plan (or any plan, if that one was deleted).
+    const [plan] = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id FROM store_products
+       WHERE hosted_slots IS NOT NULL
+       ORDER BY (id = $1::uuid) DESC, active DESC, sort_order ASC
+       LIMIT 1`,
+      [hosted.product_id],
+    );
+    if (!plan) {
+      throw new BadRequestException("No server plan exists to bill against");
+    }
+
+    const title = `+${quote.count} extra slots`;
+    const cartItems: CartItemSnapshot[] = [
+      {
+        product_id: plan.id,
+        title,
+        price_irr: quote.price_irr,
+        ypoint_amount: null,
+        vip_server_id: null,
+        vip_duration: null,
+        subscription_tier: null,
+      },
+    ];
+    const orderId = randomUUID();
+    const payload = payWithYpoint ? `ypoint:${orderId}` : `store:${orderId}`;
+
+    if (!payWithYpoint) {
+      await this.cancelPendingOrders(buyerSteamId);
+    }
+
+    await this.postgres.query(
+      `INSERT INTO store_orders
+        (id, product_id, product_title, buyer_steam_id, amount_irr, status,
+         bale_payload, cart_items, terms_accepted_at, hosted_kind,
+         hosted_server_id, hosted_extra_slots, payment_method, amount_ypoint)
+       VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7::jsonb, now(), 'slots',
+               $8, $9, $10, $11)`,
+      [
+        orderId,
+        plan.id,
+        title,
+        buyerSteamId,
+        payWithYpoint ? 0 : quote.price_irr,
+        payload,
+        JSON.stringify(cartItems),
+        hosted.id,
+        quote.count,
+        payWithYpoint ? "ypoint" : "bale",
+        payWithYpoint ? quote.price_ypoint : null,
+      ],
+    );
+
+    if (payWithYpoint) {
+      const balance = await this.completeYpointOrder(
+        orderId,
+        buyerSteamId,
+        quote.price_ypoint,
+      );
+      return {
+        orderId,
+        paid: true,
+        amountYpoint: quote.price_ypoint,
+        balance,
+        productTitle: title,
+        hostedServerId: hosted.id,
+      };
+    }
+
+    return {
+      orderId,
+      paid: false,
+      amountIrr: quote.price_irr,
+      productTitle: title,
       deepLink: this.buildDeepLink(orderId, bale!.botUsername),
       botUsername: bale!.botUsername || null,
     };
@@ -605,7 +741,7 @@ export class StoreService {
        FROM store_products p
        WHERE o.id = $1 AND p.id = o.product_id
        RETURNING o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration,
-                 o.vip_granted_at, p.title AS product_title,
+                 o.vip_granted_at, COALESCE(o.product_title, p.title) AS product_title,
                  NULL::int AS ypoint_amount, p.subscription_tier, o.cart_items`,
       [orderId],
     );
@@ -822,7 +958,7 @@ export class StoreService {
          AND o.status = 'pending'
          AND p.id = o.product_id
        RETURNING o.id, o.buyer_steam_id::text, p.ypoint_amount,
-                 p.vip_server_id, p.vip_duration, o.vip_granted_at, p.title AS product_title,
+                 p.vip_server_id, p.vip_duration, o.vip_granted_at, COALESCE(o.product_title, p.title) AS product_title,
                  p.subscription_tier, o.cart_items`,
       [payload, chargeId || null],
     );
@@ -843,7 +979,7 @@ export class StoreService {
         }>
       >(
         `SELECT o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration,
-                o.vip_granted_at, p.title AS product_title, p.ypoint_amount,
+                o.vip_granted_at, COALESCE(o.product_title, p.title) AS product_title, p.ypoint_amount,
                 p.subscription_tier, o.cart_items
          FROM store_orders o
          JOIN store_products p ON p.id = o.product_id
@@ -950,7 +1086,7 @@ export class StoreService {
          AND o.buyer_steam_id = $1::bigint
          AND o.status = 'pending'
          AND ($2::uuid IS NULL OR o.id <> $2::uuid)
-       RETURNING o.id, p.title AS product_title`,
+       RETURNING o.id, COALESCE(o.product_title, p.title) AS product_title`,
       [steamId, exceptOrderId || null],
     );
 

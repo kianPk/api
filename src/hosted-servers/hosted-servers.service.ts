@@ -57,6 +57,9 @@ type HostedSettings = {
   graceDays: number;
   gsltPool: string[];
   steamApiKey: string;
+  slotPriceIrr: number;
+  slotPriceYpoint: number;
+  maxSlots: number;
 };
 
 type HostedRow = {
@@ -65,6 +68,7 @@ type HostedRow = {
   owner_steam_id: string;
   product_id: string | null;
   slots: number;
+  extra_slots: number;
   label: string;
   status: string;
   status_detail: string | null;
@@ -83,9 +87,10 @@ type OrderRow = {
   hosted_type: string | null;
   hosted_label: string | null;
   hosted_fulfilled_at: string | null;
-  product_id: string;
+  product_id: string | null;
   product_title: string;
   hosted_slots: number | null;
+  hosted_extra_slots: number | null;
   vip_duration: string | null;
 };
 
@@ -148,6 +153,9 @@ export class HostedServersService {
         .map((t) => t.trim())
         .filter((t) => /^[A-F0-9]{32}$/i.test(t)),
       steamApiKey: map.steam_api_key || this.envSteamApiKey,
+      slotPriceIrr: int(map.slot_price_irr, 0),
+      slotPriceYpoint: int(map.slot_price_ypoint, 0),
+      maxSlots: Math.min(64, Math.max(2, int(map.max_slots, 32))),
     };
   }
 
@@ -158,8 +166,25 @@ export class HostedServersService {
     grace_days?: number;
     gslt_pool?: string;
     steam_api_key?: string;
+    slot_price_irr?: number;
+    slot_price_ypoint?: number;
+    max_slots?: number;
   }) {
     const entries: Array<[string, string]> = [];
+    for (const [key, min, max] of [
+      ["slot_price_irr", 0, 10_000_000_000],
+      ["slot_price_ypoint", 0, 10_000_000],
+      ["max_slots", 2, 64],
+    ] as const) {
+      const value = input[key];
+      if (value !== undefined && value !== null) {
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < min || n > max) {
+          throw new BadRequestException(`${key} must be ${min}..${max}`);
+        }
+        entries.push([key, String(n)]);
+      }
+    }
     if (typeof input.enabled === "boolean") {
       entries.push(["enabled", input.enabled ? "true" : "false"]);
     }
@@ -203,6 +228,9 @@ export class HostedServersService {
       grace_days: settings.graceDays,
       gslt_pool_size: settings.gsltPool.length,
       steam_api_key_set: Boolean(settings.steamApiKey),
+      slot_price_irr: settings.slotPriceIrr,
+      slot_price_ypoint: settings.slotPriceYpoint,
+      max_slots: settings.maxSlots,
     };
   }
 
@@ -252,11 +280,71 @@ export class HostedServersService {
   }
 
   public async getPublicOverview() {
-    const [availability, plans] = await Promise.all([
+    const [availability, plans, settings] = await Promise.all([
       this.getAvailability(),
       this.listPlans(),
+      this.getSettings(),
     ]);
-    return { ...availability, plans, types: HOSTED_SERVER_TYPES };
+    return {
+      ...availability,
+      plans,
+      types: HOSTED_SERVER_TYPES,
+      slot_price_irr: settings.slotPriceIrr,
+      slot_price_ypoint: settings.slotPriceYpoint,
+      max_slots: settings.maxSlots,
+    };
+  }
+
+  /**
+   * Extra slots are priced per slot per 30 days. Buying them mid-rental only
+   * charges for the days the server has left.
+   */
+  public async quoteExtraSlots(hosted: HostedRow, count: number) {
+    const settings = await this.getSettings();
+    const n = Math.floor(Number(count));
+    if (!Number.isInteger(n) || n < 1) {
+      throw new BadRequestException("Choose at least one slot");
+    }
+    if (settings.slotPriceIrr <= 0) {
+      throw new BadRequestException("Extra slots are not for sale right now");
+    }
+    if (hosted.status !== "active") {
+      throw new BadRequestException(`Server is ${hosted.status}`);
+    }
+    if (hosted.slots + n > settings.maxSlots) {
+      throw new BadRequestException(
+        `A server can have at most ${settings.maxSlots} slots`,
+      );
+    }
+    const remainingMs = new Date(hosted.expires_at).getTime() - Date.now();
+    const days = Math.max(1, Math.ceil(remainingMs / 86_400_000));
+    return {
+      count: n,
+      days,
+      slots_after: hosted.slots + n,
+      ...HostedServersService.slotCost(settings, n, days),
+    };
+  }
+
+  /** What the bought slots add to a renewal of the given length. */
+  public async extraSlotsRenewalCost(hosted: HostedRow, durationMs: number) {
+    if (!hosted.extra_slots) {
+      return { price_irr: 0, price_ypoint: 0 };
+    }
+    const settings = await this.getSettings();
+    const days = Math.max(1, Math.round(durationMs / 86_400_000));
+    return HostedServersService.slotCost(settings, hosted.extra_slots, days);
+  }
+
+  private static slotCost(settings: HostedSettings, n: number, days: number) {
+    return {
+      price_irr:
+        Math.ceil((settings.slotPriceIrr * n * days) / 30 / 10_000) * 10_000,
+      price_ypoint:
+        settings.slotPriceYpoint > 0
+          ? Math.ceil((settings.slotPriceYpoint * n * days) / 30)
+          : 0,
+    };
   }
 
   /** Throws when a new server can't be sold right now. */
@@ -294,10 +382,11 @@ export class HostedServersService {
     const [order] = await this.postgres.query<OrderRow[]>(
       `SELECT o.id, o.buyer_steam_id::text, o.status, o.hosted_kind,
               o.hosted_server_id, o.hosted_type, o.hosted_label,
-              o.hosted_fulfilled_at, p.id AS product_id, p.title AS product_title,
+              o.hosted_fulfilled_at, o.hosted_extra_slots, p.id AS product_id,
+              COALESCE(p.title, o.product_title) AS product_title,
               p.hosted_slots, p.vip_duration
        FROM store_orders o
-       JOIN store_products p ON p.id = o.product_id
+       LEFT JOIN store_products p ON p.id = o.product_id
        WHERE o.id = $1`,
       [orderId],
     );
@@ -305,7 +394,7 @@ export class HostedServersService {
       !order ||
       order.status !== "paid" ||
       order.hosted_fulfilled_at ||
-      !order.hosted_slots
+      (!order.hosted_slots && order.hosted_kind !== "slots")
     ) {
       return;
     }
@@ -317,6 +406,11 @@ export class HostedServersService {
       [orderId],
     );
     if (!claimed.length) {
+      return;
+    }
+
+    if (order.hosted_kind === "slots") {
+      await this.addExtraSlots(order);
       return;
     }
 
@@ -380,6 +474,64 @@ export class HostedServersService {
         order.id,
       );
     }
+  }
+
+  private async addExtraSlots(order: OrderRow) {
+    const count = Number(order.hosted_extra_slots || 0);
+    const hosted = order.hosted_server_id
+      ? await this.getHosted(order.hosted_server_id)
+      : null;
+    if (
+      !hosted ||
+      count < 1 ||
+      String(hosted.owner_steam_id) !== String(order.buyer_steam_id)
+    ) {
+      await this.notifyAdmins(
+        "Extra slots not applied",
+        `Order ${order.id} paid for extra slots but its server could not be found. Refund or apply by hand.`,
+        order.id,
+      );
+      return;
+    }
+
+    const [updated] = await this.postgres.query<HostedRow[]>(
+      `UPDATE hosted_servers
+       SET slots = LEAST(slots + $2, 64),
+           extra_slots = extra_slots + $2,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [hosted.id, count],
+    );
+
+    // max_players is on the servers event trigger, so this redeploys the pod
+    // with the new -maxplayers.
+    if (updated.server_id) {
+      try {
+        await this.hasura.mutation({
+          update_servers_by_pk: {
+            __args: {
+              pk_columns: { id: updated.server_id },
+              _set: { max_players: updated.slots },
+            },
+            id: true,
+          },
+        });
+      } catch (error) {
+        this.logger.error(
+          `hosted ${hosted.id}: max_players update failed`,
+          error instanceof Error ? error.stack : error,
+        );
+      }
+    }
+
+    await this.notifyOwner(
+      updated.owner_steam_id,
+      "HostedServerReady",
+      "Slots added",
+      `Your server <b>${NotificationsService.escapeHtml(updated.label)}</b> now has ${updated.slots} slots. It restarts once to apply them. <a href="/hosting/${updated.id}">Manage server</a>`,
+      updated.id,
+    );
   }
 
   private async renew(hosted: HostedRow, durationMs: number) {
@@ -601,10 +753,10 @@ export class HostedServersService {
   public async processLifecycle() {
     const unfulfilled = await this.postgres.query<Array<{ id: string }>>(
       `SELECT o.id FROM store_orders o
-       JOIN store_products p ON p.id = o.product_id
+       LEFT JOIN store_products p ON p.id = o.product_id
        WHERE o.status = 'paid'
          AND o.hosted_fulfilled_at IS NULL
-         AND p.hosted_slots IS NOT NULL
+         AND (p.hosted_slots IS NOT NULL OR o.hosted_kind = 'slots')
          AND o.paid_at > now() - interval '7 days'
        ORDER BY o.paid_at ASC
        LIMIT 20`,
@@ -694,7 +846,7 @@ export class HostedServersService {
       return null;
     }
     const [row] = await this.postgres.query<HostedRow[]>(
-      `SELECT id, server_id, owner_steam_id::text, product_id, slots, label,
+      `SELECT id, server_id, owner_steam_id::text, product_id, slots, extra_slots, label,
               status, status_detail, expires_at, gslt_steam_id, reminded_at,
               created_at
        FROM hosted_servers WHERE id = $1`,
@@ -767,7 +919,7 @@ export class HostedServersService {
         }
       >
     >(
-      `SELECT h.id, h.server_id, h.owner_steam_id::text, h.product_id, h.slots,
+      `SELECT h.id, h.server_id, h.owner_steam_id::text, h.product_id, h.slots, h.extra_slots,
               h.label, h.status, h.status_detail, h.expires_at, h.created_at,
               pl.name AS owner_name,
               s.label AS server_label, s.host, s.port, s.type::text AS type,
@@ -793,6 +945,7 @@ export class HostedServersService {
         owner_name: row.owner_name,
         label: row.server_label || row.label,
         slots: row.slots,
+        extra_slots: row.extra_slots,
         status: row.status,
         status_detail: row.status_detail,
         expires_at: row.expires_at,
