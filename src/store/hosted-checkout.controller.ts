@@ -25,6 +25,7 @@ export class HostedCheckoutController {
       type?: string;
       label?: string;
       termsAccepted?: boolean;
+      payWith?: "bale" | "ypoint";
     },
   ) {
     const user = request.user as User | undefined;
@@ -39,6 +40,7 @@ export class HostedCheckoutController {
       hostedServerId: body.hostedServerId || undefined,
       type: body.type,
       label: body.label,
+      payWith: body.payWith === "ypoint" ? "ypoint" : "bale",
     });
   }
 }

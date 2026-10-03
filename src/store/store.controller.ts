@@ -94,6 +94,20 @@ export class StoreController {
     });
   }
 
+  @Post("ypoint-checkout")
+  public async ypointCheckout(
+    @Req() request: Request,
+    @Body() body: { productIds?: string[]; termsAccepted?: boolean },
+  ) {
+    const user = this.requireUser(request);
+    if (!Array.isArray(body?.productIds) || !body.productIds.length) {
+      throw new BadRequestException("productIds required");
+    }
+    return this.store.checkoutCartWithYpoints(body.productIds, user.steam_id, {
+      termsAccepted: Boolean(body?.termsAccepted),
+    });
+  }
+
   @Post("hosted-checkout")
   public async hostedCheckout(
     @Req() request: Request,

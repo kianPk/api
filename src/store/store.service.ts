@@ -324,14 +324,16 @@ export class StoreService {
       hostedServerId?: string;
       type?: string;
       label?: string;
+      payWith?: "bale" | "ypoint";
     },
   ) {
     if (!opts?.termsAccepted) {
       throw new BadRequestException("Terms must be accepted before checkout");
     }
+    const payWithYpoint = opts.payWith === "ypoint";
 
-    const bale = await this.resolveBale();
-    if (!bale.botToken || !bale.providerToken) {
+    const bale = payWithYpoint ? null : await this.resolveBale();
+    if (bale && (!bale.botToken || !bale.providerToken)) {
       throw new ServiceUnavailableException(
         "Bale Pay is not configured. Set BALE_BOT_TOKEN and BALE_PROVIDER_TOKEN.",
       );
@@ -344,16 +346,21 @@ export class StoreService {
         id: string;
         title: string;
         price_irr: number;
+        price_ypoint: number | null;
         hosted_slots: number | null;
       }>
     >(
-      `SELECT id, title, price_irr, hosted_slots
+      `SELECT id, title, price_irr, price_ypoint, hosted_slots
        FROM store_products
        WHERE id = $1 AND active = true AND hosted_slots IS NOT NULL`,
       [String(productId || "").trim()],
     );
     if (!product) {
       throw new NotFoundException("Plan not found");
+    }
+    const priceYpoint = Number(product.price_ypoint || 0);
+    if (payWithYpoint && priceYpoint <= 0) {
+      throw new BadRequestException("This plan cannot be bought with Ypoints");
     }
 
     let kind: "new" | "renew" = "new";
@@ -397,37 +404,215 @@ export class StoreService {
       },
     ];
     const orderId = randomUUID();
-    const payload = `store:${orderId}`;
+    const payload = payWithYpoint ? `ypoint:${orderId}` : `store:${orderId}`;
 
-    await this.cancelPendingOrders(buyerSteamId);
+    if (!payWithYpoint) {
+      await this.cancelPendingOrders(buyerSteamId);
+    }
 
     await this.postgres.query(
       `INSERT INTO store_orders
         (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
          cart_items, terms_accepted_at, hosted_kind, hosted_server_id,
-         hosted_type, hosted_label)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now(), $7, $8, $9, $10)`,
+         hosted_type, hosted_label, payment_method, amount_ypoint)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now(), $7, $8, $9, $10,
+               $11, $12)`,
       [
         orderId,
         product.id,
         buyerSteamId,
-        Number(product.price_irr),
+        payWithYpoint ? 0 : Number(product.price_irr),
         payload,
         JSON.stringify(cartItems),
         kind,
         hostedServerId,
         type,
         label,
+        payWithYpoint ? "ypoint" : "bale",
+        payWithYpoint ? priceYpoint : null,
       ],
     );
 
+    if (payWithYpoint) {
+      const balance = await this.completeYpointOrder(
+        orderId,
+        buyerSteamId,
+        priceYpoint,
+      );
+      const [fulfilled] = await this.postgres.query<
+        Array<{ hosted_server_id: string | null }>
+      >(`SELECT hosted_server_id FROM store_orders WHERE id = $1`, [orderId]);
+      return {
+        orderId,
+        paid: true,
+        amountYpoint: priceYpoint,
+        balance,
+        productTitle: product.title,
+        hostedServerId: fulfilled?.hosted_server_id || hostedServerId,
+      };
+    }
+
     return {
       orderId,
+      paid: false,
       amountIrr: Number(product.price_irr),
       productTitle: product.title,
-      deepLink: this.buildDeepLink(orderId, bale.botUsername),
-      botUsername: bale.botUsername || null,
+      deepLink: this.buildDeepLink(orderId, bale!.botUsername),
+      botUsername: bale!.botUsername || null,
     };
+  }
+
+  /**
+   * Buy 1..N regular store products with Ypoints: the balance is debited and
+   * the order is fulfilled right away, no Bale invoice involved.
+   */
+  public async checkoutCartWithYpoints(
+    productIds: string[],
+    buyerSteamId: string,
+    opts?: { termsAccepted?: boolean },
+  ) {
+    if (!opts?.termsAccepted) {
+      throw new BadRequestException("Terms must be accepted before checkout");
+    }
+    const rawIds = (productIds || [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean);
+    if (!rawIds.length) {
+      throw new BadRequestException("productIds required");
+    }
+    if (rawIds.length > 20) {
+      throw new BadRequestException("Too many products in cart");
+    }
+
+    await this.ensureCartSchema();
+
+    const products = await this.postgres.query<
+      Array<StoreProductRow & { price_ypoint: number | null }>
+    >(
+      `SELECT id, title, slug, description, price_irr, image_url, active,
+              ypoint_amount, vip_server_id, vip_duration, subscription_tier,
+              price_ypoint
+       FROM store_products
+       WHERE id = ANY($1::uuid[])
+         AND active = true
+         AND hosted_slots IS NULL`,
+      [[...new Set(rawIds)]],
+    );
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const ordered = rawIds.map((id) => {
+      const product = byId.get(id);
+      if (!product) {
+        throw new NotFoundException("One or more products are unavailable");
+      }
+      if (!(Number(product.price_ypoint) > 0)) {
+        throw new BadRequestException(
+          `${product.title} cannot be bought with Ypoints`,
+        );
+      }
+      if (Number(product.ypoint_amount) > 0) {
+        throw new BadRequestException(
+          "Ypoint packs cannot be bought with Ypoints",
+        );
+      }
+      return product;
+    });
+
+    const cartItems = ordered.map<CartItemSnapshot>((p) => ({
+      product_id: p.id,
+      title: p.title,
+      price_irr: Number(p.price_irr),
+      ypoint_amount: null,
+      vip_server_id: p.vip_server_id,
+      vip_duration: p.vip_duration,
+      subscription_tier: p.subscription_tier ?? null,
+    }));
+    const amountYpoint = ordered.reduce(
+      (sum, p) => sum + Number(p.price_ypoint),
+      0,
+    );
+    const primary = ordered[0];
+    const orderId = randomUUID();
+
+    await this.postgres.query(
+      `INSERT INTO store_orders
+        (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
+         cart_items, terms_accepted_at, payment_method, amount_ypoint)
+       VALUES ($1, $2, $3, 0, 'pending', $4, $5::jsonb, now(), 'ypoint', $6)`,
+      [
+        orderId,
+        primary.id,
+        buyerSteamId,
+        `ypoint:${orderId}`,
+        JSON.stringify(cartItems),
+        amountYpoint,
+      ],
+    );
+
+    const balance = await this.completeYpointOrder(
+      orderId,
+      buyerSteamId,
+      amountYpoint,
+    );
+    return {
+      orderId,
+      paid: true,
+      amountYpoint,
+      balance,
+      itemCount: cartItems.length,
+    };
+  }
+
+  private async completeYpointOrder(
+    orderId: string,
+    buyerSteamId: string,
+    amount: number,
+  ): Promise<number> {
+    try {
+      await this.ypoint.debitMany({
+        steamIds: [buyerSteamId],
+        amount,
+        reason: "store_purchase",
+        refType: "store_order",
+        refId: orderId,
+      });
+    } catch (error) {
+      await this.postgres.query(
+        `UPDATE store_orders SET status = 'failed' WHERE id = $1 AND status = 'pending'`,
+        [orderId],
+      );
+      throw error;
+    }
+
+    const [order] = await this.postgres.query<
+      Array<{
+        id: string;
+        buyer_steam_id: string;
+        vip_server_id: string | null;
+        vip_duration: string | null;
+        vip_granted_at: string | null;
+        product_title: string;
+        ypoint_amount: number | null;
+        subscription_tier: string | null;
+        cart_items: CartItemSnapshot[] | null;
+      }>
+    >(
+      `UPDATE store_orders o
+       SET status = 'paid', paid_at = COALESCE(o.paid_at, now())
+       FROM store_products p
+       WHERE o.id = $1 AND p.id = o.product_id
+       RETURNING o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration,
+                 o.vip_granted_at, p.title AS product_title,
+                 NULL::int AS ypoint_amount, p.subscription_tier, o.cart_items`,
+      [orderId],
+    );
+    if (order) {
+      await this.fulfillOrderBenefits(order);
+      await this.notifyPurchasePaid(order);
+    }
+    this.logger.log(
+      `Store order paid with Ypoints order=${orderId} amount=${amount}`,
+    );
+    return this.ypoint.getBalance(buyerSteamId);
   }
 
   /** Idempotent: add cart columns if a previous deploy skipped the SQL script. */

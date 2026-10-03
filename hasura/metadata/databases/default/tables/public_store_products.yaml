@@ -22,6 +22,7 @@ insert_permissions:
         - vip_duration
         - subscription_tier
         - hosted_slots
+        - price_ypoint
 select_permissions:
   - role: administrator
     permission:
@@ -39,6 +40,7 @@ select_permissions:
         - vip_duration
         - subscription_tier
         - hosted_slots
+        - price_ypoint
         - created_at
         - updated_at
       filter: {}
@@ -58,6 +60,7 @@ select_permissions:
         - vip_duration
         - subscription_tier
         - hosted_slots
+        - price_ypoint
         - created_at
       filter:
         active:
@@ -78,6 +81,7 @@ update_permissions:
         - vip_duration
         - subscription_tier
         - hosted_slots
+        - price_ypoint
         - updated_at
       filter: {}
       check: {}

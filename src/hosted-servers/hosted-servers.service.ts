@@ -232,12 +232,13 @@ export class HostedServersService {
         title: string;
         description: string;
         price_irr: number;
+        price_ypoint: number | null;
         image_url: string | null;
         hosted_slots: number;
         duration: string;
       }>
     >(
-      `SELECT id, title, description, price_irr, image_url, hosted_slots,
+      `SELECT id, title, description, price_irr, price_ypoint, image_url, hosted_slots,
               COALESCE(NULLIF(vip_duration, ''), '30d') AS duration
        FROM store_products
        WHERE active = true AND hosted_slots IS NOT NULL
@@ -967,13 +968,14 @@ export class HostedServersService {
         id: string;
         title: string;
         price_irr: number;
+        price_ypoint: number | null;
         hosted_slots: number;
         duration: string;
         active: boolean;
         servers: number;
       }>
     >(
-      `SELECT p.id, p.title, p.price_irr, p.hosted_slots, p.active,
+      `SELECT p.id, p.title, p.price_irr, p.price_ypoint, p.hosted_slots, p.active,
               COALESCE(NULLIF(p.vip_duration, ''), '30d') AS duration,
               (SELECT count(*)::int FROM hosted_servers h
                 WHERE h.product_id = p.id AND h.status <> 'deleted') AS servers
