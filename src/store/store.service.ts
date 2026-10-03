@@ -11,6 +11,8 @@ import { Readable } from "stream";
 import { PostgresService } from "../postgres/postgres.service";
 import { BaleConfig } from "../configs/types/BaleConfig";
 import { AppConfig } from "../configs/types/AppConfig";
+import { SteamConfig } from "../configs/types/SteamConfig";
+import { resolveSteamId64 } from "../utilities/resolveSteamId64";
 import { S3Service } from "../s3/s3.service";
 
 import { YpointService } from "../ypoint/ypoint.service";
@@ -1180,7 +1182,10 @@ export class StoreService {
     durationInput: unknown,
   ) {
     StoreService.requireUuid(serverId);
-    const steamId = StoreService.parseSteamId(steamIdInput);
+    const steamId = await resolveSteamId64(
+      steamIdInput,
+      this.configService.get<SteamConfig>("steam")?.steamApiKey,
+    );
     const duration = String(durationInput || "")
       .trim()
       .toLowerCase();

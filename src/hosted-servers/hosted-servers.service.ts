@@ -16,6 +16,7 @@ import { DedicatedServersService } from "../dedicated-servers/dedicated-servers.
 import { SteamConfig } from "../configs/types/SteamConfig";
 import { User } from "../auth/types/User";
 import { timingSafeStringEqual } from "../utilities/timingSafeStringEqual";
+import { resolveSteamId64 } from "../utilities/resolveSteamId64";
 import {
   e_notification_types_enum,
   e_server_types_enum,
@@ -916,7 +917,10 @@ export class HostedServersService {
   }
 
   public async addAdmin(hosted: HostedRow, steamIdInput: unknown, by: User) {
-    const steamId = HostedServersService.parseSteamId(steamIdInput);
+    const steamId = await resolveSteamId64(
+      steamIdInput,
+      (await this.getSettings()).steamApiKey,
+    );
     if (steamId === String(hosted.owner_steam_id)) {
       throw new BadRequestException("The owner is always an admin");
     }
