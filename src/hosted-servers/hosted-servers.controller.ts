@@ -107,6 +107,12 @@ export class HostedServersController {
     return this.hostedServers.adminDelete(id);
   }
 
+  @Post("admin/:id/purge")
+  public async adminPurge(@Req() request: Request, @Param("id") id: string) {
+    this.requireAdmin(request);
+    return this.hostedServers.adminPurge(id);
+  }
+
   @Post("admin/:id/retry")
   public async adminRetry(@Req() request: Request, @Param("id") id: string) {
     this.requireAdmin(request);

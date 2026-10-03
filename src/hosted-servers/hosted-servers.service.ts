@@ -962,6 +962,23 @@ export class HostedServersService {
     return { success: true };
   }
 
+  public async adminPurge(hostedId: string) {
+    const hosted = await this.getHosted(hostedId);
+    if (!hosted) {
+      throw new NotFoundException("Server not found");
+    }
+    if (hosted.status !== "deleted") {
+      await this.destroy(hosted);
+      if ((await this.getHosted(hosted.id))?.status !== "deleted") {
+        throw new BadRequestException("Could not remove the game server");
+      }
+    }
+    await this.postgres.query(`DELETE FROM hosted_servers WHERE id = $1`, [
+      hosted.id,
+    ]);
+    return { success: true };
+  }
+
   public async listAdminPlans() {
     return this.postgres.query<
       Array<{
