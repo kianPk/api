@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { StoreController } from "./store.controller";
+import { HostedCheckoutController } from "./hosted-checkout.controller";
 import { StoreService } from "./store.service";
 import { PostgresModule } from "../postgres/postgres.module";
 import { S3Module } from "../s3/s3.module";
@@ -20,7 +21,7 @@ import { HostedServersModule } from "../hosted-servers/hosted-servers.module";
     ChallengesModule,
     HostedServersModule,
   ],
-  controllers: [StoreController],
+  controllers: [StoreController, HostedCheckoutController],
   providers: [StoreService, loggerFactory()],
   exports: [StoreService],
 })

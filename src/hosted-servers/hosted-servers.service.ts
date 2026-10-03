@@ -961,6 +961,63 @@ export class HostedServersService {
     return { success: true };
   }
 
+  public async listAdminPlans() {
+    return this.postgres.query<
+      Array<{
+        id: string;
+        title: string;
+        price_irr: number;
+        hosted_slots: number;
+        duration: string;
+        active: boolean;
+        servers: number;
+      }>
+    >(
+      `SELECT p.id, p.title, p.price_irr, p.hosted_slots, p.active,
+              COALESCE(NULLIF(p.vip_duration, ''), '30d') AS duration,
+              (SELECT count(*)::int FROM hosted_servers h
+                WHERE h.product_id = p.id AND h.status <> 'deleted') AS servers
+       FROM store_products p
+       WHERE p.hosted_slots IS NOT NULL
+       ORDER BY p.sort_order ASC, p.price_irr ASC`,
+    );
+  }
+
+  public async adminSetPlanActive(productId: string, active: boolean) {
+    const rows = await this.postgres.query<Array<{ id: string }>>(
+      `UPDATE store_products SET active = $2, updated_at = now()
+       WHERE id = $1 AND hosted_slots IS NOT NULL
+       RETURNING id`,
+      [productId, active],
+    );
+    if (!rows.length) {
+      throw new NotFoundException("Plan not found");
+    }
+    return { success: true };
+  }
+
+  // Paid orders reference the product, so a sold plan can only be archived.
+  public async adminDeletePlan(productId: string) {
+    try {
+      const rows = await this.postgres.query<Array<{ id: string }>>(
+        `DELETE FROM store_products
+         WHERE id = $1 AND hosted_slots IS NOT NULL
+         RETURNING id`,
+        [productId],
+      );
+      if (!rows.length) {
+        throw new NotFoundException("Plan not found");
+      }
+      return { deleted: true, archived: false };
+    } catch (error) {
+      if ((error as { code?: string })?.code !== "23503") {
+        throw error;
+      }
+      await this.adminSetPlanActive(productId, false);
+      return { deleted: false, archived: true };
+    }
+  }
+
   public async adminSetGslt(hostedId: string, token: string) {
     const hosted = await this.getHosted(hostedId);
     if (!hosted?.server_id) {

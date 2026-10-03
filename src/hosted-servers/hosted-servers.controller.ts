@@ -56,6 +56,31 @@ export class HostedServersController {
     return this.hostedServers.updateSettings(body || {});
   }
 
+  @Get("admin/plans")
+  public async adminPlans(@Req() request: Request) {
+    this.requireAdmin(request);
+    return this.hostedServers.listAdminPlans();
+  }
+
+  @Post("admin/plans/:id/active")
+  public async adminPlanActive(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Body() body: { active?: boolean },
+  ) {
+    this.requireAdmin(request);
+    return this.hostedServers.adminSetPlanActive(id, Boolean(body?.active));
+  }
+
+  @Post("admin/plans/:id/delete")
+  public async adminPlanDelete(
+    @Req() request: Request,
+    @Param("id") id: string,
+  ) {
+    this.requireAdmin(request);
+    return this.hostedServers.adminDeletePlan(id);
+  }
+
   @Post("admin/:id/extend")
   public async adminExtend(
     @Req() request: Request,
