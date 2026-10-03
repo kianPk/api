@@ -998,26 +998,17 @@ export class HostedServersService {
     return { success: true };
   }
 
-  // Paid orders reference the product, so a sold plan can only be archived.
   public async adminDeletePlan(productId: string) {
-    try {
-      const rows = await this.postgres.query<Array<{ id: string }>>(
-        `DELETE FROM store_products
-         WHERE id = $1 AND hosted_slots IS NOT NULL
-         RETURNING id`,
-        [productId],
-      );
-      if (!rows.length) {
-        throw new NotFoundException("Plan not found");
-      }
-      return { deleted: true, archived: false };
-    } catch (error) {
-      if ((error as { code?: string })?.code !== "23503") {
-        throw error;
-      }
-      await this.adminSetPlanActive(productId, false);
-      return { deleted: false, archived: true };
+    const rows = await this.postgres.query<Array<{ id: string }>>(
+      `DELETE FROM store_products
+       WHERE id = $1 AND hosted_slots IS NOT NULL
+       RETURNING id`,
+      [productId],
+    );
+    if (!rows.length) {
+      throw new NotFoundException("Plan not found");
     }
+    return { deleted: true };
   }
 
   public async adminSetGslt(hostedId: string, token: string) {

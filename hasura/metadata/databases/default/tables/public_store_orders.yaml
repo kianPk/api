@@ -28,6 +28,7 @@ select_permissions:
         - hosted_fulfilled_at
         - payment_method
         - amount_ypoint
+        - product_title
       filter: {}
       allow_aggregations: true
   - role: user
@@ -45,6 +46,7 @@ select_permissions:
         - hosted_fulfilled_at
         - payment_method
         - amount_ypoint
+        - product_title
       filter:
         buyer_steam_id:
           _eq: X-Hasura-User-Id
