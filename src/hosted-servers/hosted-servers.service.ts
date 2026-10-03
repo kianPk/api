@@ -331,7 +331,7 @@ export class HostedServersService {
 
     try {
       if (hosted) {
-        await this.renew(hosted, durationMs, order);
+        await this.renew(hosted, durationMs);
         return;
       }
 
@@ -376,7 +376,7 @@ export class HostedServersService {
     }
   }
 
-  private async renew(hosted: HostedRow, durationMs: number, order: OrderRow) {
+  private async renew(hosted: HostedRow, durationMs: number) {
     const [updated] = await this.postgres.query<HostedRow[]>(
       `UPDATE hosted_servers
        SET expires_at = GREATEST(expires_at, now()) + ($2::double precision * interval '1 millisecond'),
@@ -402,7 +402,7 @@ export class HostedServersService {
       "HostedServerReady",
       "Server renewed",
       `Your server <b>${NotificationsService.escapeHtml(updated.label)}</b> was renewed until ${new Date(updated.expires_at).toISOString().slice(0, 10)}. <a href="/hosting/${updated.id}">Manage server</a>`,
-      order.id,
+      updated.id,
     );
   }
 
@@ -1057,7 +1057,12 @@ export class HostedServersService {
     try {
       await this.notifications.send(
         "HostedServerFailed" as e_notification_types_enum,
-        { title, message, role: "administrator", entity_id: entityId },
+        {
+          title,
+          message: `${message} <a href="/hosting">Open hosted servers</a>`,
+          role: "administrator",
+          entity_id: entityId,
+        },
       );
     } catch (error) {
       this.logger.warn(

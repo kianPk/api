@@ -62,14 +62,6 @@ CREATE INDEX IF NOT EXISTS store_orders_hosted_unfulfilled_idx
   ON public.store_orders (paid_at)
   WHERE hosted_kind IS NOT NULL AND hosted_fulfilled_at IS NULL;
 
-INSERT INTO public.e_notification_types ("value", "description") VALUES
-  ('HostedServerReady', 'A rented server was created or renewed'),
-  ('HostedServerExpiring', 'A rented server expires soon'),
-  ('HostedServerExpired', 'A rented server expired and was stopped'),
-  ('HostedServerFailed', 'A rented server could not be provisioned')
-ON CONFLICT ("value") DO UPDATE
-  SET "description" = EXCLUDED."description";
-
 INSERT INTO public.settings ("name", "value") VALUES
   ('hosted_servers.enabled', 'true'),
   ('hosted_servers.node_id', 'b039e0b7-8505-4fe8-a811-425a00d8503a'),

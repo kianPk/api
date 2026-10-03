@@ -1,8 +1,5 @@
 DELETE FROM public.settings WHERE "name" LIKE 'hosted_servers.%';
 
-DELETE FROM public.e_notification_types
-  WHERE "value" IN ('HostedServerReady', 'HostedServerExpiring', 'HostedServerExpired', 'HostedServerFailed');
-
 DROP INDEX IF EXISTS public.store_orders_hosted_unfulfilled_idx;
 
 ALTER TABLE public.store_orders

@@ -38,6 +38,10 @@ const PATH_BY_TYPE: Record<string, (entityId: string) => string> = {
   AwardGranted: () => `/awards`,
   StorePurchasePaid: () => `/store`,
   StorePurchaseCancelled: () => `/store`,
+  HostedServerReady: () => `/hosting`,
+  HostedServerExpiring: () => `/hosting`,
+  HostedServerExpired: () => `/hosting`,
+  HostedServerFailed: () => `/hosting`,
   // Where the name was requested, which is where the outcome belongs.
   NameChangeApproved: () => `/settings`,
   NameChangeDenied: () => `/settings`,

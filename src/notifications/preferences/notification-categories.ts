@@ -21,7 +21,12 @@ export type PreferenceKey = {
 // insert into e_notification_types (MatchImported only exists in the latter),
 // and fails if anything is unmapped.
 export const PUSH_CATEGORIES: Record<string, e_notification_types_enum[]> = {
-  matches: ["MatchStatusChange", "MatchImported", "MatchStatsReady", "ClipReady"],
+  matches: [
+    "MatchStatusChange",
+    "MatchImported",
+    "MatchStatsReady",
+    "ClipReady",
+  ],
   chat: ["ChatMessage"],
   match_chat: ["MatchChatMessage"],
   tournaments: [
@@ -61,7 +66,18 @@ export const PUSH_CATEGORIES: Record<string, e_notification_types_enum[]> = {
     "DraftInvite",
   ],
   utility: ["UtilityPracticeInvite", "UtilityPracticeReady"],
-  account: ["NameChangeApproved", "NameChangeDenied", "PlayerSanctioned", "AwardGranted", "StorePurchasePaid", "StorePurchaseCancelled"],
+  account: [
+    "NameChangeApproved",
+    "NameChangeDenied",
+    "PlayerSanctioned",
+    "AwardGranted",
+    "StorePurchasePaid",
+    "StorePurchaseCancelled",
+    "HostedServerReady" as e_notification_types_enum,
+    "HostedServerExpiring" as e_notification_types_enum,
+    "HostedServerExpired" as e_notification_types_enum,
+    "HostedServerFailed" as e_notification_types_enum,
+  ],
   news: ["NewsPublished"],
   staff_moderation: ["MatchSupport", "MatchAbandoned", "NameChangeRequest"],
   staff_infrastructure: [
@@ -156,9 +172,6 @@ export function keysForChannel(channel: NotificationChannel): PreferenceKey[] {
   return channel === "push" ? PUSH_KEYS : IN_APP_KEYS;
 }
 
-export function isKnownKey(
-  channel: NotificationChannel,
-  key: string,
-): boolean {
+export function isKnownKey(channel: NotificationChannel, key: string): boolean {
   return keysForChannel(channel).some((entry) => entry.key === key);
 }
