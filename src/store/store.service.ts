@@ -22,6 +22,8 @@ import type { ChallengeTier } from "../challenges/challenge-catalog";
 import { HostedServersService } from "../hosted-servers/hosted-servers.service";
 
 const IMAGE_PREFIX = "store";
+const VIP_DURATION =
+  /^(perm|permanent|0|lifetime|forever|\d+\s*(m|min|mins|h|hr|hrs|d|day|days|w|week|weeks|mo|month|months))$/i;
 const EXTENSION_BY_MIMETYPE: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -1109,11 +1111,7 @@ export class StoreService {
       return;
     }
 
-    if (
-      !/^(perm|permanent|0|lifetime|forever|\d+\s*(m|min|mins|h|hr|hrs|d|day|days|w|week|weeks|mo|month|months))$/i.test(
-        duration,
-      )
-    ) {
+    if (!VIP_DURATION.test(duration)) {
       this.logger.error(
         `VIP grant skipped: bad duration "${duration}" for order ${order.id}`,
       );
@@ -1153,10 +1151,167 @@ export class StoreService {
     });
   }
 
+  public async adminListVips(serverId: string) {
+    StoreService.requireUuid(serverId);
+    return this.postgres.query<
+      Array<{
+        steam_id: string;
+        name: string | null;
+        avatar_url: string | null;
+        expires_at: string | null;
+        granted_at: string;
+        from_store: boolean;
+      }>
+    >(
+      `SELECT g.steam_id::text AS steam_id, p.name, p.avatar_url, g.expires_at,
+              g.granted_at, g.order_id IS NOT NULL AS from_store
+       FROM store_vip_grants g
+       LEFT JOIN players p ON p.steam_id = g.steam_id
+       WHERE g.server_id = $1::uuid
+         AND (g.expires_at IS NULL OR g.expires_at > now())
+       ORDER BY g.expires_at ASC NULLS LAST`,
+      [serverId],
+    );
+  }
+
+  public async adminGrantVip(
+    serverId: string,
+    steamIdInput: unknown,
+    durationInput: unknown,
+  ) {
+    StoreService.requireUuid(serverId);
+    const steamId = StoreService.parseSteamId(steamIdInput);
+    const duration = String(durationInput || "")
+      .trim()
+      .toLowerCase();
+    if (!VIP_DURATION.test(duration)) {
+      throw new BadRequestException(
+        "Invalid duration. Use 30m, 12h, 7d, 2w, 1mo or perm",
+      );
+    }
+    await this.sendVipRcon(serverId, `css_addvip ${steamId} ${duration}`);
+
+    const listed = await this.isRegisteredPlayer(steamId);
+    if (listed) {
+      await this.upsertVipGrant({ steamId, serverId, orderId: null, duration });
+    }
+    return { listed, vips: await this.adminListVips(serverId) };
+  }
+
+  public async adminRevokeVip(serverId: string, steamIdInput: unknown) {
+    StoreService.requireUuid(serverId);
+    const steamId = StoreService.parseSteamId(steamIdInput);
+    await this.sendVipRcon(serverId, `css_removevip ${steamId}`);
+    await this.postgres.query(
+      `DELETE FROM store_vip_grants WHERE server_id = $1::uuid AND steam_id = $2::bigint`,
+      [serverId, steamId],
+    );
+    return { vips: await this.adminListVips(serverId) };
+  }
+
+  /**
+   * Makes the panel list match the server's own vip_database.json, which also
+   * holds VIPs granted from the console that the panel never saw.
+   */
+  public async adminSyncVips(serverId: string) {
+    StoreService.requireUuid(serverId);
+    const reply = await this.sendVipRcon(serverId, "css_listvip");
+    if (!/Active VIPs|No active VIP grants/i.test(reply)) {
+      throw new BadRequestException(
+        "The server did not answer css_listvip. Is YGuardVIP running on it?",
+      );
+    }
+
+    const onServer = new Map<string, string | null>();
+    for (const line of reply.split(/\r?\n/)) {
+      const match = line.match(/\b(7656119\d{10})\b\s*\S\s*([^\u00b7|]+)/);
+      if (match) {
+        onServer.set(match[1], StoreService.remainingToExpiry(match[2]));
+      }
+    }
+
+    let imported = 0;
+    let unregistered = 0;
+    for (const [steamId, expiresAt] of onServer) {
+      if (!(await this.isRegisteredPlayer(steamId))) {
+        unregistered += 1;
+        continue;
+      }
+      await this.postgres.query(
+        `INSERT INTO store_vip_grants (steam_id, server_id, expires_at)
+         VALUES ($1::bigint, $2::uuid, $3::timestamptz)
+         ON CONFLICT (steam_id, server_id) DO UPDATE
+         SET expires_at = EXCLUDED.expires_at, updated_at = now()`,
+        [steamId, serverId, expiresAt],
+      );
+      imported += 1;
+    }
+
+    const removed = await this.postgres.query<Array<{ steam_id: string }>>(
+      `DELETE FROM store_vip_grants
+       WHERE server_id = $1::uuid
+         AND NOT (steam_id::text = ANY($2::text[]))
+       RETURNING steam_id::text AS steam_id`,
+      [serverId, [...onServer.keys()]],
+    );
+
+    return {
+      imported,
+      removed: removed.length,
+      unregistered,
+      vips: await this.adminListVips(serverId),
+    };
+  }
+
+  private async sendVipRcon(serverId: string, command: string) {
+    const rcon = await this.rcon.connect(serverId).catch((): null => null);
+    if (!rcon) {
+      throw new BadRequestException(
+        "The server is not reachable over RCON. Is it online?",
+      );
+    }
+    return String((await rcon.send(command)) ?? "");
+  }
+
+  private async isRegisteredPlayer(steamId: string) {
+    const rows = await this.postgres.query<Array<{ ok: number }>>(
+      `SELECT 1 AS ok FROM players WHERE steam_id = $1::bigint`,
+      [steamId],
+    );
+    return rows.length > 0;
+  }
+
+  private static requireUuid(id: string) {
+    if (!/^[0-9a-f-]{36}$/i.test(id || "")) {
+      throw new NotFoundException("Server not found");
+    }
+  }
+
+  private static parseSteamId(input: unknown): string {
+    const match = String(input ?? "").match(/\b(7656119\d{10})\b/);
+    if (!match) {
+      throw new BadRequestException(
+        "Enter a SteamID64 (7656119...) or a steamcommunity.com/profiles/ link",
+      );
+    }
+    return match[1];
+  }
+
+  /** Inverse of YGuardVIP's FormatRemaining: "permanent", "3d 4h", "5h 2m", "40m". */
+  private static remainingToExpiry(text: string): string | null {
+    const s = text.trim().toLowerCase();
+    if (s.startsWith("perm")) return null;
+    const days = Number(s.match(/(\d+)\s*d/)?.[1] || 0);
+    const hours = Number(s.match(/(\d+)\s*h/)?.[1] || 0);
+    const minutes = Number(s.match(/(\d+)\s*m(?!o)/)?.[1] || 0);
+    const ms = ((days * 24 + hours) * 60 + minutes) * 60_000;
+    return new Date(Date.now() + Math.max(ms, 60_000)).toISOString();
+  }
+
   private async upsertVipGrant(args: {
     steamId: string;
     serverId: string;
-    orderId: string;
+    orderId: string | null;
     duration: string;
   }) {
     const expiresAt = StoreService.durationToExpiry(args.duration);
