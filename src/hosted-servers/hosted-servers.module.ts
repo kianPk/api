@@ -14,6 +14,8 @@ import { HostedServerQueues } from "./enums/HostedServerQueues";
 import { ProcessHostedServers } from "./jobs/ProcessHostedServers";
 import { HostedServersService } from "./hosted-servers.service";
 import { HostedServersController } from "./hosted-servers.controller";
+import { PublicRanksService } from "./public-ranks.service";
+import { PublicRanksController } from "./public-ranks.controller";
 
 @Module({
   imports: [
@@ -30,14 +32,15 @@ import { HostedServersController } from "./hosted-servers.controller";
       adapter: BullMQAdapter,
     }),
   ],
-  controllers: [HostedServersController],
+  controllers: [HostedServersController, PublicRanksController],
   providers: [
     HostedServersService,
+    PublicRanksService,
     ProcessHostedServers,
     ...getQueuesProcessors("HostedServers"),
     loggerFactory(),
   ],
-  exports: [HostedServersService],
+  exports: [HostedServersService, PublicRanksService],
 })
 export class HostedServersModule {
   constructor(
