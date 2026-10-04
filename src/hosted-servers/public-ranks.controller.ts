@@ -20,11 +20,12 @@ export class PublicRanksController {
     @Query("server_id") serverId: string,
     @Query("steam_ids") steamIds: string,
   ) {
-    await this.ranks.authenticateServer(String(serverId || ""), authorization);
+    const sid = String(serverId || "");
+    await this.ranks.authenticateServer(sid, authorization);
     const ids = String(steamIds || "")
       .split(/[,\s]+/)
       .filter(Boolean);
-    return { players: await this.ranks.getPlayers(ids) };
+    return { players: await this.ranks.getPlayers(ids, sid) };
   }
 
   @Get("plugin/ranks/top")

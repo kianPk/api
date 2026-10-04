@@ -143,6 +143,8 @@ export class PublicServerDetailsService {
   }
 
   private async listServerRanks(serverId: string, limit: number) {
+    // Presence = who has been on this box (same pool TAB ranks come from).
+    // Join live points from the global ladder so icons match in-game.
     const rows = await this.postgres.query<
       Array<{
         steam_id: string;
@@ -150,17 +152,16 @@ export class PublicServerDetailsService {
         points: number;
       }>
     >(
-      `SELECT steam_id::text AS steam_id, name, points
-       FROM public_server_rank_presence
-       WHERE server_id = $1
-       ORDER BY points DESC, updated_at ASC
+      `SELECT p.steam_id::text AS steam_id,
+              COALESCE(r.name, p.name) AS name,
+              COALESCE(r.points, p.points) AS points
+       FROM public_server_rank_presence p
+       LEFT JOIN public_server_ranks r ON r.steam_id = p.steam_id
+       WHERE p.server_id = $1
+       ORDER BY COALESCE(r.points, p.points) DESC, p.updated_at ASC
        LIMIT $2`,
       [serverId, Math.min(50, Math.max(1, limit))],
     );
-    // Fall back to the global ladder if this server has no presence yet.
-    if (!rows.length) {
-      return this.ranks.leaderboard(limit);
-    }
     return rows.map((r) => ({
       ...r,
       ...PublicRanksService.skillFromPoints(r.points),

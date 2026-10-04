@@ -91,7 +91,10 @@ export class PublicRanksService {
     return serverId;
   }
 
-  public async getPlayers(steamIds: string[]): Promise<RankView[]> {
+  public async getPlayers(
+    steamIds: string[],
+    serverId?: string | null,
+  ): Promise<RankView[]> {
     const ids = [
       ...new Set(
         steamIds
@@ -117,7 +120,7 @@ export class PublicRanksService {
       [ids],
     );
     const byId = new Map(rows.map((r) => [r.steam_id, this.decorate(r)]));
-    return ids.map(
+    const views = ids.map(
       (id) =>
         byId.get(id) ||
         this.decorate({
@@ -130,6 +133,32 @@ export class PublicRanksService {
           headshots: 0,
         }),
     );
+    // Same roster TAB sees: mark these players as present on this box.
+    await this.touchPresence(serverId, views);
+    return views;
+  }
+
+  /** Record who has been on a public box (for Server details → Ranks). */
+  public async touchPresence(
+    serverId: string | null | undefined,
+    players: Array<{ steam_id: string; name: string | null; points: number }>,
+  ): Promise<void> {
+    if (!serverId || !/^[0-9a-f-]{36}$/i.test(serverId) || !players.length) {
+      return;
+    }
+    for (const p of players) {
+      if (!/^\d{17}$/.test(p.steam_id)) continue;
+      await this.postgres.query(
+        `INSERT INTO public_server_rank_presence
+           (server_id, steam_id, name, points, updated_at)
+         VALUES ($1, $2::bigint, $3, $4, now())
+         ON CONFLICT (server_id, steam_id) DO UPDATE SET
+           name = COALESCE(NULLIF(EXCLUDED.name, ''), public_server_rank_presence.name),
+           points = EXCLUDED.points,
+           updated_at = now()`,
+        [serverId, p.steam_id, p.name, Math.max(0, Math.floor(p.points || 0))],
+      );
+    }
   }
 
   public async leaderboard(limit = 10): Promise<RankView[]> {
@@ -237,18 +266,7 @@ export class PublicRanksService {
       if (row) {
         const view = this.decorate(row);
         results.push(view);
-        if (serverId && /^[0-9a-f-]{36}$/i.test(serverId)) {
-          await this.postgres.query(
-            `INSERT INTO public_server_rank_presence
-               (server_id, steam_id, name, points, updated_at)
-             VALUES ($1, $2::bigint, $3, $4, now())
-             ON CONFLICT (server_id, steam_id) DO UPDATE SET
-               name = COALESCE(NULLIF(EXCLUDED.name, ''), public_server_rank_presence.name),
-               points = EXCLUDED.points,
-               updated_at = now()`,
-            [serverId, view.steam_id, view.name, view.points],
-          );
-        }
+        await this.touchPresence(serverId, [view]);
       }
     }
     return results;
