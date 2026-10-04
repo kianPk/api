@@ -164,6 +164,7 @@ export class PublicRanksService {
       assists?: number;
       headshots?: number;
     }>,
+    serverId?: string | null,
   ): Promise<RankView[]> {
     const cleaned = (events || [])
       .map((e) => {
@@ -233,7 +234,22 @@ export class PublicRanksService {
           e.headshots,
         ],
       );
-      if (row) results.push(this.decorate(row));
+      if (row) {
+        const view = this.decorate(row);
+        results.push(view);
+        if (serverId && /^[0-9a-f-]{36}$/i.test(serverId)) {
+          await this.postgres.query(
+            `INSERT INTO public_server_rank_presence
+               (server_id, steam_id, name, points, updated_at)
+             VALUES ($1, $2::bigint, $3, $4, now())
+             ON CONFLICT (server_id, steam_id) DO UPDATE SET
+               name = COALESCE(NULLIF(EXCLUDED.name, ''), public_server_rank_presence.name),
+               points = EXCLUDED.points,
+               updated_at = now()`,
+            [serverId, view.steam_id, view.name, view.points],
+          );
+        }
+      }
     }
     return results;
   }

@@ -61,7 +61,12 @@ export class PublicRanksController {
     if (!Array.isArray(body?.events)) {
       throw new BadRequestException("events required");
     }
-    return { players: await this.ranks.applyDeltas(body.events) };
+    return {
+      players: await this.ranks.applyDeltas(
+        body.events,
+        String(body?.server_id || ""),
+      ),
+    };
   }
 
   /** Public read for the site — no auth. */
