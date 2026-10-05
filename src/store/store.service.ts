@@ -603,6 +603,153 @@ export class StoreService {
   }
 
   /**
+   * Player buys VIP for a hosted public server: Ypoints move from buyer to
+   * owner, then css_addvip is applied on the game server.
+   */
+  public async checkoutHostedVipShop(
+    serverId: string,
+    buyerSteamId: string,
+    opts: { duration?: string; termsAccepted?: boolean },
+  ) {
+    if (!opts?.termsAccepted) {
+      throw new BadRequestException("Terms must be accepted before checkout");
+    }
+    StoreService.requireUuid(serverId);
+    const duration = String(opts.duration || "")
+      .trim()
+      .toLowerCase() as "7d" | "30d" | "90d";
+    if (!["7d", "30d", "90d"].includes(duration)) {
+      throw new BadRequestException("Duration must be 7d, 30d, or 90d");
+    }
+
+    const [hosted] = await this.postgres.query<
+      Array<{
+        id: string;
+        server_id: string;
+        owner_steam_id: string;
+        label: string;
+        vip_sale_enabled: boolean;
+        vip_price_7d: number;
+        vip_price_30d: number;
+        vip_price_90d: number;
+      }>
+    >(
+      `SELECT h.id, h.server_id::text AS server_id, h.owner_steam_id::text,
+              COALESCE(s.label, h.label) AS label,
+              COALESCE(h.vip_sale_enabled, false) AS vip_sale_enabled,
+              COALESCE(h.vip_price_7d, 0) AS vip_price_7d,
+              COALESCE(h.vip_price_30d, 0) AS vip_price_30d,
+              COALESCE(h.vip_price_90d, 0) AS vip_price_90d
+       FROM hosted_servers h
+       LEFT JOIN servers s ON s.id = h.server_id
+       WHERE (h.server_id = $1::uuid OR h.pending_server_id = $1::uuid)
+         AND h.status = 'active'
+         AND h.server_id IS NOT NULL
+       ORDER BY h.created_at DESC
+       LIMIT 1`,
+      [serverId],
+    );
+    if (!hosted?.vip_sale_enabled) {
+      throw new NotFoundException("VIP is not for sale on this server");
+    }
+    if (String(hosted.owner_steam_id) === String(buyerSteamId)) {
+      throw new BadRequestException("You cannot buy VIP on your own server");
+    }
+
+    const price =
+      duration === "7d"
+        ? Number(hosted.vip_price_7d)
+        : duration === "30d"
+          ? Number(hosted.vip_price_30d)
+          : Number(hosted.vip_price_90d);
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new BadRequestException("That VIP package is not available");
+    }
+
+    const saleId = randomUUID();
+    await this.ypoint.debitMany({
+      steamIds: [buyerSteamId],
+      amount: price,
+      reason: "hosted_vip_sale",
+      refType: "hosted_vip_sale",
+      refId: saleId,
+    });
+
+    try {
+      await this.sendVipRcon(
+        hosted.server_id,
+        `css_addvip ${buyerSteamId} ${duration}`,
+      );
+    } catch (error) {
+      await this.ypoint.credit({
+        steamId: buyerSteamId,
+        amount: price,
+        reason: "hosted_vip_sale_refund",
+        refType: "hosted_vip_sale_refund",
+        refId: saleId,
+      });
+      throw error;
+    }
+
+    await this.ypoint.credit({
+      steamId: hosted.owner_steam_id,
+      amount: price,
+      reason: "hosted_vip_earning",
+      refType: "hosted_vip_earning",
+      refId: saleId,
+    });
+
+    await this.upsertVipGrant({
+      steamId: buyerSteamId,
+      serverId: hosted.server_id,
+      orderId: null,
+      duration,
+    });
+
+    try {
+      await this.notifications.notifyPlayers(
+        "StorePurchasePaid" as e_notification_types_enum,
+        {
+          title: "VIP purchased",
+          message: `VIP (${duration}) activated on <b>${NotificationsService.escapeHtml(
+            hosted.label || "server",
+          )}</b> for ${price} Ypoints.`,
+          role: "user",
+          entity_id: saleId,
+          steamIds: [buyerSteamId],
+        },
+      );
+      await this.notifications.notifyPlayers(
+        "StorePurchasePaid" as e_notification_types_enum,
+        {
+          title: "VIP sale",
+          message: `Someone bought VIP (${duration}) on <b>${NotificationsService.escapeHtml(
+            hosted.label || "your server",
+          )}</b>. +${price} Ypoints credited.`,
+          role: "user",
+          entity_id: `${saleId}:owner`,
+          steamIds: [hosted.owner_steam_id],
+        },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Hosted VIP notify failed sale=${saleId}`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+
+    return {
+      saleId,
+      paid: true as const,
+      duration,
+      amountYpoint: price,
+      balance: await this.ypoint.getBalance(buyerSteamId),
+      serverId: hosted.server_id,
+      label: hosted.label,
+    };
+  }
+
+  /**
    * Buy 1..N regular store products with Ypoints: the balance is debited and
    * the order is fulfilled right away, no Bale invoice involved.
    */

@@ -216,6 +216,23 @@ export class HostedServersController {
     return this.hostedServers.updateChatAds(hosted, body || {});
   }
 
+  @Post(":id/vip-shop")
+  public async vipShop(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Body()
+    body: {
+      enabled?: boolean;
+      price_7d?: number;
+      price_30d?: number;
+      price_90d?: number;
+    },
+  ) {
+    const user = this.requireUser(request);
+    const hosted = await this.hostedServers.requireOwner(id, user);
+    return this.hostedServers.updateVipShop(hosted, body || {});
+  }
+
   @Post(":id/restart")
   public async restart(@Req() request: Request, @Param("id") id: string) {
     const user = this.requireUser(request);

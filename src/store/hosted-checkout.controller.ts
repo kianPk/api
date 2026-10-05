@@ -68,4 +68,27 @@ export class HostedCheckoutController {
       payWith: body.payWith === "ypoint" ? "ypoint" : "bale",
     });
   }
+
+  @Post("vip-shop/checkout")
+  public async vipShopCheckout(
+    @Req() request: Request,
+    @Body()
+    body: {
+      server_id?: string;
+      duration?: string;
+      termsAccepted?: boolean;
+    },
+  ) {
+    const user = request.user as User | undefined;
+    if (!user?.steam_id) {
+      throw new UnauthorizedException("Authentication required");
+    }
+    if (!body?.server_id) {
+      throw new BadRequestException("server_id required");
+    }
+    return this.store.checkoutHostedVipShop(body.server_id, user.steam_id, {
+      duration: body.duration,
+      termsAccepted: Boolean(body.termsAccepted),
+    });
+  }
 }

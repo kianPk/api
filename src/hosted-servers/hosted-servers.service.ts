@@ -948,6 +948,10 @@ export class HostedServersService {
           chat_ads_interval_seconds: number;
           chat_ads_messages: unknown;
           chat_ads_color: string;
+          vip_sale_enabled: boolean;
+          vip_price_7d: number;
+          vip_price_30d: number;
+          vip_price_90d: number;
         }
       >
     >(
@@ -955,6 +959,10 @@ export class HostedServersService {
               h.label, h.status, h.status_detail, h.expires_at, h.created_at,
               h.chat_ads_enabled, h.chat_ads_interval_seconds, h.chat_ads_messages,
               h.chat_ads_color,
+              COALESCE(h.vip_sale_enabled, false) AS vip_sale_enabled,
+              COALESCE(h.vip_price_7d, 0) AS vip_price_7d,
+              COALESCE(h.vip_price_30d, 0) AS vip_price_30d,
+              COALESCE(h.vip_price_90d, 0) AS vip_price_90d,
               pl.name AS owner_name,
               s.label AS server_label, s.host, s.port, s.type::text AS type,
               s.connect_password, s.enabled, s.connected, s.max_players,
@@ -999,6 +1007,12 @@ export class HostedServersService {
           interval_seconds: row.chat_ads_interval_seconds,
           color: row.chat_ads_color,
           messages: row.chat_ads_messages,
+        }),
+        vip_shop: HostedServersService.normalizeVipShop({
+          enabled: row.vip_sale_enabled,
+          price_7d: row.vip_price_7d,
+          price_30d: row.vip_price_30d,
+          price_90d: row.vip_price_90d,
         }),
       };
     });
@@ -1092,6 +1106,86 @@ export class HostedServersService {
       await this.nudgeAdminPlugin(fresh);
     }
     return this.getHostedView(hosted.id);
+  }
+
+  public async updateVipShop(
+    hosted: HostedRow,
+    input: {
+      enabled?: boolean;
+      price_7d?: number;
+      price_30d?: number;
+      price_90d?: number;
+    },
+  ) {
+    const shop = HostedServersService.normalizeVipShop({
+      enabled: input.enabled,
+      price_7d: input.price_7d,
+      price_30d: input.price_30d,
+      price_90d: input.price_90d,
+    });
+    await this.postgres.query(
+      `UPDATE hosted_servers
+       SET vip_sale_enabled = $2,
+           vip_price_7d = $3,
+           vip_price_30d = $4,
+           vip_price_90d = $5,
+           updated_at = now()
+       WHERE id = $1`,
+      [
+        hosted.id,
+        shop.enabled,
+        shop.price_7d,
+        shop.price_30d,
+        shop.price_90d,
+      ],
+    );
+    return this.getHostedView(hosted.id);
+  }
+
+  /** Public packages offered on the server page (empty when sales are off). */
+  public static vipShopPackages(shop: {
+    enabled: boolean;
+    price_7d: number;
+    price_30d: number;
+    price_90d: number;
+  }): Array<{ duration: "7d" | "30d" | "90d"; price_ypoint: number }> {
+    if (!shop.enabled) return [];
+    const out: Array<{ duration: "7d" | "30d" | "90d"; price_ypoint: number }> =
+      [];
+    if (shop.price_7d > 0) {
+      out.push({ duration: "7d", price_ypoint: shop.price_7d });
+    }
+    if (shop.price_30d > 0) {
+      out.push({ duration: "30d", price_ypoint: shop.price_30d });
+    }
+    if (shop.price_90d > 0) {
+      out.push({ duration: "90d", price_ypoint: shop.price_90d });
+    }
+    return out;
+  }
+
+  public static normalizeVipShop(input: {
+    enabled?: boolean | null;
+    price_7d?: number | null;
+    price_30d?: number | null;
+    price_90d?: number | null;
+  }): {
+    enabled: boolean;
+    price_7d: number;
+    price_30d: number;
+    price_90d: number;
+  } {
+    const price = (value: number | null | undefined) => {
+      const n = Math.floor(Number(value));
+      if (!Number.isFinite(n) || n < 0) return 0;
+      return Math.min(10_000_000, n);
+    };
+    return {
+      enabled: Boolean(input.enabled),
+      price_7d: price(input.price_7d),
+      price_30d: price(input.price_30d),
+      price_90d: price(input.price_90d),
+    };
   }
 
   private static normalizeChatAds(input: {

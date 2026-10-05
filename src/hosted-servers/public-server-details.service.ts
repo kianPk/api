@@ -85,7 +85,58 @@ export class PublicServerDetailsService {
       payload.bans = await this.listBans(serverId);
     }
 
+    const vipShop = await this.getHostedVipShop(serverId);
+    if (vipShop) {
+      payload.vip_shop = vipShop;
+    }
+
     return payload;
+  }
+
+  private async getHostedVipShop(serverId: string): Promise<{
+    packages: Array<{ duration: "7d" | "30d" | "90d"; price_ypoint: number }>;
+  } | null> {
+    const [row] = await this.postgres.query<
+      Array<{
+        vip_sale_enabled: boolean;
+        vip_price_7d: number;
+        vip_price_30d: number;
+        vip_price_90d: number;
+      }>
+    >(
+      `SELECT COALESCE(vip_sale_enabled, false) AS vip_sale_enabled,
+              COALESCE(vip_price_7d, 0) AS vip_price_7d,
+              COALESCE(vip_price_30d, 0) AS vip_price_30d,
+              COALESCE(vip_price_90d, 0) AS vip_price_90d
+       FROM hosted_servers
+       WHERE (server_id = $1 OR pending_server_id = $1)
+         AND status = 'active'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [serverId],
+    );
+    if (!row?.vip_sale_enabled) return null;
+    const packages: Array<{
+      duration: "7d" | "30d" | "90d";
+      price_ypoint: number;
+    }> = [];
+    if (row.vip_price_7d > 0) {
+      packages.push({ duration: "7d", price_ypoint: Number(row.vip_price_7d) });
+    }
+    if (row.vip_price_30d > 0) {
+      packages.push({
+        duration: "30d",
+        price_ypoint: Number(row.vip_price_30d),
+      });
+    }
+    if (row.vip_price_90d > 0) {
+      packages.push({
+        duration: "90d",
+        price_ypoint: Number(row.vip_price_90d),
+      });
+    }
+    if (!packages.length) return null;
+    return { packages };
   }
 
   public async updateSettings(
