@@ -863,11 +863,29 @@ export class HostedServersService {
     if (!hosted) {
       throw new NotFoundException("Server not found");
     }
+    if (user.role === "administrator") {
+      return hosted;
+    }
+    if (String(hosted.owner_steam_id) === String(user.steam_id)) {
+      return hosted;
+    }
+    if (await this.isHostedAdmin(hosted.id, String(user.steam_id))) {
+      return hosted;
+    }
+    throw new ForbiddenException("Not your server");
+  }
+
+  /** Billing and admin-list changes stay owner-only (platform admins allowed). */
+  public async requireOwner(id: string, user: User): Promise<HostedRow> {
+    const hosted = await this.getHosted(id);
+    if (!hosted) {
+      throw new NotFoundException("Server not found");
+    }
     if (
       user.role !== "administrator" &&
       String(hosted.owner_steam_id) !== String(user.steam_id)
     ) {
-      throw new ForbiddenException("Not your server");
+      throw new ForbiddenException("Only the server owner can do this");
     }
     return hosted;
   }
@@ -881,9 +899,16 @@ export class HostedServersService {
 
   public async listForOwner(steamId: string) {
     const rows = await this.postgres.query<Array<{ id: string }>>(
-      `SELECT id FROM hosted_servers
-       WHERE owner_steam_id = $1::bigint AND status <> 'deleted'
-       ORDER BY created_at DESC`,
+      `SELECT h.id FROM hosted_servers h
+       WHERE h.status <> 'deleted'
+         AND (
+           h.owner_steam_id = $1::bigint
+           OR EXISTS (
+             SELECT 1 FROM hosted_server_admins a
+             WHERE a.hosted_server_id = h.id AND a.steam_id = $1::bigint
+           )
+         )
+       ORDER BY h.created_at DESC`,
       [steamId],
     );
     return this.getHostedViews(rows.map((r) => r.id));

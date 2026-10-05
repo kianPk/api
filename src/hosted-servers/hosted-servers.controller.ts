@@ -252,7 +252,7 @@ export class HostedServersController {
     @Query("count") count: string,
   ) {
     const user = this.requireUser(request);
-    const hosted = await this.hostedServers.requireAccess(id, user);
+    const hosted = await this.hostedServers.requireOwner(id, user);
     return this.hostedServers.quoteExtraSlots(hosted, Number(count));
   }
 
@@ -270,7 +270,7 @@ export class HostedServersController {
     @Body() body: { steam_id?: string },
   ) {
     const user = this.requireUser(request);
-    const hosted = await this.hostedServers.requireAccess(id, user);
+    const hosted = await this.hostedServers.requireOwner(id, user);
     return this.hostedServers.addAdmin(hosted, body?.steam_id, user);
   }
 
@@ -281,7 +281,7 @@ export class HostedServersController {
     @Param("steamId") steamId: string,
   ) {
     const user = this.requireUser(request);
-    const hosted = await this.hostedServers.requireAccess(id, user);
+    const hosted = await this.hostedServers.requireOwner(id, user);
     return this.hostedServers.removeAdmin(hosted, steamId);
   }
 
