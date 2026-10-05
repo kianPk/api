@@ -1245,7 +1245,22 @@ export class HostedServersService {
   public async pluginState(serverId: string, authorization: unknown) {
     const hosted = await this.authenticatePluginServer(serverId, authorization);
     if (!hosted) {
-      return { hosted: false, admins: [] as string[], bans: [] as never[] };
+      // Match / public dedicated pods: platform staff can use in-game admin cmds.
+      const staff = await this.postgres.query<Array<{ steam_id: string }>>(
+        `SELECT steam_id::text AS steam_id
+         FROM players
+         WHERE role IN (
+           'administrator',
+           'match_organizer',
+           'tournament_organizer',
+           'moderator'
+         )`,
+      );
+      return {
+        hosted: false,
+        admins: staff.map((row) => row.steam_id),
+        bans: [] as never[],
+      };
     }
     const [admins, bans] = await Promise.all([
       this.postgres.query<Array<{ steam_id: string }>>(
