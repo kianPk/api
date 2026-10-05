@@ -133,12 +133,12 @@ export class PublicRanksService {
           headshots: 0,
         }),
     );
-    // Same roster TAB sees: mark these players as present on this box.
-    await this.touchPresence(serverId, views);
+    // Presence is only written when points are earned on this box (applyDeltas).
+    // Do not mark mere joins — Server page ranks = everyone who scored here, online or not.
     return views;
   }
 
-  /** Record who has been on a public box (for Server details → Ranks). */
+  /** Mark players who earned points on a public box (Server page → Ranks). */
   public async touchPresence(
     serverId: string | null | undefined,
     players: Array<{ steam_id: string; name: string | null; points: number }>,
@@ -148,6 +148,8 @@ export class PublicRanksService {
     }
     for (const p of players) {
       if (!/^\d{17}$/.test(p.steam_id)) continue;
+      // Skip zero-point placeholders so the ladder stays “who ranked here”.
+      if (Math.max(0, Math.floor(p.points || 0)) <= 0) continue;
       await this.postgres.query(
         `INSERT INTO public_server_rank_presence
            (server_id, steam_id, name, points, updated_at)

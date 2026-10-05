@@ -79,7 +79,7 @@ export class PublicServerDetailsService {
       payload.vips = await this.listVips(serverId);
     }
     if (settings.show_ranks || manage) {
-      payload.ranks = await this.listServerRanks(serverId, 25);
+      payload.ranks = await this.listServerRanks(serverId, 100);
     }
     if (settings.show_bans || manage) {
       payload.bans = await this.listBans(serverId);
@@ -143,8 +143,8 @@ export class PublicServerDetailsService {
   }
 
   private async listServerRanks(serverId: string, limit: number) {
-    // Presence = who has been on this box (same pool TAB ranks come from).
-    // Join live points from the global ladder so icons match in-game.
+    // Everyone who earned points on this box (online or not). Live skill/points
+    // come from the global ladder so icons match TAB.
     const rows = await this.postgres.query<
       Array<{
         steam_id: string;
@@ -158,9 +158,10 @@ export class PublicServerDetailsService {
        FROM public_server_rank_presence p
        LEFT JOIN public_server_ranks r ON r.steam_id = p.steam_id
        WHERE p.server_id = $1
+         AND COALESCE(r.points, p.points) > 0
        ORDER BY COALESCE(r.points, p.points) DESC, p.updated_at ASC
        LIMIT $2`,
-      [serverId, Math.min(50, Math.max(1, limit))],
+      [serverId, Math.min(200, Math.max(1, limit))],
     );
     return rows.map((r) => ({
       ...r,
