@@ -1061,6 +1061,11 @@ export class HostedServersService {
         ads.color,
       ],
     );
+    // Push immediately so the game pod does not wait for the next poll.
+    const fresh = await this.getHosted(hosted.id);
+    if (fresh) {
+      await this.nudgeAdminPlugin(fresh);
+    }
     return this.getHostedView(hosted.id);
   }
 
@@ -1242,31 +1247,56 @@ export class HostedServersService {
     if (!hosted) {
       return { hosted: false, admins: [] as string[], bans: [] as never[] };
     }
-    const [admins, bans, adsRow] = await Promise.all([
+    const [admins, bans] = await Promise.all([
       this.postgres.query<Array<{ steam_id: string }>>(
         `SELECT steam_id::text AS steam_id FROM hosted_server_admins WHERE hosted_server_id = $1`,
         [hosted.id],
       ),
       this.listBans(hosted),
-      this.postgres.query<
+    ]);
+    // Ads are optional — never let a missing column / bad row break admin+ban sync.
+    let ads = HostedServersService.normalizeChatAds({});
+    try {
+      const adsRow = await this.postgres.query<
         Array<{
           chat_ads_enabled: boolean;
           chat_ads_interval_seconds: number;
           chat_ads_messages: unknown;
-          chat_ads_color: string;
+          chat_ads_color?: string;
         }>
       >(
         `SELECT chat_ads_enabled, chat_ads_interval_seconds, chat_ads_messages, chat_ads_color
          FROM hosted_servers WHERE id = $1`,
         [hosted.id],
-      ),
-    ]);
-    const ads = HostedServersService.normalizeChatAds({
-      enabled: adsRow[0]?.chat_ads_enabled,
-      interval_seconds: adsRow[0]?.chat_ads_interval_seconds,
-      color: adsRow[0]?.chat_ads_color,
-      messages: adsRow[0]?.chat_ads_messages,
-    });
+      );
+      ads = HostedServersService.normalizeChatAds({
+        enabled: adsRow[0]?.chat_ads_enabled,
+        interval_seconds: adsRow[0]?.chat_ads_interval_seconds,
+        color: adsRow[0]?.chat_ads_color,
+        messages: adsRow[0]?.chat_ads_messages,
+      });
+    } catch {
+      try {
+        const adsRow = await this.postgres.query<
+          Array<{
+            chat_ads_enabled: boolean;
+            chat_ads_interval_seconds: number;
+            chat_ads_messages: unknown;
+          }>
+        >(
+          `SELECT chat_ads_enabled, chat_ads_interval_seconds, chat_ads_messages
+           FROM hosted_servers WHERE id = $1`,
+          [hosted.id],
+        );
+        ads = HostedServersService.normalizeChatAds({
+          enabled: adsRow[0]?.chat_ads_enabled,
+          interval_seconds: adsRow[0]?.chat_ads_interval_seconds,
+          messages: adsRow[0]?.chat_ads_messages,
+        });
+      } catch {
+        // leave ads disabled
+      }
+    }
     return {
       hosted: true,
       owner_steam_id: String(hosted.owner_steam_id),
