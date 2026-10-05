@@ -922,12 +922,14 @@ export class HostedServersService {
           chat_ads_enabled: boolean;
           chat_ads_interval_seconds: number;
           chat_ads_messages: unknown;
+          chat_ads_color: string;
         }
       >
     >(
       `SELECT h.id, h.server_id, h.owner_steam_id::text, h.product_id, h.slots, h.extra_slots,
               h.label, h.status, h.status_detail, h.expires_at, h.created_at,
               h.chat_ads_enabled, h.chat_ads_interval_seconds, h.chat_ads_messages,
+              h.chat_ads_color,
               pl.name AS owner_name,
               s.label AS server_label, s.host, s.port, s.type::text AS type,
               s.connect_password, s.enabled, s.connected, s.max_players,
@@ -970,6 +972,7 @@ export class HostedServersService {
         chat_ads: HostedServersService.normalizeChatAds({
           enabled: row.chat_ads_enabled,
           interval_seconds: row.chat_ads_interval_seconds,
+          color: row.chat_ads_color,
           messages: row.chat_ads_messages,
         }),
       };
@@ -1032,12 +1035,14 @@ export class HostedServersService {
     input: {
       enabled?: boolean;
       interval_seconds?: number;
+      color?: string;
       messages?: unknown;
     },
   ) {
     const ads = HostedServersService.normalizeChatAds({
       enabled: input.enabled,
       interval_seconds: input.interval_seconds,
+      color: input.color,
       messages: input.messages,
     });
     await this.postgres.query(
@@ -1045,9 +1050,16 @@ export class HostedServersService {
        SET chat_ads_enabled = $2,
            chat_ads_interval_seconds = $3,
            chat_ads_messages = $4::jsonb,
+           chat_ads_color = $5,
            updated_at = now()
        WHERE id = $1`,
-      [hosted.id, ads.enabled, ads.interval_seconds, JSON.stringify(ads.messages)],
+      [
+        hosted.id,
+        ads.enabled,
+        ads.interval_seconds,
+        JSON.stringify(ads.messages),
+        ads.color,
+      ],
     );
     return this.getHostedView(hosted.id);
   }
@@ -1055,21 +1067,43 @@ export class HostedServersService {
   private static normalizeChatAds(input: {
     enabled?: boolean | null;
     interval_seconds?: number | null;
+    color?: string | null;
     messages?: unknown;
-  }): { enabled: boolean; interval_seconds: number; messages: string[] } {
+  }): {
+    enabled: boolean;
+    interval_seconds: number;
+    color: string;
+    messages: string[];
+  } {
     const raw = Array.isArray(input.messages) ? input.messages : [];
     const messages = raw
       .map((line) => String(line ?? "").replace(/\s+/g, " ").trim())
       .filter(Boolean)
-      .map((line) => line.slice(0, 180))
+      .map((line) => line.slice(0, 220))
       .slice(0, 5);
     const interval = Math.min(
       900,
       Math.max(30, Math.floor(Number(input.interval_seconds) || 120)),
     );
+    const colorKey = String(input.color || "gold")
+      .trim()
+      .toLowerCase()
+      .replace("gray", "grey");
+    const allowed = new Set([
+      "gold",
+      "green",
+      "blue",
+      "red",
+      "purple",
+      "lightred",
+      "white",
+      "grey",
+    ]);
+    const color = allowed.has(colorKey) ? colorKey : "gold";
     return {
       enabled: !!input.enabled && messages.length > 0,
       interval_seconds: interval,
+      color,
       messages,
     };
   }
@@ -1219,9 +1253,10 @@ export class HostedServersService {
           chat_ads_enabled: boolean;
           chat_ads_interval_seconds: number;
           chat_ads_messages: unknown;
+          chat_ads_color: string;
         }>
       >(
-        `SELECT chat_ads_enabled, chat_ads_interval_seconds, chat_ads_messages
+        `SELECT chat_ads_enabled, chat_ads_interval_seconds, chat_ads_messages, chat_ads_color
          FROM hosted_servers WHERE id = $1`,
         [hosted.id],
       ),
@@ -1229,6 +1264,7 @@ export class HostedServersService {
     const ads = HostedServersService.normalizeChatAds({
       enabled: adsRow[0]?.chat_ads_enabled,
       interval_seconds: adsRow[0]?.chat_ads_interval_seconds,
+      color: adsRow[0]?.chat_ads_color,
       messages: adsRow[0]?.chat_ads_messages,
     });
     return {

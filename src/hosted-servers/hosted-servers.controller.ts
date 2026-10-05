@@ -207,6 +207,7 @@ export class HostedServersController {
     body: {
       enabled?: boolean;
       interval_seconds?: number;
+      color?: string;
       messages?: string[];
     },
   ) {
