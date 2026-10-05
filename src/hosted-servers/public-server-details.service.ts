@@ -143,8 +143,7 @@ export class PublicServerDetailsService {
   }
 
   private async listServerRanks(serverId: string, limit: number) {
-    // Everyone who earned points on this box (online or not). Live skill/points
-    // come from the global ladder so icons match TAB.
+    // Per-server ladder only — points earned on this box, not the global total.
     const rows = await this.postgres.query<
       Array<{
         steam_id: string;
@@ -152,14 +151,10 @@ export class PublicServerDetailsService {
         points: number;
       }>
     >(
-      `SELECT p.steam_id::text AS steam_id,
-              COALESCE(r.name, p.name) AS name,
-              COALESCE(r.points, p.points) AS points
-       FROM public_server_rank_presence p
-       LEFT JOIN public_server_ranks r ON r.steam_id = p.steam_id
-       WHERE p.server_id = $1
-         AND COALESCE(r.points, p.points) > 0
-       ORDER BY COALESCE(r.points, p.points) DESC, p.updated_at ASC
+      `SELECT steam_id::text AS steam_id, name, points
+       FROM public_server_rank_presence
+       WHERE server_id = $1 AND points > 0
+       ORDER BY points DESC, updated_at ASC
        LIMIT $2`,
       [serverId, Math.min(200, Math.max(1, limit))],
     );

@@ -103,6 +103,36 @@ export class PublicRanksService {
       ),
     ].slice(0, 64);
     if (!ids.length) return [];
+
+    // Per-server ladder: TAB / !rank on a box use only points earned on that box.
+    if (serverId && /^[0-9a-f-]{36}$/i.test(serverId)) {
+      const rows = await this.postgres.query<
+        Array<{
+          steam_id: string;
+          name: string | null;
+          points: number;
+        }>
+      >(
+        `SELECT steam_id::text AS steam_id, name, points
+         FROM public_server_rank_presence
+         WHERE server_id = $1 AND steam_id = ANY($2::bigint[])`,
+        [serverId, ids],
+      );
+      const byId = new Map(rows.map((r) => [r.steam_id, r]));
+      return ids.map((id) => {
+        const row = byId.get(id);
+        return this.decorate({
+          steam_id: id,
+          name: row?.name ?? null,
+          points: row?.points ?? 0,
+          kills: 0,
+          deaths: 0,
+          assists: 0,
+          headshots: 0,
+        });
+      });
+    }
+
     const rows = await this.postgres.query<
       Array<{
         steam_id: string;
@@ -120,7 +150,7 @@ export class PublicRanksService {
       [ids],
     );
     const byId = new Map(rows.map((r) => [r.steam_id, this.decorate(r)]));
-    const views = ids.map(
+    return ids.map(
       (id) =>
         byId.get(id) ||
         this.decorate({
@@ -133,12 +163,66 @@ export class PublicRanksService {
           headshots: 0,
         }),
     );
-    // Presence is only written when points are earned on this box (applyDeltas).
-    // Do not mark mere joins — Server page ranks = everyone who scored here, online or not.
-    return views;
   }
 
-  /** Mark players who earned points on a public box (Server page → Ranks). */
+  /** Accumulate points earned on one public box (independent ladders). */
+  public async applyServerDelta(
+    serverId: string,
+    steamId: string,
+    name: string | null,
+    deltaPoints: number,
+  ): Promise<number> {
+    if (!/^[0-9a-f-]{36}$/i.test(serverId) || !/^\d{17}$/.test(steamId)) {
+      return 0;
+    }
+    const [row] = await this.postgres.query<Array<{ points: number }>>(
+      `INSERT INTO public_server_rank_presence
+         (server_id, steam_id, name, points, updated_at)
+       VALUES ($1, $2::bigint, $3, GREATEST(0, $4::int), now())
+       ON CONFLICT (server_id, steam_id) DO UPDATE SET
+         name = COALESCE(NULLIF(EXCLUDED.name, ''), public_server_rank_presence.name),
+         points = GREATEST(0, public_server_rank_presence.points + $4::int),
+         updated_at = now()
+       RETURNING points`,
+      [serverId, steamId, name, Math.trunc(deltaPoints || 0)],
+    );
+    return row?.points ?? 0;
+  }
+
+  public async serverLeaderboard(
+    serverId: string,
+    limit = 10,
+  ): Promise<RankView[]> {
+    if (!/^[0-9a-f-]{36}$/i.test(serverId || "")) return [];
+    const n = Math.min(50, Math.max(1, Math.floor(Number(limit) || 10)));
+    const rows = await this.postgres.query<
+      Array<{
+        steam_id: string;
+        name: string | null;
+        points: number;
+      }>
+    >(
+      `SELECT steam_id::text AS steam_id, name, points
+       FROM public_server_rank_presence
+       WHERE server_id = $1 AND points > 0
+       ORDER BY points DESC, updated_at ASC
+       LIMIT $2`,
+      [serverId, n],
+    );
+    return rows.map((r) =>
+      this.decorate({
+        steam_id: r.steam_id,
+        name: r.name,
+        points: r.points,
+        kills: 0,
+        deaths: 0,
+        assists: 0,
+        headshots: 0,
+      }),
+    );
+  }
+
+  /** @deprecated Prefer applyServerDelta — kept for callers that set absolute points. */
   public async touchPresence(
     serverId: string | null | undefined,
     players: Array<{ steam_id: string; name: string | null; points: number }>,
@@ -148,7 +232,6 @@ export class PublicRanksService {
     }
     for (const p of players) {
       if (!/^\d{17}$/.test(p.steam_id)) continue;
-      // Skip zero-point placeholders so the ladder stays “who ranked here”.
       if (Math.max(0, Math.floor(p.points || 0)) <= 0) continue;
       await this.postgres.query(
         `INSERT INTO public_server_rank_presence
@@ -266,9 +349,23 @@ export class PublicRanksService {
         ],
       );
       if (row) {
-        const view = this.decorate(row);
-        results.push(view);
-        await this.touchPresence(serverId, [view]);
+        // Prefer the per-server total so TAB / !rank stay independent per box.
+        if (serverId && /^[0-9a-f-]{36}$/i.test(serverId)) {
+          const serverPoints = await this.applyServerDelta(
+            serverId,
+            e.steam_id,
+            e.name,
+            e.delta_points,
+          );
+          results.push(
+            this.decorate({
+              ...row,
+              points: serverPoints,
+            }),
+          );
+        } else {
+          results.push(this.decorate(row));
+        }
       }
     }
     return results;

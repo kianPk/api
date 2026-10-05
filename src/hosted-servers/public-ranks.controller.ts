@@ -35,7 +35,12 @@ export class PublicRanksController {
     @Query("limit") limit?: string,
   ) {
     await this.ranks.authenticateServer(String(serverId || ""), authorization);
-    return { players: await this.ranks.leaderboard(Number(limit)) };
+    return {
+      players: await this.ranks.serverLeaderboard(
+        String(serverId || ""),
+        Number(limit),
+      ),
+    };
   }
 
   @Post("plugin/ranks/sync")
