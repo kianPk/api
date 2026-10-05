@@ -199,6 +199,22 @@ export class HostedServersController {
     });
   }
 
+  @Post(":id/chat-ads")
+  public async chatAds(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Body()
+    body: {
+      enabled?: boolean;
+      interval_seconds?: number;
+      messages?: string[];
+    },
+  ) {
+    const user = this.requireUser(request);
+    const hosted = await this.hostedServers.requireAccess(id, user);
+    return this.hostedServers.updateChatAds(hosted, body || {});
+  }
+
   @Post(":id/restart")
   public async restart(@Req() request: Request, @Param("id") id: string) {
     const user = this.requireUser(request);

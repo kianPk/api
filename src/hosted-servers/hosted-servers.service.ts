@@ -76,6 +76,9 @@ type HostedRow = {
   gslt_steam_id: string | null;
   reminded_at: string | null;
   created_at: string;
+  chat_ads_enabled?: boolean;
+  chat_ads_interval_seconds?: number;
+  chat_ads_messages?: unknown;
 };
 
 type OrderRow = {
@@ -916,11 +919,15 @@ export class HostedServersService {
           connected: boolean | null;
           max_players: number | null;
           has_gslt: boolean;
+          chat_ads_enabled: boolean;
+          chat_ads_interval_seconds: number;
+          chat_ads_messages: unknown;
         }
       >
     >(
       `SELECT h.id, h.server_id, h.owner_steam_id::text, h.product_id, h.slots, h.extra_slots,
               h.label, h.status, h.status_detail, h.expires_at, h.created_at,
+              h.chat_ads_enabled, h.chat_ads_interval_seconds, h.chat_ads_messages,
               pl.name AS owner_name,
               s.label AS server_label, s.host, s.port, s.type::text AS type,
               s.connect_password, s.enabled, s.connected, s.max_players,
@@ -960,6 +967,11 @@ export class HostedServersService {
         has_gslt: row.has_gslt,
         players: stat?.players ?? null,
         map: stat?.map ?? null,
+        chat_ads: HostedServersService.normalizeChatAds({
+          enabled: row.chat_ads_enabled,
+          interval_seconds: row.chat_ads_interval_seconds,
+          messages: row.chat_ads_messages,
+        }),
       };
     });
   }
@@ -1013,6 +1025,53 @@ export class HostedServersService {
       );
     }
     return this.getHostedView(hosted.id);
+  }
+
+  public async updateChatAds(
+    hosted: HostedRow,
+    input: {
+      enabled?: boolean;
+      interval_seconds?: number;
+      messages?: unknown;
+    },
+  ) {
+    const ads = HostedServersService.normalizeChatAds({
+      enabled: input.enabled,
+      interval_seconds: input.interval_seconds,
+      messages: input.messages,
+    });
+    await this.postgres.query(
+      `UPDATE hosted_servers
+       SET chat_ads_enabled = $2,
+           chat_ads_interval_seconds = $3,
+           chat_ads_messages = $4::jsonb,
+           updated_at = now()
+       WHERE id = $1`,
+      [hosted.id, ads.enabled, ads.interval_seconds, JSON.stringify(ads.messages)],
+    );
+    return this.getHostedView(hosted.id);
+  }
+
+  private static normalizeChatAds(input: {
+    enabled?: boolean | null;
+    interval_seconds?: number | null;
+    messages?: unknown;
+  }): { enabled: boolean; interval_seconds: number; messages: string[] } {
+    const raw = Array.isArray(input.messages) ? input.messages : [];
+    const messages = raw
+      .map((line) => String(line ?? "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .map((line) => line.slice(0, 180))
+      .slice(0, 5);
+    const interval = Math.min(
+      900,
+      Math.max(30, Math.floor(Number(input.interval_seconds) || 120)),
+    );
+    return {
+      enabled: !!input.enabled && messages.length > 0,
+      interval_seconds: interval,
+      messages,
+    };
   }
 
   public async restart(hosted: HostedRow) {
@@ -1149,13 +1208,29 @@ export class HostedServersService {
     if (!hosted) {
       return { hosted: false, admins: [] as string[], bans: [] as never[] };
     }
-    const [admins, bans] = await Promise.all([
+    const [admins, bans, adsRow] = await Promise.all([
       this.postgres.query<Array<{ steam_id: string }>>(
         `SELECT steam_id::text AS steam_id FROM hosted_server_admins WHERE hosted_server_id = $1`,
         [hosted.id],
       ),
       this.listBans(hosted),
+      this.postgres.query<
+        Array<{
+          chat_ads_enabled: boolean;
+          chat_ads_interval_seconds: number;
+          chat_ads_messages: unknown;
+        }>
+      >(
+        `SELECT chat_ads_enabled, chat_ads_interval_seconds, chat_ads_messages
+         FROM hosted_servers WHERE id = $1`,
+        [hosted.id],
+      ),
     ]);
+    const ads = HostedServersService.normalizeChatAds({
+      enabled: adsRow[0]?.chat_ads_enabled,
+      interval_seconds: adsRow[0]?.chat_ads_interval_seconds,
+      messages: adsRow[0]?.chat_ads_messages,
+    });
     return {
       hosted: true,
       owner_steam_id: String(hosted.owner_steam_id),
@@ -1168,6 +1243,7 @@ export class HostedServersService {
         reason: ban.reason,
         expires_at: ban.expires_at,
       })),
+      chat_ads: ads,
     };
   }
 
