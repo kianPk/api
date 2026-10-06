@@ -701,9 +701,9 @@ export class StoreService {
       `INSERT INTO store_orders
         (id, product_id, product_title, buyer_steam_id, amount_irr, status,
          bale_payload, cart_items, terms_accepted_at, hosted_kind,
-         hosted_server_id, payment_method)
+         hosted_server_id, payment_method, hosted_fulfilled_at)
        VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7::jsonb, now(), 'vip_shop',
-               $8, 'bale')`,
+               $8, 'bale', now())`,
       [
         orderId,
         carrier.id,
@@ -949,6 +949,9 @@ export class StoreService {
         ypoint_amount: number | null;
         subscription_tier: string | null;
         cart_items: CartItemSnapshot[] | null;
+        amount_irr: number;
+        hosted_kind: string | null;
+        hosted_server_id: string | null;
       }>
     >(
       `UPDATE store_orders o
@@ -957,7 +960,8 @@ export class StoreService {
        WHERE o.id = $1 AND p.id = o.product_id
        RETURNING o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration,
                  o.vip_granted_at, COALESCE(o.product_title, p.title) AS product_title,
-                 NULL::int AS ypoint_amount, p.subscription_tier, o.cart_items`,
+                 NULL::int AS ypoint_amount, p.subscription_tier, o.cart_items,
+                 o.amount_irr, o.hosted_kind, o.hosted_server_id::text AS hosted_server_id`,
       [orderId],
     );
     if (order) {
