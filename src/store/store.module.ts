@@ -7,6 +7,7 @@ import { PostgresModule } from "../postgres/postgres.module";
 import { S3Module } from "../s3/s3.module";
 import { loggerFactory } from "../utilities/LoggerFactory";
 import { YpointModule } from "../ypoint/ypoint.module";
+import { IrrModule } from "../irr/irr.module";
 import { RconModule } from "../rcon/rcon.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { ChallengesModule } from "../challenges/challenges.module";
@@ -17,6 +18,7 @@ import { HostedServersModule } from "../hosted-servers/hosted-servers.module";
     PostgresModule,
     S3Module,
     YpointModule,
+    IrrModule,
     RconModule,
     NotificationsModule,
     ChallengesModule,

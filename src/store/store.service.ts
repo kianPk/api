@@ -16,6 +16,7 @@ import { resolveSteamId64 } from "../utilities/resolveSteamId64";
 import { S3Service } from "../s3/s3.service";
 
 import { YpointService } from "../ypoint/ypoint.service";
+import { IrrService } from "../irr/irr.service";
 import { RconService } from "../rcon/rcon.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { e_notification_types_enum } from "../../generated/schema";
@@ -77,6 +78,7 @@ export class StoreService {
     private readonly configService: ConfigService,
     private readonly logger: Logger,
     private readonly ypoint: YpointService,
+    private readonly irr: IrrService,
     private readonly rcon: RconService,
     private readonly notifications: NotificationsService,
     private readonly s3: S3Service,
@@ -603,8 +605,9 @@ export class StoreService {
   }
 
   /**
-   * Player buys VIP for a hosted public server: Ypoints move from buyer to
-   * owner, then css_addvip is applied on the game server.
+   * Player buys VIP for a hosted public server via Bale Pay (Toman/IRR).
+   * On payment: VIP is granted and the server owner is credited in their
+   * site IRR (Toman) wallet.
    */
   public async checkoutHostedVipShop(
     serverId: string,
@@ -621,6 +624,14 @@ export class StoreService {
     if (!["7d", "30d", "90d"].includes(duration)) {
       throw new BadRequestException("Duration must be 7d, 30d, or 90d");
     }
+
+    const bale = await this.resolveBale();
+    if (!bale.botToken || !bale.providerToken) {
+      throw new ServiceUnavailableException(
+        "Bale Pay is not configured. Set BALE_BOT_TOKEN and BALE_PROVIDER_TOKEN.",
+      );
+    }
+    await this.ensureCartSchema();
 
     const [hosted] = await this.postgres.query<
       Array<{
@@ -656,97 +667,131 @@ export class StoreService {
       throw new BadRequestException("You cannot buy VIP on your own server");
     }
 
-    const price =
+    const priceIrr =
       duration === "7d"
         ? Number(hosted.vip_price_7d)
         : duration === "30d"
           ? Number(hosted.vip_price_30d)
           : Number(hosted.vip_price_90d);
-    if (!Number.isFinite(price) || price <= 0) {
+    if (!Number.isFinite(priceIrr) || priceIrr <= 0) {
       throw new BadRequestException("That VIP package is not available");
     }
 
-    const saleId = randomUUID();
-    await this.ypoint.debitMany({
-      steamIds: [buyerSteamId],
-      amount: price,
-      reason: "hosted_vip_sale",
-      refType: "hosted_vip_sale",
-      refId: saleId,
-    });
-
-    try {
-      await this.sendVipRcon(
-        hosted.server_id,
-        `css_addvip ${buyerSteamId} ${duration}`,
-      );
-    } catch (error) {
-      await this.ypoint.credit({
-        steamId: buyerSteamId,
-        amount: price,
-        reason: "hosted_vip_sale_refund",
-        refType: "hosted_vip_sale_refund",
-        refId: saleId,
-      });
-      throw error;
+    // Orders need a product_id FK; borrow any store product as the bill carrier.
+    const [carrier] = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id FROM store_products
+       ORDER BY active DESC, sort_order ASC
+       LIMIT 1`,
+    );
+    if (!carrier) {
+      throw new BadRequestException("No store product exists to bill against");
     }
 
-    await this.ypoint.credit({
+    const title = `VIP ${duration} · ${hosted.label || "server"}`.slice(0, 120);
+    const cartItems: CartItemSnapshot[] = [
+      {
+        product_id: carrier.id,
+        title,
+        price_irr: priceIrr,
+        ypoint_amount: null,
+        vip_server_id: hosted.server_id,
+        vip_duration: duration,
+        subscription_tier: null,
+      },
+    ];
+    const orderId = randomUUID();
+    const payload = `store:${orderId}`;
+
+    await this.cancelPendingOrders(buyerSteamId);
+
+    await this.postgres.query(
+      `INSERT INTO store_orders
+        (id, product_id, product_title, buyer_steam_id, amount_irr, status,
+         bale_payload, cart_items, terms_accepted_at, hosted_kind,
+         hosted_server_id, payment_method)
+       VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7::jsonb, now(), 'vip_shop',
+               $8, 'bale')`,
+      [
+        orderId,
+        carrier.id,
+        title,
+        buyerSteamId,
+        priceIrr,
+        payload,
+        JSON.stringify(cartItems),
+        hosted.id,
+      ],
+    );
+
+    return {
+      orderId,
+      paid: false as const,
+      amountIrr: priceIrr,
+      productTitle: title,
+      deepLink: this.buildDeepLink(orderId, bale.botUsername),
+      botUsername: bale.botUsername || null,
+      duration,
+      serverId: hosted.server_id,
+      label: hosted.label,
+    };
+  }
+
+  /** After Bale pay: credit the hosted server owner’s IRR wallet for VIP sales. */
+  private async creditHostedVipOwner(order: {
+    id: string;
+    amount_irr?: number | null;
+    hosted_kind?: string | null;
+    hosted_server_id?: string | null;
+  }) {
+    if (order.hosted_kind !== "vip_shop" || !order.hosted_server_id) return;
+    const amountIrr = Math.floor(Number(order.amount_irr || 0));
+    if (amountIrr <= 0) return;
+
+    const [hosted] = await this.postgres.query<
+      Array<{ owner_steam_id: string; label: string }>
+    >(
+      `SELECT h.owner_steam_id::text, COALESCE(s.label, h.label) AS label
+       FROM hosted_servers h
+       LEFT JOIN servers s ON s.id = h.server_id
+       WHERE h.id = $1::uuid
+       LIMIT 1`,
+      [order.hosted_server_id],
+    );
+    if (!hosted?.owner_steam_id) {
+      this.logger.error(
+        `VIP shop owner credit skipped: hosted missing order=${order.id}`,
+      );
+      return;
+    }
+
+    await this.irr.credit({
       steamId: hosted.owner_steam_id,
-      amount: price,
+      amountIrr,
       reason: "hosted_vip_earning",
       refType: "hosted_vip_earning",
-      refId: saleId,
-    });
-
-    await this.upsertVipGrant({
-      steamId: buyerSteamId,
-      serverId: hosted.server_id,
-      orderId: null,
-      duration,
+      refId: order.id,
     });
 
     try {
-      await this.notifications.notifyPlayers(
-        "StorePurchasePaid" as e_notification_types_enum,
-        {
-          title: "VIP purchased",
-          message: `VIP (${duration}) activated on <b>${NotificationsService.escapeHtml(
-            hosted.label || "server",
-          )}</b> for ${price} Ypoints.`,
-          role: "user",
-          entity_id: saleId,
-          steamIds: [buyerSteamId],
-        },
-      );
+      const toman = Math.round(amountIrr / 10);
       await this.notifications.notifyPlayers(
         "StorePurchasePaid" as e_notification_types_enum,
         {
           title: "VIP sale",
-          message: `Someone bought VIP (${duration}) on <b>${NotificationsService.escapeHtml(
+          message: `Someone bought VIP on <b>${NotificationsService.escapeHtml(
             hosted.label || "your server",
-          )}</b>. +${price} Ypoints credited.`,
+          )}</b>. +${toman.toLocaleString("en-US")} تومان credited to your wallet.`,
           role: "user",
-          entity_id: `${saleId}:owner`,
+          entity_id: `${order.id}:owner`,
           steamIds: [hosted.owner_steam_id],
         },
       );
     } catch (error) {
       this.logger.warn(
-        `Hosted VIP notify failed sale=${saleId}`,
+        `VIP owner notify failed order=${order.id}`,
         error instanceof Error ? error.message : error,
       );
     }
-
-    return {
-      saleId,
-      paid: true as const,
-      duration,
-      amountYpoint: price,
-      balance: await this.ypoint.getBalance(buyerSteamId),
-      serverId: hosted.server_id,
-      label: hosted.label,
-    };
   }
 
   /**
@@ -1094,6 +1139,9 @@ export class StoreService {
         product_title: string;
         subscription_tier: string | null;
         cart_items: CartItemSnapshot[] | null;
+        amount_irr: number;
+        hosted_kind: string | null;
+        hosted_server_id: string | null;
       }>
     >(
       `UPDATE store_orders o
@@ -1106,7 +1154,7 @@ export class StoreService {
          AND p.id = o.product_id
        RETURNING o.id, o.buyer_steam_id::text, p.ypoint_amount,
                  p.vip_server_id, p.vip_duration, o.vip_granted_at, COALESCE(o.product_title, p.title) AS product_title,
-                 p.subscription_tier, o.cart_items`,
+                 p.subscription_tier, o.cart_items, o.amount_irr, o.hosted_kind, o.hosted_server_id::text AS hosted_server_id`,
       [payload, chargeId || null],
     );
 
@@ -1123,11 +1171,15 @@ export class StoreService {
           ypoint_amount: number | null;
           subscription_tier: string | null;
           cart_items: CartItemSnapshot[] | null;
+          amount_irr: number;
+          hosted_kind: string | null;
+          hosted_server_id: string | null;
         }>
       >(
         `SELECT o.id, o.buyer_steam_id::text, p.vip_server_id, p.vip_duration,
                 o.vip_granted_at, COALESCE(o.product_title, p.title) AS product_title, p.ypoint_amount,
-                p.subscription_tier, o.cart_items
+                p.subscription_tier, o.cart_items, o.amount_irr, o.hosted_kind,
+                o.hosted_server_id::text AS hosted_server_id
          FROM store_orders o
          JOIN store_products p ON p.id = o.product_id
          WHERE o.bale_payload = $1 AND o.status = 'paid'
@@ -1162,6 +1214,9 @@ export class StoreService {
     product_title: string;
     subscription_tier: string | null;
     cart_items?: CartItemSnapshot[] | null;
+    amount_irr?: number | null;
+    hosted_kind?: string | null;
+    hosted_server_id?: string | null;
   }) {
     const cart = this.normalizeCartItems(order.cart_items);
     const lines =
@@ -1210,6 +1265,15 @@ export class StoreService {
       });
 
       lineIndex += 1;
+    }
+
+    try {
+      await this.creditHostedVipOwner(order);
+    } catch (error) {
+      this.logger.error(
+        `Hosted VIP owner credit failed order=${order.id}`,
+        error instanceof Error ? error.stack : error,
+      );
     }
 
     try {

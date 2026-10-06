@@ -94,7 +94,7 @@ export class PublicServerDetailsService {
   }
 
   private async getHostedVipShop(serverId: string): Promise<{
-    packages: Array<{ duration: "7d" | "30d" | "90d"; price_ypoint: number }>;
+    packages: Array<{ duration: "7d" | "30d" | "90d"; price_irr: number }>;
   } | null> {
     const [row] = await this.postgres.query<
       Array<{
@@ -118,21 +118,21 @@ export class PublicServerDetailsService {
     if (!row?.vip_sale_enabled) return null;
     const packages: Array<{
       duration: "7d" | "30d" | "90d";
-      price_ypoint: number;
+      price_irr: number;
     }> = [];
     if (row.vip_price_7d > 0) {
-      packages.push({ duration: "7d", price_ypoint: Number(row.vip_price_7d) });
+      packages.push({ duration: "7d", price_irr: Number(row.vip_price_7d) });
     }
     if (row.vip_price_30d > 0) {
       packages.push({
         duration: "30d",
-        price_ypoint: Number(row.vip_price_30d),
+        price_irr: Number(row.vip_price_30d),
       });
     }
     if (row.vip_price_90d > 0) {
       packages.push({
         duration: "90d",
-        price_ypoint: Number(row.vip_price_90d),
+        price_irr: Number(row.vip_price_90d),
       });
     }
     if (!packages.length) return null;

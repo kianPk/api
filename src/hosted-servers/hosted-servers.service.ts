@@ -1148,18 +1148,18 @@ export class HostedServersService {
     price_7d: number;
     price_30d: number;
     price_90d: number;
-  }): Array<{ duration: "7d" | "30d" | "90d"; price_ypoint: number }> {
+  }): Array<{ duration: "7d" | "30d" | "90d"; price_irr: number }> {
     if (!shop.enabled) return [];
-    const out: Array<{ duration: "7d" | "30d" | "90d"; price_ypoint: number }> =
+    const out: Array<{ duration: "7d" | "30d" | "90d"; price_irr: number }> =
       [];
     if (shop.price_7d > 0) {
-      out.push({ duration: "7d", price_ypoint: shop.price_7d });
+      out.push({ duration: "7d", price_irr: shop.price_7d });
     }
     if (shop.price_30d > 0) {
-      out.push({ duration: "30d", price_ypoint: shop.price_30d });
+      out.push({ duration: "30d", price_irr: shop.price_30d });
     }
     if (shop.price_90d > 0) {
-      out.push({ duration: "90d", price_ypoint: shop.price_90d });
+      out.push({ duration: "90d", price_irr: shop.price_90d });
     }
     return out;
   }
@@ -1178,7 +1178,8 @@ export class HostedServersService {
     const price = (value: number | null | undefined) => {
       const n = Math.floor(Number(value));
       if (!Number.isFinite(n) || n < 0) return 0;
-      return Math.min(10_000_000, n);
+      // Rials; ~50M Toman ceiling
+      return Math.min(500_000_000, n);
     };
     return {
       enabled: Boolean(input.enabled),

@@ -33,6 +33,7 @@ import { SystemModule } from "./system/system.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { ChatModule } from "./chat/chat.module";
 import { FriendsModule } from "./friends/friends.module";
+import { PlayerBlocksModule } from "./player-blocks/player-blocks.module";
 import { TelemetryModule } from "./telemetry/telemetry.module";
 import { ThrottlerModule } from "@nestjs/throttler";
 import { SignalServerModule } from "./signal-server/signal-server.module";
@@ -63,6 +64,7 @@ import { UtilityModule } from "./utility/utility.module";
 import { StoreModule } from "./store/store.module";
 import { HostedServersModule } from "./hosted-servers/hosted-servers.module";
 import { YpointModule } from "./ypoint/ypoint.module";
+import { IrrModule } from "./irr/irr.module";
 import { AnticheatModule } from "./anticheat/anticheat.module";
 import { ChallengesModule } from "./challenges/challenges.module";
 
@@ -142,6 +144,7 @@ import { ChallengesModule } from "./challenges/challenges.module";
     NotificationsModule,
     ChatModule,
     FriendsModule,
+    PlayerBlocksModule,
     TelemetryModule,
     SignalServerModule,
     InvitesModule,
@@ -163,6 +166,7 @@ import { ChallengesModule } from "./challenges/challenges.module";
     StoreModule,
     HostedServersModule,
     YpointModule,
+    IrrModule,
     AnticheatModule,
     ChallengesModule,
     EventsModule,
