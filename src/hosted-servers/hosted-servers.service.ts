@@ -1148,19 +1148,24 @@ export class HostedServersService {
     price_7d: number;
     price_30d: number;
     price_90d: number;
-  }): Array<{ duration: "7d" | "30d" | "90d"; price_irr: number }> {
+  }): Array<{
+    duration: "7d" | "30d" | "90d";
+    price_irr: number;
+    price_ypoint: number;
+  }> {
     if (!shop.enabled) return [];
-    const out: Array<{ duration: "7d" | "30d" | "90d"; price_irr: number }> =
-      [];
-    if (shop.price_7d > 0) {
-      out.push({ duration: "7d", price_irr: shop.price_7d });
-    }
-    if (shop.price_30d > 0) {
-      out.push({ duration: "30d", price_irr: shop.price_30d });
-    }
-    if (shop.price_90d > 0) {
-      out.push({ duration: "90d", price_irr: shop.price_90d });
-    }
+    const out: Array<{
+      duration: "7d" | "30d" | "90d";
+      price_irr: number;
+      price_ypoint: number;
+    }> = [];
+    const push = (duration: "7d" | "30d" | "90d", price: number) => {
+      if (!(price > 0)) return;
+      out.push({ duration, price_irr: price, price_ypoint: price });
+    };
+    push("7d", shop.price_7d);
+    push("30d", shop.price_30d);
+    push("90d", shop.price_90d);
     return out;
   }
 

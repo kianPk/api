@@ -94,7 +94,11 @@ export class PublicServerDetailsService {
   }
 
   private async getHostedVipShop(serverId: string): Promise<{
-    packages: Array<{ duration: "7d" | "30d" | "90d"; price_irr: number }>;
+    packages: Array<{
+      duration: "7d" | "30d" | "90d";
+      price_irr: number;
+      price_ypoint: number;
+    }>;
   } | null> {
     const [row] = await this.postgres.query<
       Array<{
@@ -119,22 +123,16 @@ export class PublicServerDetailsService {
     const packages: Array<{
       duration: "7d" | "30d" | "90d";
       price_irr: number;
+      price_ypoint: number;
     }> = [];
-    if (row.vip_price_7d > 0) {
-      packages.push({ duration: "7d", price_irr: Number(row.vip_price_7d) });
-    }
-    if (row.vip_price_30d > 0) {
-      packages.push({
-        duration: "30d",
-        price_irr: Number(row.vip_price_30d),
-      });
-    }
-    if (row.vip_price_90d > 0) {
-      packages.push({
-        duration: "90d",
-        price_irr: Number(row.vip_price_90d),
-      });
-    }
+    const push = (duration: "7d" | "30d" | "90d", price: number) => {
+      const n = Number(price);
+      if (!(n > 0)) return;
+      packages.push({ duration, price_irr: n, price_ypoint: n });
+    };
+    push("7d", row.vip_price_7d);
+    push("30d", row.vip_price_30d);
+    push("90d", row.vip_price_90d);
     if (!packages.length) return null;
     return { packages };
   }
