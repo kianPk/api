@@ -51,6 +51,9 @@ export class SocketsGateway implements OnGatewayConnection {
     @ConnectedSocket() client: FiveStackWebSocketClient,
     request: Request,
   ) {
-    await this.sockets.setupSocket(client, request);
+    // Handlers await this, so each message waits for setup before trusting
+    // client.user — without it, early chat frames can race connection.
+    client.authentication = this.sockets.setupSocket(client, request);
+    await client.authentication;
   }
 }
