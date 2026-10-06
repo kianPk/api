@@ -15,7 +15,7 @@ BEGIN
       WHERE mo.id = match.match_options_id;
 
     -- Ranked queue modes: only site administrators may cancel.
-    IF _match_type IN ('Competitive', 'Wingman', 'Trios', 'Duel', 'Premier') THEN
+    IF _match_type IN ('Competitive', 'Wingman', 'Rush', 'Duel', 'Premier') THEN
         RETURN hasura_session ->> 'x-hasura-role' IN ('admin', 'administrator');
     END IF;
 

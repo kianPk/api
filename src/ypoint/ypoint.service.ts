@@ -5,7 +5,7 @@ import { SystemSettingName } from "../system/enums/SystemSettingName";
 export type YpointCostKey =
   | "duel"
   | "wingman"
-  | "trios"
+  | "rush"
   | "draft_create"
   | "draft_join";
 
@@ -52,21 +52,21 @@ export class YpointService {
   }
 
   public async getCosts(): Promise<Record<YpointCostKey, number>> {
-    const [duel, wingman, trios, draftCreate, draftJoin, freeDuel, freeWingman, freeTrios] =
+    const [duel, wingman, rush, draftCreate, draftJoin, freeDuel, freeWingman, freeRush] =
       await Promise.all([
         this.settingNumber(SystemSettingName.YpointCostDuel, 8),
         this.settingNumber(SystemSettingName.YpointCostWingman, 0),
-        this.settingNumber(SystemSettingName.YpointCostTrios, 12),
+        this.settingNumber(SystemSettingName.YpointCostRush, 12),
         this.settingNumber(SystemSettingName.YpointCostDraftCreate, 15),
         this.settingNumber(SystemSettingName.YpointCostDraftJoin, 10),
         this.settingFlag(SystemSettingName.YpointFreeDuel, false),
         this.settingFlag(SystemSettingName.YpointFreeWingman, false),
-        this.settingFlag(SystemSettingName.YpointFreeTrios, false),
+        this.settingFlag(SystemSettingName.YpointFreeRush, false),
       ]);
     return {
       duel: freeDuel ? 0 : Math.max(0, Number(duel) || 0),
       wingman: freeWingman ? 0 : Math.max(0, Number(wingman) || 0),
-      trios: freeTrios ? 0 : Math.max(0, Number(trios) || 0),
+      rush: freeRush ? 0 : Math.max(0, Number(rush) || 0),
       draft_create: Math.max(0, Number(draftCreate) || 0),
       draft_join: Math.max(0, Number(draftJoin) || 0),
     };
@@ -76,7 +76,7 @@ export class YpointService {
     const costs = await this.getCosts();
     if (type === "Duel") return costs.duel;
     if (type === "Wingman") return costs.wingman;
-    if (type === "Trios") return costs.trios;
+    if (type === "Rush") return costs.rush;
     return 0;
   }
 

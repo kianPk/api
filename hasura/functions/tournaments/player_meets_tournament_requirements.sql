@@ -1,5 +1,5 @@
 -- The rating this tournament's format actually rates on: 2-per-lineup → Wingman,
--- 3-per-lineup → Trios, everything else → Competitive. Season handling mirrors
+-- 3-per-lineup → Rush, everything else → Competitive. Season handling mirrors
 -- get_player_elo so the number that gates entry is the same number the player
 -- sees on their profile.
 CREATE OR REPLACE FUNCTION public.get_tournament_player_elo(_tournament_id uuid, _player_steam_id bigint)
@@ -31,7 +31,7 @@ BEGIN
 
     _elo_type := CASE
         WHEN _team_size = 2 THEN 'Wingman'
-        WHEN _team_size = 3 THEN 'Trios'
+        WHEN _team_size = 3 THEN 'Rush'
         ELSE 'Competitive'
     END;
 

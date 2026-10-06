@@ -127,6 +127,13 @@ export class TypeSenseService {
         index: true,
       },
       {
+        name: "elo_rush",
+        type: "int32",
+        optional: true,
+        sort: true,
+        index: true,
+      },
+      {
         name: "tournament_elo_competitive",
         type: "int32",
         optional: true,
@@ -142,6 +149,13 @@ export class TypeSenseService {
       },
       {
         name: "tournament_elo_duel",
+        type: "int32",
+        optional: true,
+        sort: true,
+        index: true,
+      },
+      {
+        name: "tournament_elo_rush",
         type: "int32",
         optional: true,
         sort: true,
@@ -572,6 +586,9 @@ export class TypeSenseService {
       elo_duel: player.elo["duel"]
         ? parseInt(String(player.elo["duel"]), 10)
         : null,
+      elo_rush: player.elo["rush"]
+        ? parseInt(String(player.elo["rush"]), 10)
+        : null,
       tournament_elo_competitive: player.elo["tournament_competitive"]
         ? parseInt(String(player.elo["tournament_competitive"]), 10)
         : null,
@@ -580,6 +597,9 @@ export class TypeSenseService {
         : null,
       tournament_elo_duel: player.elo["tournament_duel"]
         ? parseInt(String(player.elo["tournament_duel"]), 10)
+        : null,
+      tournament_elo_rush: player.elo["tournament_rush"]
+        ? parseInt(String(player.elo["tournament_rush"]), 10)
         : null,
     };
 
@@ -597,11 +617,13 @@ export class TypeSenseService {
             elo.elo_competitive,
             elo.elo_wingman,
             elo.elo_duel,
+            elo.elo_rush,
           ),
           tournament_elo: TypeSenseService.primaryElo(
             elo.tournament_elo_competitive,
             elo.tournament_elo_wingman,
             elo.tournament_elo_duel,
+            elo.tournament_elo_rush,
           ),
           total_matches: player.total_matches
             ? parseInt(String(player.total_matches), 10)

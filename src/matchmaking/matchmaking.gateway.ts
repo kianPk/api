@@ -77,7 +77,7 @@ export class MatchmakingGateway {
               },
               {
                 name: {
-                  _eq: "public.matchmaking_trios",
+                  _eq: "public.matchmaking_rush",
                 },
               },
               {

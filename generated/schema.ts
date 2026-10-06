@@ -4284,7 +4284,7 @@ export interface e_game_cfg_types_aggregate_fields {
 /** unique or primary key constraints on table "e_game_cfg_types" */
 export type e_game_cfg_types_constraint = 'e_game_cfg_types_pkey'
 
-export type e_game_cfg_types_enum = 'Base' | 'Competitive' | 'Duel' | 'Global' | 'Lan' | 'Live' | 'Trios' | 'Wingman'
+export type e_game_cfg_types_enum = 'Base' | 'Competitive' | 'Duel' | 'Global' | 'Lan' | 'Live' | 'Rush' | 'Trios' | 'Wingman'
 
 
 /** aggregate max on columns */
@@ -4999,7 +4999,7 @@ export interface e_map_pool_types_aggregate_fields {
 /** unique or primary key constraints on table "e_map_pool_types" */
 export type e_map_pool_types_constraint = 'e_map_pool_types_pkey'
 
-export type e_map_pool_types_enum = 'Competitive' | 'Custom' | 'Duel' | 'Trios' | 'Wingman'
+export type e_map_pool_types_enum = 'Competitive' | 'Custom' | 'Duel' | 'Rush' | 'Trios' | 'Wingman'
 
 
 /** aggregate max on columns */
@@ -5409,7 +5409,7 @@ export interface e_match_types_aggregate_fields {
 /** unique or primary key constraints on table "e_match_types" */
 export type e_match_types_constraint = 'e_match_types_pkey'
 
-export type e_match_types_enum = 'Competitive' | 'Duel' | 'Faceit' | 'Premier' | 'Trios' | 'Wingman'
+export type e_match_types_enum = 'Competitive' | 'Duel' | 'Faceit' | 'Premier' | 'Rush' | 'Trios' | 'Wingman'
 
 
 /** aggregate max on columns */

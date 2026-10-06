@@ -56,7 +56,7 @@ export interface DraftRosterEntry {
 export class DraftGameService {
   public static readonly DRAFTABLE_TYPES: e_match_types_enum[] = [
     "Competitive",
-    "Trios",
+    "Rush",
     "Wingman",
     "Duel",
   ];

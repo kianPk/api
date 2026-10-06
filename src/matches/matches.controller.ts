@@ -420,6 +420,7 @@ export class MatchesController {
     match.options.cfg_overrides = {
       Lan: "",
       Competitive: "",
+      Rush: "",
       Trios: "",
       Duel: "",
       Wingman: "",

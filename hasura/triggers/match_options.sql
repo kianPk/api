@@ -37,6 +37,14 @@ BEGIN
         NEW.regions = (SELECT array_agg(region) FROM servers where enabled = true);
     END IF;
 
+    IF NEW.type = 'Rush' THEN
+        NEW.best_of := 1;
+        NEW.mr := 8;
+        NEW.overtime := false;
+        NEW.knife_round := false;
+        NEW.map_veto := false;
+    END IF;
+
     PERFORM assert_game_mode_selectable(NEW.game_mode_id);
 
 	RETURN NEW;
@@ -96,6 +104,14 @@ BEGIN
         IF (NEW.game_mode_id IS DISTINCT FROM OLD.game_mode_id) THEN
             RAISE EXCEPTION 'Cannot modify game mode during Live/Veto' USING ERRCODE = '22000';
         END IF;
+    END IF;
+
+    IF NEW.type = 'Rush' THEN
+        NEW.best_of := 1;
+        NEW.mr := 8;
+        NEW.overtime := false;
+        NEW.knife_round := false;
+        NEW.map_veto := false;
     END IF;
 
     IF (NEW.game_mode_id IS DISTINCT FROM OLD.game_mode_id) THEN

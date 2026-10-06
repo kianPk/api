@@ -15,13 +15,13 @@ export enum SystemSettingName {
   ChatRetentionDirectDays = "public.chat_retention_direct_days",
   YpointCostDuel = "public.ypoint_cost_duel",
   YpointCostWingman = "public.ypoint_cost_wingman",
-  YpointCostTrios = "public.ypoint_cost_trios",
+  YpointCostRush = "public.ypoint_cost_rush",
   YpointCostDraftCreate = "public.ypoint_cost_draft_create",
   YpointCostDraftJoin = "public.ypoint_cost_draft_join",
   // Per ranked mode: when true that mode costs 0 while the saved price stays.
   YpointFreeDuel = "public.ypoint_free_duel",
   YpointFreeWingman = "public.ypoint_free_wingman",
-  YpointFreeTrios = "public.ypoint_free_trios",
+  YpointFreeRush = "public.ypoint_free_rush",
   // Client anti-cheat launcher (hardware checks before ranked queue).
   AcLauncherRequired = "public.ac_launcher_required",
   AcAttestationTtlMinutes = "public.ac_attestation_ttl_minutes",

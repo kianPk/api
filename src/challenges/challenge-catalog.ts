@@ -32,7 +32,7 @@ export type ChallengeDef = {
   reward: number;
   target: number;
   kind: ChallengeKind;
-  matchType?: "Competitive" | "Wingman" | "Duel" | "Trios";
+  matchType?: "Competitive" | "Wingman" | "Duel" | "Rush";
   metric?: ChallengeMetric;
 };
 
@@ -42,7 +42,7 @@ export const CHALLENGE_CATALOG: ChallengeDef[] = [
   { key: "p_win_comp_1", tier: "premium", reward: 20, target: 1, kind: "win_matches", matchType: "Competitive" },
   { key: "p_win_wing_1", tier: "premium", reward: 18, target: 1, kind: "win_matches", matchType: "Wingman" },
   { key: "p_win_duel_1", tier: "premium", reward: 18, target: 1, kind: "win_matches", matchType: "Duel" },
-  { key: "p_win_trios_1", tier: "premium", reward: 20, target: 1, kind: "win_matches", matchType: "Trios" },
+  { key: "p_win_rush_1", tier: "premium", reward: 20, target: 1, kind: "win_matches", matchType: "Rush" },
   { key: "p_win_any_2", tier: "premium", reward: 28, target: 2, kind: "win_matches" },
   { key: "p_play_2", tier: "premium", reward: 12, target: 2, kind: "play_matches" },
   { key: "p_play_3", tier: "premium", reward: 18, target: 3, kind: "play_matches" },

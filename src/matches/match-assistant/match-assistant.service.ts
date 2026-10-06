@@ -101,6 +101,18 @@ export class MatchAssistantService {
 
   public async restoreMatchRound(matchId: string, round: number) {
     try {
+      const { matches_by_pk } = await this.hasura.query({
+        matches_by_pk: {
+          __args: { id: matchId },
+          options: { type: true },
+        },
+      });
+      if (matches_by_pk?.options?.type === "Rush") {
+        this.logger.log(
+          `[${matchId}] skipping api_restore_round ${round}: Rush matches do not restore rounds`,
+        );
+        return;
+      }
       this.logger.log(
         `[${matchId}] sending api_restore_round ${round} to server`,
       );
@@ -706,7 +718,9 @@ export class MatchAssistantService {
   }
 
   private static getGameMode(type?: e_match_types_enum): number {
-    return type === "Wingman" || type === "Duel" ? 2 : 1;
+    if (type === "Rush") return 6;
+    if (type === "Wingman" || type === "Duel") return 2;
+    return 1;
   }
 
   private async assignDedicatedServer(
@@ -2005,50 +2019,6 @@ export class MatchAssistantService {
       };
 
       let pool = await pickPoolWithMaps(mapPoolType);
-
-      // Trios ranked often lags Competitive settings. Prefer remapping
-      // Competitive map names onto Trios map rows so veto + server use
-      // the correct type IDs; otherwise reuse the Competitive pool.
-      if (
-        (!(pool?.maps?.length > 0) || !pool) &&
-        mapPoolType === "Trios"
-      ) {
-        const competitive = await pickPoolWithMaps("Competitive");
-        const compNames = (competitive?.maps ?? [])
-          .map((m) => m.name)
-          .filter(Boolean) as string[];
-
-        if (compNames.length) {
-          const { maps: triosMaps } = await this.hasura.query({
-            maps: {
-              __args: {
-                where: {
-                  type: { _eq: "Trios" },
-                  name: { _in: compNames },
-                  enabled: { _eq: true },
-                  deleted_at: { _is_null: true },
-                },
-              },
-              id: true,
-              name: true,
-            },
-          });
-
-          if (triosMaps?.length) {
-            // Custom pool for this match keeps Trios map IDs without
-            // mutating the shared Trios seed pool mid-queue.
-            options.maps = triosMaps.map((m) => m.id);
-            this.logger.log(
-              `Trios map pool empty — using ${triosMaps.length} Trios maps matched from Competitive settings`,
-            );
-          } else if (competitive?.id && competitive.maps?.length) {
-            pool = competitive;
-            this.logger.warn(
-              `Trios map rows missing — falling back to Competitive pool ${competitive.id}`,
-            );
-          }
-        }
-      }
 
       if (options.maps.length === 0) {
         if (!pool?.id) {

@@ -41,6 +41,7 @@ export class DiscordBotService {
     Duel: undefined,
     Wingman: undefined,
     Trios: undefined,
+    Rush: undefined,
     Competitive: undefined,
     Premier: undefined,
     Faceit: undefined,

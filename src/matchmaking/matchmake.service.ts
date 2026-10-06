@@ -110,7 +110,7 @@ export class MatchmakeService {
       },
     });
 
-    const types: e_match_types_enum[] = ["Duel", "Wingman", "Trios", "Competitive"];
+    const types: e_match_types_enum[] = ["Duel", "Wingman", "Rush", "Competitive"];
 
     const regionStats: Partial<
       Record<string, Partial<Record<e_match_types_enum, number[]>>>
@@ -825,8 +825,8 @@ export class MatchmakeService {
         {
           mr: type === "Competitive" ? 12 : 8,
           best_of: 1,
-          knife: true,
-          overtime: true,
+          knife: type !== "Rush",
+          overtime: type !== "Rush",
           timeout_setting: "Admin",
           region,
         },
