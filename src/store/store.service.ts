@@ -663,9 +663,7 @@ export class StoreService {
     if (!hosted?.vip_sale_enabled) {
       throw new NotFoundException("VIP is not for sale on this server");
     }
-    if (String(hosted.owner_steam_id) === String(buyerSteamId)) {
-      throw new BadRequestException("You cannot buy VIP on your own server");
-    }
+    // Owner may buy (e.g. testing). Money still goes to the owner wallet.
 
     const priceIrr =
       duration === "7d"
@@ -677,8 +675,18 @@ export class StoreService {
       throw new BadRequestException("That VIP package is not available");
     }
 
-    // Dedicated inert bill carrier — never a hosted plan / ypoint / store VIP.
-    const carrier = await this.ensureVipShopCarrierProduct();
+    let carrier: { id: string };
+    try {
+      carrier = await this.ensureVipShopCarrierProduct();
+    } catch (error) {
+      this.logger.error(
+        "VIP shop carrier product failed",
+        error instanceof Error ? error.stack : error,
+      );
+      throw new ServiceUnavailableException(
+        "VIP checkout is temporarily unavailable (bill product)",
+      );
+    }
 
     const title = `VIP ${duration} · ${hosted.label || "server"}`.slice(0, 120);
     const cartItems: CartItemSnapshot[] = [
@@ -695,26 +703,46 @@ export class StoreService {
     const orderId = randomUUID();
     const payload = `store:${orderId}`;
 
-    await this.cancelPendingOrders(buyerSteamId);
+    try {
+      await this.cancelPendingOrders(buyerSteamId);
+    } catch (error) {
+      this.logger.warn(
+        `cancelPendingOrders before VIP shop failed: ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+    }
 
-    await this.postgres.query(
-      `INSERT INTO store_orders
-        (id, product_id, product_title, buyer_steam_id, amount_irr, status,
-         bale_payload, cart_items, terms_accepted_at, hosted_kind,
-         hosted_server_id, payment_method, hosted_fulfilled_at)
-       VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7::jsonb, now(), 'vip_shop',
-               $8, 'bale', now())`,
-      [
-        orderId,
-        carrier.id,
-        title,
-        buyerSteamId,
-        priceIrr,
-        payload,
-        JSON.stringify(cartItems),
-        hosted.id,
-      ],
-    );
+    try {
+      await this.postgres.query(
+        `INSERT INTO store_orders
+          (id, product_id, product_title, buyer_steam_id, amount_irr, status,
+           bale_payload, cart_items, terms_accepted_at, hosted_kind,
+           hosted_server_id, payment_method, hosted_fulfilled_at)
+         VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7::jsonb, now(), 'vip_shop',
+                 $8, 'bale', now())`,
+        [
+          orderId,
+          carrier.id,
+          title,
+          buyerSteamId,
+          priceIrr,
+          payload,
+          JSON.stringify(cartItems),
+          hosted.id,
+        ],
+      );
+    } catch (error) {
+      this.logger.error(
+        `VIP shop order insert failed order=${orderId}`,
+        error instanceof Error ? error.stack : error,
+      );
+      throw new BadRequestException(
+        error instanceof Error
+          ? `VIP checkout failed: ${error.message}`
+          : "VIP checkout failed",
+      );
+    }
 
     return {
       orderId,
@@ -731,6 +759,25 @@ export class StoreService {
 
   /** Inert catalog row used only as FK for hosted VIP shop Bale orders. */
   private async ensureVipShopCarrierProduct(): Promise<{ id: string }> {
+    const [existing] = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id FROM store_products WHERE slug = 'hosted-vip-shop' LIMIT 1`,
+    );
+    if (existing?.id) {
+      await this.postgres.query(
+        `UPDATE store_products
+         SET price_irr = 0,
+             ypoint_amount = NULL,
+             vip_server_id = NULL,
+             vip_duration = NULL,
+             hosted_slots = NULL,
+             subscription_tier = NULL,
+             active = false
+         WHERE id = $1`,
+        [existing.id],
+      );
+      return existing;
+    }
+
     const [row] = await this.postgres.query<Array<{ id: string }>>(
       `INSERT INTO store_products
          (title, slug, description, price_irr, ypoint_amount, vip_server_id,
@@ -748,12 +795,10 @@ export class StoreService {
          vip_duration = NULL,
          hosted_slots = NULL,
          subscription_tier = NULL,
-         active = false,
-         title = EXCLUDED.title,
-         description = EXCLUDED.description
+         active = false
        RETURNING id`,
     );
-    if (!row) {
+    if (!row?.id) {
       throw new BadRequestException("Could not create VIP shop bill product");
     }
     return row;
