@@ -69,7 +69,7 @@ export class HostedCheckoutController {
     });
   }
 
-  @Post("vip-shop/checkout")
+  @Post("vip-checkout")
   public async vipShopCheckout(
     @Req() request: Request,
     @Body()
@@ -90,5 +90,19 @@ export class HostedCheckoutController {
       duration: body.duration,
       termsAccepted: Boolean(body.termsAccepted),
     });
+  }
+
+  /** @deprecated keep old path for in-flight clients */
+  @Post("vip-shop/checkout")
+  public async vipShopCheckoutLegacy(
+    @Req() request: Request,
+    @Body()
+    body: {
+      server_id?: string;
+      duration?: string;
+      termsAccepted?: boolean;
+    },
+  ) {
+    return this.vipShopCheckout(request, body);
   }
 }

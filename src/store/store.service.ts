@@ -614,6 +614,9 @@ export class StoreService {
     buyerSteamId: string,
     opts: { duration?: string; termsAccepted?: boolean },
   ) {
+    this.logger.log(
+      `VIP shop checkout steam=${buyerSteamId} server=${serverId} duration=${opts?.duration} terms=${Boolean(opts?.termsAccepted)}`,
+    );
     if (!opts?.termsAccepted) {
       throw new BadRequestException("Terms must be accepted before checkout");
     }
