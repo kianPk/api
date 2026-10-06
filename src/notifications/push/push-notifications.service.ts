@@ -666,6 +666,37 @@ export class PushNotificationsService {
     }
   }
 
+
+  // Chat pushes: live updates travel over the socket. These entry points keep
+  // ChatService call sites typed; full held-window delivery can land later.
+  public async sendChatMessage(
+    _steamIds: string[],
+    _push: {
+      messageId: string;
+      type: string;
+      title: string;
+      message: string;
+      entityId: string;
+      threadKey: string;
+      threadLabel: string;
+      icon?: string | null;
+      senderSteamId: string;
+      blockExemptRoles: string[];
+    },
+  ): Promise<void> {
+    return;
+  }
+
+  public async retractChatMessage(_messageId: string): Promise<void> {
+    return;
+  }
+
+  public async editChatMessage(
+    _messageId: string,
+    _preview: string,
+  ): Promise<void> {
+    return;
+  }
   private static readonly SELECT_NOTIFICATION = `SELECT id::text AS id, type::text AS type, role::text AS role,
               title, message, entity_id, data, actions
          FROM public.notifications`;

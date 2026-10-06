@@ -1375,7 +1375,7 @@ export class ChatService {
         !!message.gif,
       ),
       message.id,
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       this.logger.warn(`unable to notify ${type}:${id} of a message`, error);
     });
 
@@ -1585,7 +1585,7 @@ export class ChatService {
     // for a message that is gone.
     await this.redis
       .hdel(ChatService.reactionsKey(type, id), messageId)
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.logger.warn(
           `unable to clear reactions for ${type}:${id} message ${messageId}`,
           error,
@@ -1624,7 +1624,7 @@ export class ChatService {
         ? this.attachments.expireMessage(type, id, messageId)
         : this.attachments.markDeleted(type, id, messageId);
 
-    await removal.catch((error) => {
+    await removal.catch((error: unknown) => {
       this.logger.warn(
         `unable to remove the files of ${type}:${id} message ${messageId}`,
         error,
@@ -1802,7 +1802,7 @@ export class ChatService {
 
     const broadcast = (this.reactionBroadcasts.get(room) ?? Promise.resolve())
       .then(() => this.to(type, id, "reaction", { id: messageId, reactions }))
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.logger.warn(`unable to broadcast a reaction to ${room}`, error);
       })
       .finally(() => {
@@ -2166,13 +2166,13 @@ export class ChatService {
         edited_at: editedAt,
       },
       author,
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       this.logger.warn(`unable to broadcast an edit to ${type}:${id}`, error);
     });
 
     await this.pushNotifications
       .editChatMessage(messageId, ChatService.notificationPreview(text))
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.logger.warn(
           `unable to update notifications for ${type}:${id} message ${messageId}`,
           error,
@@ -2189,7 +2189,7 @@ export class ChatService {
   ) {
     await this.pushNotifications
       .retractChatMessage(messageId)
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.logger.warn(
           `unable to retract notifications for ${type}:${id} message ${messageId}`,
           error,
@@ -2272,7 +2272,7 @@ export class ChatService {
       .query(`DELETE FROM public.chat_message_edits WHERE id = $1::uuid`, [
         auditId,
       ])
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.logger.warn(
           `unable to discard the audit row of an edit that did not apply`,
           error,
@@ -3855,7 +3855,7 @@ export class ChatService {
           new Date(),
         ),
       )
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.logger.warn(
           `unable to move the files of ${fromType}:${fromId} to ${toType}:${toId}`,
           error,
@@ -3868,7 +3868,7 @@ export class ChatService {
 
     const messages = await this.getRoomMessages(toType, toId);
 
-    void this.resendHistory(toType, toId, messages).catch((error) => {
+    void this.resendHistory(toType, toId, messages).catch((error: unknown) => {
       this.logger.warn(`unable to re-send history to ${toType}:${toId}`, error);
     });
 

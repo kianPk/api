@@ -165,6 +165,10 @@ export function chatThreadKey(type: string, id: string): string {
   return `chat:${type}:${id}`;
 }
 
+export function isChatThreadKey(thread: string): boolean {
+  return thread.startsWith("chat:");
+}
+
 // Where a client's focus reports land. Read by the delivery gate and written by
 // the socket gateway, which is why it lives here with the key it holds rather
 // than on either side of that exchange -- the two modules would otherwise have
