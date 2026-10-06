@@ -397,6 +397,11 @@ export class HostedServersService {
       !order ||
       order.status !== "paid" ||
       order.hosted_fulfilled_at ||
+      // VIP shop / unknown kinds must never provision or renew a hosted box.
+      (order.hosted_kind !== "new" &&
+        order.hosted_kind !== "renew" &&
+        order.hosted_kind !== "slots" &&
+        order.hosted_kind != null) ||
       (!order.hosted_slots && order.hosted_kind !== "slots")
     ) {
       return;

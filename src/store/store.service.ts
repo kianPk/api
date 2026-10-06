@@ -677,15 +677,8 @@ export class StoreService {
       throw new BadRequestException("That VIP package is not available");
     }
 
-    // Orders need a product_id FK; borrow any store product as the bill carrier.
-    const [carrier] = await this.postgres.query<Array<{ id: string }>>(
-      `SELECT id FROM store_products
-       ORDER BY active DESC, sort_order ASC
-       LIMIT 1`,
-    );
-    if (!carrier) {
-      throw new BadRequestException("No store product exists to bill against");
-    }
+    // Dedicated inert bill carrier — never a hosted plan / ypoint / store VIP.
+    const carrier = await this.ensureVipShopCarrierProduct();
 
     const title = `VIP ${duration} · ${hosted.label || "server"}`.slice(0, 120);
     const cartItems: CartItemSnapshot[] = [
@@ -734,6 +727,32 @@ export class StoreService {
       serverId: hosted.server_id,
       label: hosted.label,
     };
+  }
+
+  /** Inert catalog row used only as FK for hosted VIP shop Bale orders. */
+  private async ensureVipShopCarrierProduct(): Promise<{ id: string }> {
+    const [existing] = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id FROM store_products WHERE slug = 'hosted-vip-shop' LIMIT 1`,
+    );
+    if (existing) return existing;
+
+    const [created] = await this.postgres.query<Array<{ id: string }>>(
+      `INSERT INTO store_products
+         (title, slug, description, price_irr, ypoint_amount, vip_server_id,
+          vip_duration, hosted_slots, subscription_tier, sort_order, active)
+       VALUES (
+         'Hosted VIP (internal)',
+         'hosted-vip-shop',
+         'Internal bill carrier for hosted server VIP sales. Not sold in the store.',
+         0, NULL, NULL, NULL, NULL, NULL, 9999, false
+       )
+       ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
+       RETURNING id`,
+    );
+    if (!created) {
+      throw new BadRequestException("Could not create VIP shop bill product");
+    }
+    return created;
   }
 
   /** After Bale pay: credit the hosted server owner’s IRR wallet for VIP sales. */
@@ -1218,9 +1237,12 @@ export class StoreService {
     hosted_kind?: string | null;
     hosted_server_id?: string | null;
   }) {
+    const isVipShop = order.hosted_kind === "vip_shop";
     const cart = this.normalizeCartItems(order.cart_items);
-    const lines =
-      cart.length > 0
+    // Hosted VIP shop: only cart VIP lines — never product ypoint/VIP/subscription.
+    const lines = isVipShop
+      ? cart.filter((i) => i.vip_server_id && i.vip_duration)
+      : cart.length > 0
         ? cart
         : [
             {
@@ -1236,7 +1258,7 @@ export class StoreService {
 
     let lineIndex = 0;
     for (const line of lines) {
-      const amount = Number(line.ypoint_amount || 0);
+      const amount = isVipShop ? 0 : Number(line.ypoint_amount || 0);
       if (amount > 0) {
         await this.ypoint.credit({
           steamId: order.buyer_steam_id,
@@ -1257,12 +1279,14 @@ export class StoreService {
         vip_granted_at: lineIndex === 0 ? order.vip_granted_at : null,
       });
 
-      await this.grantSubscriptionIfNeeded({
-        id: order.id,
-        buyer_steam_id: order.buyer_steam_id,
-        subscription_tier: line.subscription_tier,
-        vip_duration: line.vip_duration,
-      });
+      if (!isVipShop) {
+        await this.grantSubscriptionIfNeeded({
+          id: order.id,
+          buyer_steam_id: order.buyer_steam_id,
+          subscription_tier: line.subscription_tier,
+          vip_duration: line.vip_duration,
+        });
+      }
 
       lineIndex += 1;
     }
@@ -1274,6 +1298,10 @@ export class StoreService {
         `Hosted VIP owner credit failed order=${order.id}`,
         error instanceof Error ? error.stack : error,
       );
+    }
+
+    if (isVipShop) {
+      return;
     }
 
     try {
