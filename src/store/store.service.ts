@@ -813,10 +813,28 @@ export class StoreService {
     amount_irr?: number | null;
     hosted_kind?: string | null;
     hosted_server_id?: string | null;
+    product_title?: string | null;
+    cart_items?: CartItemSnapshot[] | null;
   }) {
-    if (order.hosted_kind !== "vip_shop" || !order.hosted_server_id) return;
-    const amountIrr = Math.floor(Number(order.amount_irr || 0));
-    if (amountIrr <= 0) return;
+    const isVipShop =
+      order.hosted_kind === "vip_shop" ||
+      (typeof order.product_title === "string" &&
+        /^VIP\s+(7d|30d|90d)\b/i.test(order.product_title));
+    if (!isVipShop || !order.hosted_server_id) return;
+
+    let amountIrr = Math.floor(Number(order.amount_irr || 0));
+    if (amountIrr <= 0) {
+      const cart = this.normalizeCartItems(order.cart_items);
+      amountIrr = Math.floor(
+        cart.reduce((sum, line) => sum + Number(line.price_irr || 0), 0),
+      );
+    }
+    if (amountIrr <= 0) {
+      this.logger.warn(
+        `VIP shop owner credit skipped: amount=0 order=${order.id}`,
+      );
+      return;
+    }
 
     const [hosted] = await this.postgres.query<
       Array<{ owner_steam_id: string; label: string }>
