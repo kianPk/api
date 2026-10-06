@@ -731,12 +731,7 @@ export class StoreService {
 
   /** Inert catalog row used only as FK for hosted VIP shop Bale orders. */
   private async ensureVipShopCarrierProduct(): Promise<{ id: string }> {
-    const [existing] = await this.postgres.query<Array<{ id: string }>>(
-      `SELECT id FROM store_products WHERE slug = 'hosted-vip-shop' LIMIT 1`,
-    );
-    if (existing) return existing;
-
-    const [created] = await this.postgres.query<Array<{ id: string }>>(
+    const [row] = await this.postgres.query<Array<{ id: string }>>(
       `INSERT INTO store_products
          (title, slug, description, price_irr, ypoint_amount, vip_server_id,
           vip_duration, hosted_slots, subscription_tier, sort_order, active)
@@ -746,13 +741,22 @@ export class StoreService {
          'Internal bill carrier for hosted server VIP sales. Not sold in the store.',
          0, NULL, NULL, NULL, NULL, NULL, 9999, false
        )
-       ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
+       ON CONFLICT (slug) DO UPDATE SET
+         price_irr = 0,
+         ypoint_amount = NULL,
+         vip_server_id = NULL,
+         vip_duration = NULL,
+         hosted_slots = NULL,
+         subscription_tier = NULL,
+         active = false,
+         title = EXCLUDED.title,
+         description = EXCLUDED.description
        RETURNING id`,
     );
-    if (!created) {
+    if (!row) {
       throw new BadRequestException("Could not create VIP shop bill product");
     }
-    return created;
+    return row;
   }
 
   /** After Bale pay: credit the hosted server owner’s IRR wallet for VIP sales. */
@@ -1301,6 +1305,14 @@ export class StoreService {
     }
 
     if (isVipShop) {
+      // Seal the order so the hosted lifecycle sweeper can never treat a VIP
+      // sale as a new server purchase (even if product_id pointed at a plan).
+      await this.postgres.query(
+        `UPDATE store_orders
+         SET hosted_fulfilled_at = COALESCE(hosted_fulfilled_at, now())
+         WHERE id = $1`,
+        [order.id],
+      );
       return;
     }
 

@@ -393,16 +393,20 @@ export class HostedServersService {
        WHERE o.id = $1`,
       [orderId],
     );
+    // Only explicit hosted purchases may provision / renew / add slots.
+    const kind = order?.hosted_kind || null;
+    const isHostedPurchase =
+      kind === "new" ||
+      kind === "renew" ||
+      kind === "slots" ||
+      (kind == null && order?.hosted_slots != null);
     if (
       !order ||
       order.status !== "paid" ||
       order.hosted_fulfilled_at ||
-      // VIP shop / unknown kinds must never provision or renew a hosted box.
-      (order.hosted_kind !== "new" &&
-        order.hosted_kind !== "renew" &&
-        order.hosted_kind !== "slots" &&
-        order.hosted_kind != null) ||
-      (!order.hosted_slots && order.hosted_kind !== "slots")
+      !isHostedPurchase ||
+      kind === "vip_shop" ||
+      (!order.hosted_slots && kind !== "slots")
     ) {
       return;
     }
@@ -764,6 +768,11 @@ export class HostedServersService {
        LEFT JOIN store_products p ON p.id = o.product_id
        WHERE o.status = 'paid'
          AND o.hosted_fulfilled_at IS NULL
+         AND COALESCE(o.hosted_kind, '') <> 'vip_shop'
+         AND (
+           o.hosted_kind IN ('new', 'renew', 'slots')
+           OR (o.hosted_kind IS NULL AND p.hosted_slots IS NOT NULL)
+         )
          AND (p.hosted_slots IS NOT NULL OR o.hosted_kind = 'slots')
          AND o.paid_at > now() - interval '7 days'
        ORDER BY o.paid_at ASC
