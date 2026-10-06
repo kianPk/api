@@ -5,9 +5,13 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF NEW.hosted_kind = 'vip_shop' THEN
-    -- Mark fulfilled immediately so processLifecycle / fulfillOrder skip them.
+  IF NEW.hosted_kind = 'vip_shop'
+     OR (NEW.product_title IS NOT NULL AND NEW.product_title ~* '^VIP[[:space:]]+(7d|30d|90d)')
+  THEN
     NEW.hosted_fulfilled_at := COALESCE(NEW.hosted_fulfilled_at, now());
+    IF NEW.hosted_kind IS NULL OR NEW.hosted_kind NOT IN ('new', 'renew', 'slots') THEN
+      NEW.hosted_kind := 'vip_shop';
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -19,13 +23,16 @@ CREATE TRIGGER tbiu_store_orders_seal_vip_shop
   FOR EACH ROW
   EXECUTE FUNCTION public.tbiu_store_orders_seal_vip_shop();
 
--- Backfill anything already paid/pending from the bug.
 UPDATE public.store_orders
-SET hosted_fulfilled_at = COALESCE(hosted_fulfilled_at, now())
-WHERE hosted_kind = 'vip_shop'
-  AND hosted_fulfilled_at IS NULL;
+SET hosted_fulfilled_at = COALESCE(hosted_fulfilled_at, now()),
+    hosted_kind = 'vip_shop'
+WHERE hosted_fulfilled_at IS NULL
+  AND status IN ('pending', 'paid')
+  AND (
+    hosted_kind = 'vip_shop'
+    OR COALESCE(product_title, '') ~* '^VIP[[:space:]]+(7d|30d|90d)'
+  );
 
--- Ensure bill carrier cannot look like a server plan.
 INSERT INTO public.store_products
   (title, slug, description, price_irr, ypoint_amount, vip_server_id,
    vip_duration, hosted_slots, subscription_tier, sort_order, active)

@@ -1245,7 +1245,11 @@ export class StoreService {
     hosted_kind?: string | null;
     hosted_server_id?: string | null;
   }) {
-    const isVipShop = order.hosted_kind === "vip_shop";
+    const isVipShop =
+      order.hosted_kind === "vip_shop" ||
+      // Defend against older rows / partial payloads that lost hosted_kind.
+      (typeof order.product_title === "string" &&
+        /^VIP\s+(7d|30d|90d)\b/i.test(order.product_title));
     const cart = this.normalizeCartItems(order.cart_items);
     // Hosted VIP shop: only cart VIP lines — never product ypoint/VIP/subscription.
     const lines = isVipShop
