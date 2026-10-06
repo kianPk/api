@@ -11,7 +11,7 @@ export class IrrService {
   /** Balance in Rials (IRR). UI converts to Tomans. */
   public async getBalance(steamId: string | bigint): Promise<number> {
     const rows = await this.postgres.query<Array<{ irr_balance: string | number }>>(
-      `SELECT irr_balance FROM players WHERE steam_id = $1 LIMIT 1`,
+      `SELECT irr_balance FROM players WHERE steam_id = $1::bigint LIMIT 1`,
       [steamId.toString()],
     );
     return Number(rows.at(0)?.irr_balance ?? 0);

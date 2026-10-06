@@ -960,6 +960,7 @@ export class HostedServersService {
           vip_price_7d: number;
           vip_price_30d: number;
           vip_price_90d: number;
+          owner_irr_balance: number;
         }
       >
     >(
@@ -972,6 +973,7 @@ export class HostedServersService {
               COALESCE(h.vip_price_30d, 0) AS vip_price_30d,
               COALESCE(h.vip_price_90d, 0) AS vip_price_90d,
               pl.name AS owner_name,
+              COALESCE(pl.irr_balance, 0) AS owner_irr_balance,
               s.label AS server_label, s.host, s.port, s.type::text AS type,
               s.connect_password, s.enabled, s.connected, s.max_players,
               (s.steam_account_token IS NOT NULL AND s.steam_account_token <> '') AS has_gslt
@@ -1010,18 +1012,22 @@ export class HostedServersService {
         has_gslt: row.has_gslt,
         players: stat?.players ?? null,
         map: stat?.map ?? null,
+        owner_irr_balance: Number(row.owner_irr_balance || 0),
         chat_ads: HostedServersService.normalizeChatAds({
           enabled: row.chat_ads_enabled,
           interval_seconds: row.chat_ads_interval_seconds,
           color: row.chat_ads_color,
           messages: row.chat_ads_messages,
         }),
-        vip_shop: HostedServersService.normalizeVipShop({
-          enabled: row.vip_sale_enabled,
-          price_7d: row.vip_price_7d,
-          price_30d: row.vip_price_30d,
-          price_90d: row.vip_price_90d,
-        }),
+        vip_shop: {
+          ...HostedServersService.normalizeVipShop({
+            enabled: row.vip_sale_enabled,
+            price_7d: row.vip_price_7d,
+            price_30d: row.vip_price_30d,
+            price_90d: row.vip_price_90d,
+          }),
+          wallet_irr: Number(row.owner_irr_balance || 0),
+        },
       };
     });
   }
