@@ -8,15 +8,42 @@ import { RconService } from "../rcon/rcon.service";
 import { FiveStackWebSocketClient } from "src/sockets/types/FiveStackWebSocketClient";
 import { ChatLobbyType } from "./enums/ChatLobbyTypes";
 import {
+  e_match_status_enum,
   e_notification_types_enum,
   e_player_roles_enum,
+  e_tournament_free_agent_statuses_enum,
 } from "generated/schema";
 import { isRoleAbove, rolesAtOrAbove } from "src/utilities/isRoleAbove";
 import { NotificationsService } from "src/notifications/notifications.service";
+import { PushNotificationsService } from "src/notifications/push/push-notifications.service";
 import { PostgresService } from "src/postgres/postgres.service";
+import { PlayerBlocksService } from "src/player-blocks/player-blocks.service";
 import { chatThreadKey } from "src/notifications/push/notification-delivery";
 import { SystemSettingName } from "src/system/enums/SystemSettingName";
-import { parseDirectRoomId } from "./utilities/directRoomId";
+import { directRoomId, parseDirectRoomId } from "./utilities/directRoomId";
+import { ChatErrorCode } from "./enums/ChatErrorCode";
+import { ChatMessage, ChatMessageSource } from "./types/ChatMessage";
+import { ChatSendResult } from "./types/ChatSendResult";
+import { ChatDeleteResult } from "./types/ChatDeleteResult";
+import { ChatEditResult } from "./types/ChatEditResult";
+import { ChatReactions } from "./types/ChatReactions";
+import { ChatReactResult } from "./types/ChatReactResult";
+import { MatchChatArchiveEntry } from "./types/MatchChatArchiveEntry";
+import { MatchChatLog } from "./types/MatchChatLog";
+import { ChatAttachment } from "./types/ChatAttachment";
+import { ChatGif } from "./types/ChatGif";
+import {
+  ChatAttachmentClaim,
+  ChatAttachmentRow,
+  ChatAttachmentsService,
+} from "./chat-attachments.service";
+import { ChatGifsService } from "./chat-gifs.service";
+
+export interface ChatMessageMedia {
+  attachments?: unknown;
+  gif?: unknown;
+}
+
 @Injectable()
 export class ChatService {
   private redis: Redis;
@@ -32,11 +59,365 @@ export class ChatService {
     [ChatLobbyType.MatchTeam, 60 * 60],
     [ChatLobbyType.MatchMaking, 60 * 60],
     [ChatLobbyType.Draft, 60 * 60],
-    [ChatLobbyType.Tournament, 60 * 60 * 24],
+    [ChatLobbyType.Tournament, 60 * 60 * 24 * 7],
     [ChatLobbyType.Organizer, 60 * 60 * 24],
   ]);
 
   private static readonly DEFAULT_TTL = 60 * 60;
+
+  // Measured in UTF-16 code units, the same unit a textarea's maxlength counts.
+  public static readonly MAX_MESSAGE_LENGTH = 2000;
+
+  // What a relayed line is cut to in game. The game shows far less than a full
+  // website message, and 2000 characters of multibyte text can outgrow an rcon
+  // packet.
+  public static readonly RCON_MESSAGE_MAX_LENGTH = 240;
+
+  // How long an author may edit or delete what they sent from the website.
+  public static readonly SELF_SERVICE_WINDOW_MS = 600_000;
+
+  // A room message carries the clock of whichever pod stored it, and another
+  // pod may be the one judging the window.
+  private static readonly SELF_SERVICE_CLOCK_SKEW_MS = 5_000;
+
+  private static readonly EDIT_ATTEMPTS = 3;
+
+  // HSET drops a field's expiry, so the absolute expiry is read first and put
+  // back: an edit never extends a message's life. Comparing against the value
+  // that was read and checked keeps an edit from bringing back a message that
+  // expired or was deleted in the meantime, or from overwriting another edit.
+  //
+  // KEYS[2] is a receipt for this one attempt. ioredis resends a command whose
+  // reply was lost to a reconnect, seconds later, by which time the message may
+  // have been deleted or edited again; the receipt is what tells that resend it
+  // already applied, rather than reading as a failed swap and discarding the
+  // audit row of an edit that happened.
+  private static readonly EDIT_ROOM_MESSAGE_SCRIPT = `
+    if redis.call('EXISTS', KEYS[2]) == 1 then
+      return 1
+    end
+    if redis.call('HGET', KEYS[1], ARGV[1]) ~= ARGV[2] then
+      return 0
+    end
+    local expiresAt = redis.call('HPEXPIRETIME', KEYS[1], 'FIELDS', 1, ARGV[1])[1]
+    redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+    if expiresAt > 0 then
+      redis.call('HPEXPIREAT', KEYS[1], expiresAt, 'FIELDS', 1, ARGV[1])
+    end
+    redis.call('SET', KEYS[2], '1', 'PX', ARGV[4])
+    return 1
+  `;
+
+  private static readonly EDIT_RECEIPT_TTL_MS = 60 * 60 * 1000;
+
+  // One step, so an edit, a delete or a reaction in the old room lands either
+  // before the move and is carried with it, or after it and finds nothing --
+  // never on a copy that is about to be thrown away or written back.
+  //
+  // A room TTL of 0 drops a moved message at once, and its reactions must not
+  // then be left behind with no expiry at all.
+  private static readonly MOVE_ROOM_MESSAGES_SCRIPT = `
+    local messages = redis.call('HGETALL', KEYS[1])
+    for i = 1, #messages, 2 do
+      redis.call('HSET', KEYS[2], messages[i], messages[i + 1])
+      redis.call('HEXPIRE', KEYS[2], ARGV[1], 'FIELDS', 1, messages[i])
+      local reactions = redis.call('HGET', KEYS[3], messages[i])
+      local expiresAt = redis.call('HPEXPIRETIME', KEYS[2], 'FIELDS', 1, messages[i])[1]
+      if reactions and expiresAt ~= -2 then
+        redis.call('HSET', KEYS[4], messages[i], reactions)
+        if expiresAt > 0 then
+          redis.call('HPEXPIREAT', KEYS[4], expiresAt, 'FIELDS', 1, messages[i])
+        end
+      end
+    end
+    redis.call('DEL', KEYS[1], KEYS[3])
+    return messages
+  `;
+
+  // The web maps each id to its glyph; laugh is 😂.
+  public static readonly REACTIONS = [
+    "thumbsup",
+    "heart",
+    "laugh",
+    "fire",
+    "wow",
+    "sad",
+    "thumbsdown",
+    "skull",
+    "sob",
+    "rofl",
+    "angry",
+    "thinking",
+    "eyes",
+    "hundred",
+    "target",
+    "clap",
+    "pray",
+    "handshake",
+    "tada",
+    "cool",
+    "salute",
+    "muscle",
+    "goat",
+    "clown",
+  ] as const;
+
+  // Every toggle is a broadcast to the whole room, so this is what keeps one
+  // client from flooding everyone else in it.
+  public static readonly REACTION_RATE_LIMIT = 8;
+
+  private static readonly REACTION_RATE_WINDOW_MS = 1_000;
+
+  // Counted across every room: a web message accepted into a match room is
+  // also an RCON command to its game server.
+  public static readonly MESSAGE_RATE_LIMIT = 5;
+
+  private static readonly MESSAGE_RATE_WINDOW_MS = 3_000;
+
+  private static readonly RATE_SCRIPT = `
+    local count = redis.call('INCR', KEYS[1])
+    if count == 1 then
+      redis.call('PEXPIRE', KEYS[1], ARGV[1])
+    end
+    return count
+  `;
+
+  // Reactions live beside the messages rather than inside their JSON, so they
+  // never contend with an edit's compare-and-set. A message that is gone gets
+  // none: they would outlive it with no expiry. HSET drops the field's expiry,
+  // so the reactions are given the message's own, and go when it does.
+  //
+  // KEYS[3] is a receipt for this one toggle: ioredis resends a command whose
+  // reply was lost to a reconnect, and a toggle run twice undoes itself.
+  // ARGV[4] = '1' allows only taking a reaction back (a gagged player), and
+  // 0 is the answer when this toggle would have added one.
+  private static readonly TOGGLE_ROOM_REACTION_SCRIPT = `
+    if redis.call('EXISTS', KEYS[3]) == 1 then
+      return redis.call('HGET', KEYS[2], ARGV[1]) or '{}'
+    end
+    if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0 then
+      return false
+    end
+    local stored = redis.call('HGET', KEYS[2], ARGV[1])
+    local reactions = {}
+    if stored then
+      reactions = cjson.decode(stored)
+    end
+    local reactors = {}
+    local removed = false
+    for _, steamId in ipairs(reactions[ARGV[2]] or {}) do
+      if steamId == ARGV[3] then
+        removed = true
+      else
+        table.insert(reactors, steamId)
+      end
+    end
+    if not removed then
+      if ARGV[4] == '1' then
+        return 0
+      end
+      table.insert(reactors, ARGV[3])
+    end
+    if #reactors == 0 then
+      reactions[ARGV[2]] = nil
+    else
+      reactions[ARGV[2]] = reactors
+    end
+    redis.call('SET', KEYS[3], '1', 'PX', ARGV[5])
+    if next(reactions) == nil then
+      redis.call('HDEL', KEYS[2], ARGV[1])
+      return '{}'
+    end
+    local encoded = cjson.encode(reactions)
+    redis.call('HSET', KEYS[2], ARGV[1], encoded)
+    local expiresAt = redis.call('HPEXPIRETIME', KEYS[1], 'FIELDS', 1, ARGV[1])[1]
+    if expiresAt > 0 then
+      redis.call('HPEXPIREAT', KEYS[2], expiresAt, 'FIELDS', 1, ARGV[1])
+    end
+    return encoded
+  `;
+
+  private static readonly REACTION_RECEIPT_TTL_MS = 5 * 60 * 1000;
+
+  // Each direct message's reactions as one object, for a query that has the
+  // message as `dm`.
+  private static readonly DIRECT_MESSAGE_REACTIONS = `LEFT JOIN LATERAL (
+            SELECT jsonb_object_agg(grouped.reaction, grouped.steam_ids)
+                     AS reactions
+              FROM (
+                SELECT r.reaction,
+                       jsonb_agg(r.steam_id::text
+                                 ORDER BY r.created_at, r.steam_id)
+                         AS steam_ids
+                  FROM public.direct_message_reactions r
+                 WHERE r.message_id = dm.id
+                 GROUP BY r.reaction
+              ) grouped
+          ) reactions ON true`;
+
+  // Shared by every direct message edit and delete, so the author and window
+  // are judged in the same statement that changes the row, on the database's
+  // clock -- the one created_at was stamped with.
+  private static readonly OWN_RECENT_DIRECT_MESSAGE = `id = $1::uuid
+          AND room_id = $2
+          AND from_steam_id = $3::bigint
+          AND created_at > now() - make_interval(secs => $4::int)`;
+
+  // The web keeps the room's tab open for the same window.
+  public static readonly FINISHED_TOURNAMENT_CHAT_DAYS = 7;
+
+  // A drafted free agent is on a roster and gets in that way; withdrawn means
+  // they left the pool.
+  private static readonly TOURNAMENT_CHAT_FREE_AGENT_STATUSES: e_tournament_free_agent_statuses_enum[] =
+    ["registered", "waitlisted"];
+
+  // Every match and team room line is copied here for staff to review after
+  // the live rooms, which keep their own short lifetime, have expired. It is
+  // no lobby type, so nothing can join it; the chat log is the only way in.
+  // Bookkeeping lives in the same hash under fields starting with "~", which a
+  // message id (a uuid) never does.
+  public static readonly MATCH_CHAT_ARCHIVE_TTL = 60 * 60 * 24 * 7;
+
+  public static MATCH_CHAT_ARCHIVE_MAX_ENTRIES = 5000;
+
+  public static MATCH_CHAT_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024;
+
+  public static readonly MATCH_CHAT_ARCHIVE_MAX_ENTRY_BYTES = 16 * 1024;
+
+  // Besides the original text, which is always kept.
+  private static readonly MATCH_CHAT_ARCHIVE_KEPT_EDITS = 4;
+
+  // Once the match has ended (~ended), a write no longer moves the expiry: the
+  // archive goes a week after the end however long people keep talking.
+  private static readonly ARCHIVE_APPEND_SCRIPT = `
+    if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 1 then
+      return 1
+    end
+    local count = tonumber(redis.call('HGET', KEYS[1], '~count') or '0')
+    local bytes = tonumber(redis.call('HGET', KEYS[1], '~bytes') or '0')
+    local stored = 0
+    if count >= tonumber(ARGV[3]) or bytes + #ARGV[2] > tonumber(ARGV[4]) then
+      redis.call('HSET', KEYS[1], '~truncated', '1')
+    else
+      redis.call('HSET', KEYS[1], ARGV[1], ARGV[2],
+        '~count', count + 1, '~bytes', bytes + #ARGV[2])
+      stored = 1
+    end
+    if redis.call('HEXISTS', KEYS[1], '~ended') == 0 then
+      redis.call('EXPIRE', KEYS[1], ARGV[5])
+    end
+    return stored
+  `;
+
+  // One step, so an edit and a moderator's delete landing together both
+  // survive. An edit no newer than the entry's own is a resend or arrived out
+  // of order, and is dropped. The original text stays first; the oldest of the
+  // rest go when there are too many or the entry outgrows its byte cap, and if
+  // the original and the latest alone are still too big, the original is cut.
+  // Past the archive's own cap only the original is kept besides the edit.
+  private static readonly ARCHIVE_EDIT_SCRIPT = `
+    local raw = redis.call('HGET', KEYS[1], ARGV[1])
+    if not raw then
+      return 0
+    end
+    local entry = cjson.decode(raw)
+    if type(entry.edited_at) == 'string' and entry.edited_at >= ARGV[3] then
+      return 0
+    end
+    local marker = ' [truncated]'
+    local function cut(text, keep)
+      if text:sub(-#marker) == marker then
+        text = text:sub(1, -#marker - 1)
+      end
+      while keep > 0 do
+        local byte = text:byte(keep + 1)
+        if byte == nil or byte < 128 or byte >= 192 then
+          break
+        end
+        keep = keep - 1
+      end
+      return text:sub(1, keep) .. marker
+    end
+    local edits = entry.edits
+    if type(edits) ~= 'table' then
+      edits = {}
+    end
+    local writtenAt = entry.edited_at
+    if type(writtenAt) ~= 'string' then
+      writtenAt = entry.timestamp
+    end
+    table.insert(edits, { message = entry.message, written_at = writtenAt })
+    while #edits > tonumber(ARGV[4]) + 1 do
+      table.remove(edits, 2)
+    end
+    entry.edits = edits
+    entry.message = ARGV[2]
+    entry.edited_at = ARGV[3]
+    local encoded = cjson.encode(entry)
+    while #encoded > tonumber(ARGV[5]) and #entry.edits > 1 do
+      table.remove(entry.edits, 2)
+      encoded = cjson.encode(entry)
+    end
+    local tries = 0
+    while #encoded > tonumber(ARGV[5]) and tries < 32 do
+      tries = tries + 1
+      local original = entry.edits[1]
+      if #original.message > 64 then
+        original.message = cut(original.message, math.floor(#original.message / 2))
+      else
+        entry.message = cut(entry.message, math.floor(#entry.message / 2))
+      end
+      encoded = cjson.encode(entry)
+    end
+    local bytes = tonumber(redis.call('HGET', KEYS[1], '~bytes') or '0')
+    if bytes + #encoded - #raw > tonumber(ARGV[6]) then
+      redis.call('HSET', KEYS[1], '~truncated', '1')
+      entry.edits = { entry.edits[1] }
+      entry.history_truncated = true
+      encoded = cjson.encode(entry)
+      if bytes + #encoded - #raw > tonumber(ARGV[6]) then
+        return 0
+      end
+    end
+    redis.call('HSET', KEYS[1], ARGV[1], encoded,
+      '~bytes', bytes + #encoded - #raw)
+    return 1
+  `;
+
+  private static readonly ARCHIVE_DELETE_SCRIPT = `
+    local raw = redis.call('HGET', KEYS[1], ARGV[1])
+    if not raw then
+      return 0
+    end
+    local entry = cjson.decode(raw)
+    entry.deleted_at = ARGV[2]
+    entry.deleted_by = { steam_id = ARGV[3], name = ARGV[4] }
+    local encoded = cjson.encode(entry)
+    local bytes = tonumber(redis.call('HGET', KEYS[1], '~bytes') or '0')
+    redis.call('HSET', KEYS[1], ARGV[1], encoded,
+      '~bytes', bytes + #encoded - #raw)
+    return 1
+  `;
+
+  private static readonly ARCHIVE_ANCHOR_SCRIPT = `
+    redis.call('HSET', KEYS[1], '~ended', '1')
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+    return 1
+  `;
+
+  private static readonly ARCHIVE_REOPEN_SCRIPT = `
+    redis.call('HDEL', KEYS[1], '~ended')
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+    return 1
+  `;
+
+  private static readonly MATCH_CHAT_LOG_STATUSES: e_match_status_enum[] = [
+    "Finished",
+    "Tie",
+    "Canceled",
+    "Forfeit",
+    "Surrendered",
+  ];
 
   // Which setting governs which room's lifetime, and what it falls back to.
   // Read from system/ on boot and whenever a setting changes, so there is one
@@ -69,7 +450,7 @@ export class ChatService {
     {
       setting: SystemSettingName.ChatTtlTournament,
       type: ChatLobbyType.Tournament,
-      fallback: 60 * 60 * 24,
+      fallback: 60 * 60 * 24 * 7,
     },
     {
       setting: SystemSettingName.ChatTtlOrganizers,
@@ -78,13 +459,21 @@ export class ChatService {
     },
   ];
 
+  // Each update carries the message's whole reaction state, and the per
+  // recipient block lookup can finish out of order, so a room's updates wait
+  // for the one before them rather than letting an older state land last.
+  private readonly reactionBroadcasts = new Map<string, Promise<void>>();
+
   constructor(
     private readonly logger: Logger,
     private readonly rcon: RconService,
     private readonly hasuraService: HasuraService,
     private readonly postgres: PostgresService,
     private readonly redisManager: RedisManagerService,
-    private readonly notifications: NotificationsService,
+    private readonly pushNotifications: PushNotificationsService,
+    private readonly playerBlocks: PlayerBlocksService,
+    private readonly attachments: ChatAttachmentsService,
+    private readonly gifs: ChatGifsService,
   ) {
     this.redis = this.redisManager.getConnection();
   }
@@ -120,6 +509,10 @@ export class ChatService {
       client.id,
     );
 
+    client.on("close", () => {
+      void this.removeFromLobby(type, id, client);
+    });
+
     if (added === 1 && count === 1) {
       void this.to(type, id, "joined", {
         user: {
@@ -148,14 +541,24 @@ export class ChatService {
         event: `lobby:${type}:${id}:messages`,
         data: {
           id,
-          messages: await this.getMessages(type, id),
+          messages: await this.historyFor(type, id, String(user.steam_id)),
         },
       }),
     );
+  }
 
-    client.on("close", () => {
-      void this.removeFromLobby(type, id, client);
-    });
+  // Judged on the database's clock, the one finished_at was stamped with. A
+  // tournament finished before finished_at existed has none and stays closed.
+  private async isTournamentChatOpen(id: string): Promise<boolean> {
+    const [row] = await this.postgres.query<Array<{ chat_open: boolean }>>(
+      `SELECT (status <> 'Finished'
+               OR finished_at > now() - make_interval(days => $2::int)) AS chat_open
+         FROM public.tournaments
+        WHERE id = $1::uuid`,
+      [id, ChatService.FINISHED_TOURNAMENT_CHAT_DAYS],
+    );
+
+    return row?.chat_open === true;
   }
 
   // Who is allowed in a room at all.
@@ -189,10 +592,13 @@ export class ChatService {
           return false;
         }
 
+        // Truthiness, not `=== false`: is_match_organizer is NULL rather than
+        // false for a match with no organizer (every matchmaking match), and a
+        // strict comparison let anyone signed in into those rooms.
         if (
-          matches_by_pk.is_coach === false &&
-          matches_by_pk.is_in_lineup === false &&
-          matches_by_pk.is_organizer === false
+          !matches_by_pk.is_coach &&
+          !matches_by_pk.is_in_lineup &&
+          !matches_by_pk.is_organizer
         ) {
           return false;
         }
@@ -283,6 +689,18 @@ export class ChatService {
                         ],
                       },
                     },
+                    {
+                      // Nobody is on a roster until the draft runs, so in a
+                      // free agent tournament this is everyone who signed up.
+                      free_agents: {
+                        player_steam_id: {
+                          _eq: user.steam_id,
+                        },
+                        status: {
+                          _in: ChatService.TOURNAMENT_CHAT_FREE_AGENT_STATUSES,
+                        },
+                      },
+                    },
                   ],
                 },
               },
@@ -293,6 +711,10 @@ export class ChatService {
         );
 
         if (tournaments.length === 0) {
+          return false;
+        }
+
+        if (!(await this.isTournamentChatOpen(id))) {
           return false;
         }
         break;
@@ -336,6 +758,13 @@ export class ChatService {
           return false;
         }
 
+        // Anything else names the same pair under a room id that nothing
+        // keyed on the canonical one -- the block trigger, the rail's filter
+        // -- would ever match.
+        if (id !== directRoomId(parties[0], parties[1])) {
+          return false;
+        }
+
         // Being one of the two parties is not on its own an authorization:
         // anyone can build the id for any pair of steam ids, since it is just
         // their sorted pair. The friendship is the only thing standing between
@@ -373,6 +802,15 @@ export class ChatService {
           return false;
         }
 
+        if (
+          await this.playerBlocks.isBlockedEitherWay(
+            String(user.steam_id),
+            otherSteamId,
+          )
+        ) {
+          return false;
+        }
+
         break;
       }
       default:
@@ -383,6 +821,80 @@ export class ChatService {
     return true;
   }
 
+  // Hiding is one-directional: what the viewer blocked is left out, what
+  // blocked the viewer is not, so nothing here tells anyone they were blocked.
+  private async historyFor(
+    type: ChatLobbyType,
+    id: string,
+    viewer: string,
+  ): Promise<ChatMessage[]> {
+    const [messages, blocked] = await Promise.all([
+      this.getMessages(type, id),
+      this.playerBlocks.blockedBy(viewer, ChatService.blockExemptRoles(type)),
+    ]);
+
+    return ChatService.withoutBlocked(messages, blocked);
+  }
+
+  // A moderator has to see a group room whole to moderate it. A DM is not
+  // moderated, so a block closes it for them like for anyone.
+  private static blockExemptRoles(
+    type: ChatLobbyType,
+  ): Array<e_player_roles_enum> {
+    return type === ChatLobbyType.Direct ? [] : rolesAtOrAbove("moderator");
+  }
+
+  private static withoutBlocked(
+    messages: ChatMessage[],
+    blocked: Set<string> | undefined,
+  ): ChatMessage[] {
+    if (!blocked || blocked.size === 0) {
+      return messages;
+    }
+
+    return messages
+      .filter((message) => !blocked.has(ChatService.authorSteamId(message)))
+      .map((message) => ({
+        ...message,
+        reactions: ChatService.withoutReactors(message.reactions, blocked),
+      }));
+  }
+
+  private static withoutReactors(
+    reactions: ChatReactions | undefined,
+    blocked: Set<string> | undefined,
+  ): ChatReactions {
+    if (!blocked || blocked.size === 0) {
+      return reactions ?? {};
+    }
+
+    return ChatService.orderedReactions(
+      Object.fromEntries(
+        Object.entries(reactions ?? {}).map(([reaction, steamIds]) => [
+          reaction,
+          steamIds.filter((steamId) => !blocked.has(steamId)),
+        ]),
+      ),
+    );
+  }
+
+  private static reactorsOf(reactions: ChatReactions | undefined): string[] {
+    return [...new Set(Object.values(reactions ?? {}).flat())];
+  }
+
+  private static peopleIn(messages: ChatMessage[]): string[] {
+    return [
+      ...new Set(
+        messages
+          .flatMap((message) => [
+            ChatService.authorSteamId(message),
+            ...ChatService.reactorsOf(message.reactions),
+          ])
+          .filter((steamId): steamId is string => steamId !== null),
+      ),
+    ];
+  }
+
   // A room's history, from whichever store holds it. DMs are durable and live
   // in postgres; every other room is redis behind its own TTL.
   private async getMessages(type: ChatLobbyType, id: string) {
@@ -390,14 +902,50 @@ export class ChatService {
       return await this.getDirectMessages(id);
     }
 
-    const messagesObject = await this.redis.hgetall(`chat_${type}_${id}`);
+    return await this.getRoomMessages(type, id);
+  }
 
-    return Object.values(messagesObject)
-      .map((value) => JSON.parse(value))
+  // Both hashes are asked for at once, so this is still one round trip. A
+  // reaction landing between the two reads is harmless: the room is sent the
+  // message's whole reaction state every time one changes.
+  private async getRoomMessages(
+    type: ChatLobbyType,
+    id: string,
+  ): Promise<ChatMessage[]> {
+    const [messages, reactions] = await Promise.all([
+      this.redis.hgetall(`chat_${type}_${id}`),
+      this.redis.hgetall(ChatService.reactionsKey(type, id)),
+    ]);
+
+    return Object.entries(messages)
+      .map(
+        ([messageId, value]): ChatMessage => ({
+          ...(JSON.parse(value) as ChatMessage),
+          reactions: ChatService.orderedReactions(
+            reactions[messageId] ? JSON.parse(reactions[messageId]) : null,
+          ),
+        }),
+      )
       .sort(
         (a, b) =>
           new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
       );
+  }
+
+  // The stores keep reactions in whatever order they like (a Lua table's,
+  // jsonb's by key length), so clients are always handed the list's order.
+  private static orderedReactions(
+    state: ChatReactions | null | undefined,
+  ): ChatReactions {
+    return Object.fromEntries(
+      ChatService.REACTIONS.filter(
+        (reaction) => (state?.[reaction]?.length ?? 0) > 0,
+      ).map((reaction) => [reaction, state[reaction]]),
+    );
+  }
+
+  private static reactionsKey(type: ChatLobbyType, id: string) {
+    return `chat_reactions_${type}_${id}`;
   }
 
   private async refreshClientUser(client: FiveStackWebSocketClient) {
@@ -495,76 +1043,324 @@ export class ChatService {
     );
   }
 
+  // What a player typed on the website, or why it cannot be sent. Lines relayed
+  // from the game are not held to this: the game has already limited them.
+  // A message carrying files or a GIF needs no text.
+  public static messageText(
+    raw: unknown,
+    allowEmpty = false,
+  ): { text: string } | { error: ChatErrorCode } {
+    if (allowEmpty && (raw === undefined || raw === null)) {
+      return { text: "" };
+    }
+
+    if (typeof raw !== "string") {
+      return { error: ChatErrorCode.Invalid };
+    }
+
+    const text = raw.trim();
+
+    if (text.length === 0 && !allowEmpty) {
+      return { error: ChatErrorCode.Invalid };
+    }
+
+    if (text.length > ChatService.MAX_MESSAGE_LENGTH) {
+      return { error: ChatErrorCode.TooLong };
+    }
+
+    return { text: ChatService.wellFormed(text) };
+  }
+
+  // A lone UTF-16 surrogate survives JSON.stringify as an escape that Redis's
+  // cjson refuses to decode, so a line carrying one could never be edited or
+  // deleted in the archive.
+  private static wellFormed(text: string): string {
+    return text.replace(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+      "\uFFFD",
+    );
+  }
+
+  public static hasMedia(media?: ChatMessageMedia): boolean {
+    return (
+      (Array.isArray(media?.attachments) && media.attachments.length > 0) ||
+      (media?.gif !== undefined && media?.gif !== null)
+    );
+  }
+
+  // The ids of files the composer uploaded, or a GIPHY GIF -- never both, and
+  // never more than a message holds.
+  public static messageMedia(
+    media?: ChatMessageMedia,
+  ):
+    | { attachmentIds: string[]; gif: ChatGif | null }
+    | { error: ChatErrorCode } {
+    const raw = media?.attachments ?? [];
+    const hasGif = media?.gif !== undefined && media?.gif !== null;
+
+    if (!Array.isArray(raw)) {
+      return { error: ChatErrorCode.Invalid };
+    }
+
+    if (
+      raw.length > ChatAttachmentsService.MAX_PER_MESSAGE ||
+      raw.some((id) => typeof id !== "string" || !ChatService.UUID.test(id))
+    ) {
+      return { error: ChatErrorCode.Invalid };
+    }
+
+    // Postgres hands ids back lowercase, and the claim matches on them.
+    const ids = (raw as string[]).map((id) => id.toLowerCase());
+
+    if (new Set(ids).size !== ids.length) {
+      return { error: ChatErrorCode.Invalid };
+    }
+
+    if (!hasGif) {
+      return { attachmentIds: ids, gif: null };
+    }
+
+    const gif = ChatGifsService.gif(media.gif);
+
+    if (!gif || raw.length > 0) {
+      return { error: ChatErrorCode.Invalid };
+    }
+
+    return { attachmentIds: [], gif };
+  }
+
+  // What a push says for a message: its text, or what it carries when there
+  // is none.
+  public static previewText(
+    text: string,
+    attachments: number,
+    gif: boolean,
+  ): string {
+    if (text) {
+      return text;
+    }
+
+    if (gif) {
+      return "GIF";
+    }
+
+    return attachments === 1 ? "Attachment" : `${attachments} attachments`;
+  }
+
   public async sendMessageToChat(
     type: ChatLobbyType,
     id: string,
     player: User,
     _message: string,
     skipCheck = false,
-  ) {
-    // verify they are in the lobby
-    if (skipCheck === false) {
-      const userData = await this.getUserData(type, id, player.steam_id);
-      if (!userData) {
-        return;
+    source: ChatMessageSource = "web",
+    _media?: ChatMessageMedia,
+  ): Promise<ChatSendResult> {
+    let text = _message;
+    let attachmentIds: string[] = [];
+    let gif: ChatGif | null = null;
+
+    if (source === "web") {
+      const media = ChatService.messageMedia(_media);
+
+      if ("error" in media) {
+        return { accepted: false, code: media.error };
+      }
+
+      attachmentIds = media.attachmentIds;
+      gif = media.gif;
+
+      const parsed = ChatService.messageText(
+        _message,
+        attachmentIds.length > 0 || gif !== null,
+      );
+
+      if ("error" in parsed) {
+        return { accepted: false, code: parsed.error };
       }
 
       if (
-        type === ChatLobbyType.Draft &&
-        !(await this.canSendDraftMessage(id, player))
+        !(await this.withinRate(
+          `chat:message-rate:${player.steam_id}`,
+          ChatService.MESSAGE_RATE_LIMIT,
+          ChatService.MESSAGE_RATE_WINDOW_MS,
+        ))
       ) {
-        return;
+        return { accepted: false, code: ChatErrorCode.RateLimited };
       }
+
+      text = parsed.text;
+    }
+
+    const hasMedia = attachmentIds.length > 0 || gif !== null;
+
+    if (hasMedia && !ChatAttachmentsService.allowsAttachments(type)) {
+      return { accepted: false, code: ChatErrorCode.NotAllowed };
+    }
+
+    if (skipCheck === false && !(await this.canPostIn(type, id, player))) {
+      return { accepted: false, code: ChatErrorCode.NotAllowed };
+    }
+
+    // The game server already enforces a gag on what is typed in game, and a
+    // gag is a sanction on group chat -- a conversation between friends is left
+    // alone.
+    if (
+      source === "web" &&
+      type !== ChatLobbyType.Direct &&
+      (await this.isGagged(player.steam_id))
+    ) {
+      return { accepted: false, code: ChatErrorCode.Gagged };
+    }
+
+    if (gif && !(await this.gifs.enabled())) {
+      return { accepted: false, code: ChatErrorCode.NotAllowed };
     }
 
     const name = await this.redis.get(
       HasuraService.PLAYER_NAME_CACHE_KEY(player.steam_id),
     );
 
-    const role: e_player_roles_enum = (await this.redis.get(
+    const role = await this.redis.get(
       HasuraService.PLAYER_ROLE_CACHE_KEY(player.steam_id),
-    )) as unknown as e_player_roles_enum;
+    );
 
     const timestamp = new Date();
-    const message = {
+    const message: ChatMessage = {
       // Both the history snapshot sent on join and the live broadcast carry the
       // message, so clients need something stable to recognize it by.
       id: randomUUID(),
-      message: _message,
+      message: text,
       timestamp: timestamp.toISOString(),
+      source,
       from: {
-        role: name ? JSON.parse(role) : player.role,
-        name: name ? JSON.parse(name) : player.name,
-        steam_id: player.steam_id,
+        role: ChatService.cachedOr<e_player_roles_enum>(role, player.role),
+        name: ChatService.cachedOr(name, player.name),
+        steam_id: String(player.steam_id),
         avatar_url: player.avatar_url,
         profile_url: player.profile_url,
       },
+      ...(gif ? { gif } : {}),
+    };
+
+    const claim = {
+      type,
+      roomId: id,
+      steamId: String(player.steam_id),
+      messageId: message.id,
+      expiresAt: ChatAttachmentsService.expiresOnSend(
+        type,
+        this.ttlFor(type),
+        timestamp,
+      ),
     };
 
     if (type === ChatLobbyType.Direct) {
-      await this.storeDirectMessage(id, message);
+      const refusal = await this.storeDirectMessage(
+        id,
+        message,
+        attachmentIds,
+        claim,
+      );
+
+      if (refusal) {
+        return {
+          accepted: false,
+          code: await this.claimRefusal(refusal, attachmentIds, claim),
+        };
+      }
     } else {
       const messageKey = `chat_${type}_${id}`;
-      // Keyed by id and not `${steam_id}:${now}`, which silently dropped a
-      // message when the same player landed two within the same millisecond.
-      const messageField = message.id;
-      await this.redis.hset(messageKey, messageField, JSON.stringify(message));
 
-      await this.redis.sendCommand(
-        new Redis.Command("HEXPIRE", [
+      const store = async () => {
+        // Keyed by id and not `${steam_id}:${now}`, which silently dropped a
+        // message when the same player landed two within the same millisecond.
+        const messageField = message.id;
+        await this.redis.hset(
           messageKey,
-          this.ttlFor(type),
-          "FIELDS",
-          1,
           messageField,
-        ]),
-      );
+          JSON.stringify(message),
+        );
+
+        await this.redis.sendCommand(
+          new Redis.Command("HEXPIRE", [
+            messageKey,
+            this.ttlFor(type),
+            "FIELDS",
+            1,
+            messageField,
+          ]),
+        );
+      };
+
+      if (attachmentIds.length > 0) {
+        // The claim commits only once the message is stored, so a write that
+        // fails gives the files back rather than binding them to nothing. The
+        // message goes in first, so whatever fails after it -- its expiry, the
+        // commit -- takes it back out again.
+        let written = false;
+        let refused: boolean;
+
+        try {
+          refused = await this.postgres.transaction(async (client) => {
+            const claimed = await this.attachments.claim(
+              attachmentIds,
+              claim,
+              client,
+            );
+
+            if (!claimed) {
+              return true;
+            }
+
+            message.attachments = claimed;
+            written = true;
+            await store();
+
+            return false;
+          });
+        } catch (error) {
+          if (written) {
+            await this.redis.hdel(messageKey, message.id).catch(() => {
+              this.logger.warn(
+                `unable to take back ${type}:${id} message ${message.id}`,
+              );
+            });
+          }
+
+          throw error;
+        }
+
+        if (refused) {
+          return {
+            accepted: false,
+            code: await this.claimRefusal(
+              ChatErrorCode.Invalid,
+              attachmentIds,
+              claim,
+            ),
+          };
+        }
+      } else {
+        await store();
+      }
     }
 
-    void this.to(type, id, "chat", message);
+    const outgoing: ChatMessage = { ...message, reactions: {} };
+
+    void this.to(type, id, "chat", outgoing, message.from.steam_id).catch(
+      (error) => {
+        this.logger.warn(
+          `unable to broadcast a message to ${type}:${id}`,
+          error,
+        );
+      },
+    );
+
+    await this.archiveMessages(type, id, () => [message]);
 
     if (type === ChatLobbyType.Direct) {
-      void this.deliverDirectMessage(id, player, message);
+      void this.deliverDirectMessage(id, player, outgoing);
     }
 
     // Best effort, and never allowed to take a message delivery down with it.
@@ -573,12 +1369,943 @@ export class ChatService {
       id,
       player,
       message.from.name,
-      _message,
-    ).catch(
-      (error) => {
-        this.logger.warn(`unable to notify ${type}:${id} of a message`, error);
-      },
+      ChatService.previewText(
+        text,
+        message.attachments?.length ?? 0,
+        !!message.gif,
+      ),
+      message.id,
+    ).catch((error) => {
+      this.logger.warn(`unable to notify ${type}:${id} of a message`, error);
+    });
+
+    return { accepted: true, messageId: message.id };
+  }
+
+  // Presence in the room only says someone joined it once: it lives in redis
+  // for a day, is refreshed by anyone else joining, and the game server seats
+  // whoever connects. Membership lapses underneath it -- a player swapped out
+  // of a live match, a free agent who withdrew, an unfriend -- so every send is
+  // held to the same rule as joining. Draft has its own, stricter once the
+  // match has been drafted.
+  private async canPostIn(
+    type: ChatLobbyType,
+    id: string,
+    user: User,
+  ): Promise<boolean> {
+    if (!(await this.getUserData(type, id, user.steam_id))) {
+      return false;
+    }
+
+    if (type === ChatLobbyType.Draft) {
+      return await this.canSendDraftMessage(id, user);
+    }
+
+    return await this.canAccessLobby(type, id, user);
+  }
+
+  private async isGagged(steamId: string): Promise<boolean> {
+    const [row] = await this.postgres.query<Array<{ gagged: boolean }>>(
+      `SELECT public.is_gagged(p) AS gagged
+         FROM public.players p
+        WHERE p.steam_id = $1::bigint`,
+      [String(steamId)],
     );
+
+    return row?.gagged === true;
+  }
+
+  private static readonly UUID =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  private static readonly ATTACHMENT_ACCESS_TTL_SECONDS = 60;
+
+  // Whether a player may start uploading into a room: the same rule as
+  // sending to it, so nothing is uploaded that could never be sent.
+  public async attachmentRefusal(
+    type: ChatLobbyType,
+    id: string,
+    user: User,
+  ): Promise<ChatErrorCode | null> {
+    if (!ChatAttachmentsService.allowsAttachments(type)) {
+      return ChatErrorCode.NotAllowed;
+    }
+
+    const current = await this.getCurrentUser(String(user.steam_id));
+
+    if (!current || !(await this.canPostIn(type, id, current))) {
+      return ChatErrorCode.NotAllowed;
+    }
+
+    if (
+      type !== ChatLobbyType.Direct &&
+      (await this.isGagged(current.steam_id))
+    ) {
+      return ChatErrorCode.Gagged;
+    }
+
+    return null;
+  }
+
+  // A send whose answer never arrived is retried with the same files. The
+  // first one landed, so the retry is told so rather than that it failed.
+  private async claimRefusal(
+    refusal: ChatErrorCode,
+    attachmentIds: string[],
+    claim: ChatAttachmentClaim,
+  ): Promise<ChatErrorCode> {
+    if (
+      refusal === ChatErrorCode.Invalid &&
+      attachmentIds.length > 0 &&
+      (await this.attachments.sentBy(attachmentIds, claim))
+    ) {
+      return ChatErrorCode.AlreadySent;
+    }
+
+    return refusal;
+  }
+
+  // Judged on who the player is now, not on the role their session was
+  // signed in with.
+  public async canViewAttachment(
+    row: ChatAttachmentRow,
+    sessionUser: User | undefined,
+  ): Promise<boolean> {
+    if (!sessionUser?.steam_id) {
+      return false;
+    }
+
+    const current = await this.attachmentViewer(String(sessionUser.steam_id));
+
+    if (!current) {
+      return false;
+    }
+
+    return await ChatAttachmentsService.canView(row, current, () =>
+      this.canViewRoom(row.room_type, row.room_id, current),
+    );
+  }
+
+  // The row is read fresh on every request, so a deleted file goes dark at
+  // once; who the viewer is only changes with their role, and is kept for the
+  // same minute as their room access.
+  private async attachmentViewer(steamId: string): Promise<User | undefined> {
+    const cacheKey = `chat:attachment-viewer:${steamId}`;
+    const cached = await this.redis.get(cacheKey);
+
+    if (cached !== null) {
+      return JSON.parse(cached) as User;
+    }
+
+    const current = await this.getCurrentUser(steamId);
+
+    if (current) {
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(current),
+        "EX",
+        ChatService.ATTACHMENT_ACCESS_TTL_SECONDS,
+      );
+    }
+
+    return current;
+  }
+
+  // Asked for every image and every range of a video, so the answer is kept
+  // for a minute rather than going back to hasura each time.
+  private async canViewRoom(
+    type: ChatLobbyType,
+    id: string,
+    user: User,
+  ): Promise<boolean> {
+    const cacheKey = `chat:attachment-access:${user.steam_id}:${type}:${id}`;
+    const cached = await this.redis.get(cacheKey);
+
+    if (cached !== null) {
+      return cached === "1";
+    }
+
+    const allowed = await this.canAccessLobby(type, id, user);
+
+    await this.redis.set(
+      cacheKey,
+      allowed ? "1" : "0",
+      "EX",
+      ChatService.ATTACHMENT_ACCESS_TTL_SECONDS,
+    );
+
+    return allowed;
+  }
+
+  public async deleteMessage(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    user: User,
+  ): Promise<ChatDeleteResult> {
+    if (!ChatService.UUID.test(messageId)) {
+      return { deleted: false, code: ChatErrorCode.NotFound };
+    }
+
+    if (type === ChatLobbyType.Direct) {
+      return await this.deleteDirectMessage(id, messageId, user);
+    }
+
+    const current = await this.getCurrentUser(user.steam_id);
+
+    if (!current) {
+      return { deleted: false, code: ChatErrorCode.NotAllowed };
+    }
+
+    const messageKey = `chat_${type}_${id}`;
+    const raw = await this.redis.hget(messageKey, messageId);
+
+    if (!raw) {
+      return { deleted: false, code: ChatErrorCode.NotFound };
+    }
+
+    const message = JSON.parse(raw) as ChatMessage;
+
+    const refusal = await this.deleteRefusal(message, type, id, current);
+
+    if (refusal) {
+      return { deleted: false, code: refusal };
+    }
+
+    // Audited before it is removed, so no failure part way through can take a
+    // message down without its evidence. A retry finds the row and carries on.
+    // An author removing their own message is audited the same way, or posting
+    // abuse and deleting it would leave nothing behind.
+    await this.recordDeletion(type, id, messageId, message, current);
+
+    await this.redis.hdel(messageKey, messageId);
+
+    // Never allowed to stop the delete being announced: left behind, the
+    // reactions still expire with the message, and nothing reads reactions
+    // for a message that is gone.
+    await this.redis
+      .hdel(ChatService.reactionsKey(type, id), messageId)
+      .catch((error) => {
+        this.logger.warn(
+          `unable to clear reactions for ${type}:${id} message ${messageId}`,
+          error,
+        );
+      });
+
+    void this.to(type, id, "deleted", { id: messageId });
+
+    await this.updateArchivedMessage(
+      type,
+      id,
+      messageId,
+      ChatService.ARCHIVE_DELETE_SCRIPT,
+      new Date().toISOString(),
+      String(current.steam_id),
+      ChatService.wellFormed(current.name ?? ""),
+    );
+
+    await this.retractNotifications(type, id, messageId);
+
+    await this.removeAttachments(type, id, messageId);
+
+    return { deleted: true };
+  }
+
+  // A group room's files stay as evidence until they expire, hidden from the
+  // room; a direct message's go at once. Never allowed to fail the delete: a
+  // file left behind still expires, and the sweep takes it then.
+  private async removeAttachments(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+  ) {
+    const removal =
+      type === ChatLobbyType.Direct
+        ? this.attachments.expireMessage(type, id, messageId)
+        : this.attachments.markDeleted(type, id, messageId);
+
+    await removal.catch((error) => {
+      this.logger.warn(
+        `unable to remove the files of ${type}:${id} message ${messageId}`,
+        error,
+      );
+    });
+  }
+
+  private async deleteRefusal(
+    message: ChatMessage,
+    type: ChatLobbyType,
+    id: string,
+    user: User,
+  ): Promise<ChatErrorCode | null> {
+    if (!isRoleAbove(user.role, "moderator")) {
+      const refusal = ChatService.selfServiceRefusal(message, user);
+
+      if (refusal) {
+        return refusal;
+      }
+    }
+
+    if (!(await this.canAccessLobby(type, id, user))) {
+      return ChatErrorCode.NotAllowed;
+    }
+
+    return null;
+  }
+
+  // Only what the author typed on the website is theirs to change: a line
+  // relayed from the game, or one stored before `source` was recorded, is not.
+  // No role gets past this -- nobody edits another player's words.
+  private static selfServiceRefusal(
+    message: ChatMessage,
+    user: User,
+  ): ChatErrorCode | null {
+    if (
+      message.source !== "web" ||
+      ChatService.authorSteamId(message) !== String(user.steam_id)
+    ) {
+      return ChatErrorCode.NotAllowed;
+    }
+
+    const sentAt = new Date(message.timestamp).getTime();
+
+    if (
+      Number.isNaN(sentAt) ||
+      Date.now() - sentAt >
+        ChatService.SELF_SERVICE_WINDOW_MS +
+          ChatService.SELF_SERVICE_CLOCK_SKEW_MS
+    ) {
+      return ChatErrorCode.WindowClosed;
+    }
+
+    return null;
+  }
+
+  public async editMessage(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    user: User,
+    raw: unknown,
+  ): Promise<ChatEditResult> {
+    const parsed = ChatService.messageText(raw);
+
+    if ("error" in parsed) {
+      return { edited: false, code: parsed.error };
+    }
+
+    if (!ChatService.UUID.test(messageId)) {
+      return { edited: false, code: ChatErrorCode.NotFound };
+    }
+
+    if (
+      !(await this.withinRate(
+        `chat:edit-rate:${user.steam_id}`,
+        ChatService.MESSAGE_RATE_LIMIT,
+        ChatService.MESSAGE_RATE_WINDOW_MS,
+      ))
+    ) {
+      return { edited: false, code: ChatErrorCode.RateLimited };
+    }
+
+    if (type === ChatLobbyType.Direct) {
+      return await this.editDirectMessage(id, messageId, user, parsed.text);
+    }
+
+    const current = await this.getCurrentUser(user.steam_id);
+
+    if (!current) {
+      return { edited: false, code: ChatErrorCode.NotAllowed };
+    }
+
+    return await this.editRoomMessage(
+      type,
+      id,
+      messageId,
+      current,
+      parsed.text,
+    );
+  }
+
+  public static isReaction(
+    value: unknown,
+  ): value is (typeof ChatService.REACTIONS)[number] {
+    return (ChatService.REACTIONS as readonly unknown[]).includes(value);
+  }
+
+  // Never a notification and never relayed to the game: the room is sent the
+  // message's whole reaction state, so a client that missed a toggle is right
+  // again with the next one.
+  public async toggleReaction(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    reaction: unknown,
+    user: User,
+  ): Promise<ChatReactResult> {
+    if (!ChatService.isReaction(reaction)) {
+      return { toggled: false, code: ChatErrorCode.Invalid };
+    }
+
+    if (!ChatService.UUID.test(messageId)) {
+      return { toggled: false, code: ChatErrorCode.NotFound };
+    }
+
+    if (
+      !(await this.withinRate(
+        `chat:reaction-rate:${user.steam_id}`,
+        ChatService.REACTION_RATE_LIMIT,
+        ChatService.REACTION_RATE_WINDOW_MS,
+      ))
+    ) {
+      return { toggled: false, code: ChatErrorCode.RateLimited };
+    }
+
+    if (!(await this.canPostIn(type, id, user))) {
+      return { toggled: false, code: ChatErrorCode.NotAllowed };
+    }
+
+    const reactions =
+      type === ChatLobbyType.Direct
+        ? await this.toggleDirectReaction(id, messageId, reaction, user)
+        : await this.toggleRoomReaction(
+            type,
+            id,
+            messageId,
+            reaction,
+            user,
+            // Like deleting their own message, taking a reaction back is not
+            // speech, so a gag leaves it alone.
+            await this.isGagged(user.steam_id),
+          );
+
+    if (reactions === "gagged") {
+      return { toggled: false, code: ChatErrorCode.Gagged };
+    }
+
+    if (!reactions) {
+      return { toggled: false, code: ChatErrorCode.NotFound };
+    }
+
+    void this.broadcastReaction(type, id, messageId, reactions);
+
+    return { toggled: true, reactions };
+  }
+
+  private broadcastReaction(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    reactions: ChatReactions,
+  ): Promise<void> {
+    const room = `${type}:${id}`;
+
+    const broadcast = (this.reactionBroadcasts.get(room) ?? Promise.resolve())
+      .then(() => this.to(type, id, "reaction", { id: messageId, reactions }))
+      .catch((error) => {
+        this.logger.warn(`unable to broadcast a reaction to ${room}`, error);
+      })
+      .finally(() => {
+        if (this.reactionBroadcasts.get(room) === broadcast) {
+          this.reactionBroadcasts.delete(room);
+        }
+      });
+
+    this.reactionBroadcasts.set(room, broadcast);
+
+    return broadcast;
+  }
+
+  private async withinRate(
+    key: string,
+    limit: number,
+    windowMs: number,
+  ): Promise<boolean> {
+    const count = await this.redis.eval(
+      ChatService.RATE_SCRIPT,
+      1,
+      key,
+      windowMs,
+    );
+
+    return Number(count) <= limit;
+  }
+
+  private async toggleRoomReaction(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    reaction: string,
+    user: User,
+    removeOnly: boolean,
+  ): Promise<ChatReactions | "gagged" | null> {
+    const state = await this.redis.eval(
+      ChatService.TOGGLE_ROOM_REACTION_SCRIPT,
+      3,
+      `chat_${type}_${id}`,
+      ChatService.reactionsKey(type, id),
+      `chat_reaction_applied:${randomUUID()}`,
+      messageId,
+      reaction,
+      String(user.steam_id),
+      removeOnly ? "1" : "0",
+      ChatService.REACTION_RECEIPT_TTL_MS,
+    );
+
+    if (state === 0) {
+      return "gagged";
+    }
+
+    if (typeof state !== "string") {
+      return null;
+    }
+
+    return ChatService.orderedReactions(JSON.parse(state));
+  }
+
+  private async toggleDirectReaction(
+    roomId: string,
+    messageId: string,
+    reaction: string,
+    user: User,
+  ): Promise<ChatReactions | null> {
+    return await this.postgres.transaction(async (client) => {
+      // Toggles on one message take turns here, and each then starts its
+      // statement after the last one committed. Two toggles on an absent row
+      // in one snapshot would both insert, and the second would quietly do
+      // nothing instead of taking it back. The lock also holds off the
+      // message's deletion until the reaction is written.
+      const { rows: found } = await client.query(
+        `SELECT 1 FROM public.direct_messages
+          WHERE id = $1::uuid AND room_id = $2
+            FOR NO KEY UPDATE`,
+        [messageId, roomId],
+      );
+
+      if (found.length === 0) {
+        return null;
+      }
+
+      await client.query(
+        `WITH removed AS (
+           DELETE FROM public.direct_message_reactions
+            WHERE message_id = $1::uuid
+              AND steam_id = $2::bigint
+              AND reaction = $3
+        RETURNING 1
+         )
+         INSERT INTO public.direct_message_reactions
+                (message_id, steam_id, reaction)
+              SELECT $1::uuid, $2::bigint, $3
+               WHERE NOT EXISTS (SELECT 1 FROM removed)
+                 AND EXISTS (
+                   SELECT 1 FROM public.direct_messages
+                    WHERE id = $1::uuid AND room_id = $4
+                 )
+         ON CONFLICT DO NOTHING`,
+        [messageId, String(user.steam_id), reaction, roomId],
+      );
+
+      const {
+        rows: [row],
+      } = await client.query<{ reactions: ChatReactions | null }>(
+        `SELECT reactions.reactions
+           FROM public.direct_messages dm
+           ${ChatService.DIRECT_MESSAGE_REACTIONS}
+          WHERE dm.id = $1::uuid`,
+        [messageId],
+      );
+
+      return ChatService.orderedReactions(row?.reactions);
+    });
+  }
+
+  private async editRoomMessage(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    user: User,
+    text: string,
+  ): Promise<ChatEditResult> {
+    const messageKey = `chat_${type}_${id}`;
+    let admitted = false;
+
+    for (let attempt = 0; attempt < ChatService.EDIT_ATTEMPTS; attempt++) {
+      const raw = await this.redis.hget(messageKey, messageId);
+
+      if (!raw) {
+        return { edited: false, code: ChatErrorCode.NotFound };
+      }
+
+      const message = JSON.parse(raw) as ChatMessage;
+      const refusal = ChatService.selfServiceRefusal(message, user);
+
+      if (refusal) {
+        return { edited: false, code: refusal };
+      }
+
+      if (!admitted) {
+        if (!(await this.canAccessLobby(type, id, user))) {
+          return { edited: false, code: ChatErrorCode.NotAllowed };
+        }
+
+        if (await this.isGagged(user.steam_id)) {
+          return { edited: false, code: ChatErrorCode.Gagged };
+        }
+
+        admitted = true;
+      }
+
+      const editedAt = new Date().toISOString();
+
+      // Written before the swap, the way a deletion is audited before its
+      // HDEL, so no failure part way through can replace what was said
+      // without keeping it. A swap that does not apply takes its row back out.
+      const auditId = await this.recordEdit(
+        type,
+        id,
+        messageId,
+        message,
+        text,
+        editedAt,
+      );
+
+      const swapped = await this.redis.eval(
+        ChatService.EDIT_ROOM_MESSAGE_SCRIPT,
+        2,
+        messageKey,
+        `chat_edit_applied:${auditId}`,
+        messageId,
+        raw,
+        JSON.stringify({ ...message, message: text, edited_at: editedAt }),
+        ChatService.EDIT_RECEIPT_TTL_MS,
+      );
+
+      if (swapped === 1) {
+        const announced = await this.announceEdit(
+          type,
+          id,
+          messageId,
+          String(user.steam_id),
+          text,
+          editedAt,
+        );
+
+        await this.archiveEdit(type, id, messageId, text, editedAt);
+
+        return announced;
+      }
+
+      await this.discardEdit(auditId);
+    }
+
+    this.logger.warn(
+      `gave up editing ${type}:${id} message ${messageId}, it kept changing`,
+    );
+
+    return { edited: false, code: ChatErrorCode.Invalid };
+  }
+
+  private async editDirectMessage(
+    roomId: string,
+    messageId: string,
+    user: User,
+    text: string,
+  ): Promise<ChatEditResult> {
+    if (!(await this.canAccessLobby(ChatLobbyType.Direct, roomId, user))) {
+      return { edited: false, code: ChatErrorCode.NotAllowed };
+    }
+
+    const refusal = await this.directMessageRefusal(roomId, messageId, user);
+
+    if (refusal) {
+      return { edited: false, code: refusal };
+    }
+
+    const [row] = await this.postgres.query<
+      Array<{ message: string; edited_at: Date }>
+    >(
+      `UPDATE public.direct_messages
+          SET message = $5, edited_at = now()
+        WHERE ${ChatService.OWN_RECENT_DIRECT_MESSAGE}
+    RETURNING message, edited_at`,
+      [...ChatService.ownRecentDirectMessage(roomId, messageId, user), text],
+    );
+
+    if (!row) {
+      return {
+        edited: false,
+        code:
+          (await this.directMessageRefusal(roomId, messageId, user)) ??
+          ChatErrorCode.NotFound,
+      };
+    }
+
+    return await this.announceEdit(
+      ChatLobbyType.Direct,
+      roomId,
+      messageId,
+      String(user.steam_id),
+      row.message,
+      new Date(row.edited_at).toISOString(),
+    );
+  }
+
+  private async deleteDirectMessage(
+    roomId: string,
+    messageId: string,
+    user: User,
+  ): Promise<ChatDeleteResult> {
+    if (!(await this.canAccessLobby(ChatLobbyType.Direct, roomId, user))) {
+      return { deleted: false, code: ChatErrorCode.NotAllowed };
+    }
+
+    const refusal = await this.directMessageRefusal(roomId, messageId, user);
+
+    if (refusal) {
+      return { deleted: false, code: refusal };
+    }
+
+    const [row] = await this.postgres.query<Array<{ id: string }>>(
+      `DELETE FROM public.direct_messages
+        WHERE ${ChatService.OWN_RECENT_DIRECT_MESSAGE}
+    RETURNING id::text AS id`,
+      ChatService.ownRecentDirectMessage(roomId, messageId, user),
+    );
+
+    if (!row) {
+      return {
+        deleted: false,
+        code:
+          (await this.directMessageRefusal(roomId, messageId, user)) ??
+          ChatErrorCode.NotFound,
+      };
+    }
+
+    // Deleting the first message of a conversation would otherwise leave an
+    // empty tab on the recipient's rail, telling them something was sent.
+    await this.postgres.query(
+      `DELETE FROM public.direct_conversations
+        WHERE room_id = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM public.direct_messages WHERE room_id = $1
+          )`,
+      [roomId],
+    );
+
+    void this.to(ChatLobbyType.Direct, roomId, "deleted", { id: messageId });
+
+    await this.retractNotifications(ChatLobbyType.Direct, roomId, messageId);
+
+    await this.removeAttachments(ChatLobbyType.Direct, roomId, messageId);
+
+    return { deleted: true };
+  }
+
+  private static ownRecentDirectMessage(
+    roomId: string,
+    messageId: string,
+    user: User,
+  ) {
+    return [
+      messageId,
+      roomId,
+      String(user.steam_id),
+      ChatService.SELF_SERVICE_WINDOW_MS / 1000,
+    ];
+  }
+
+  // Read apart from the statement that acts on it, so a refusal can say why.
+  private async directMessageRefusal(
+    roomId: string,
+    messageId: string,
+    user: User,
+  ): Promise<ChatErrorCode | null> {
+    const [row] = await this.postgres.query<
+      Array<{ author: string; open: boolean }>
+    >(
+      `SELECT from_steam_id::text AS author,
+              created_at > now() - make_interval(secs => $3::int) AS open
+         FROM public.direct_messages
+        WHERE id = $1::uuid AND room_id = $2`,
+      [messageId, roomId, ChatService.SELF_SERVICE_WINDOW_MS / 1000],
+    );
+
+    if (!row) {
+      return ChatErrorCode.NotFound;
+    }
+
+    if (row.author !== String(user.steam_id)) {
+      return ChatErrorCode.NotAllowed;
+    }
+
+    if (!row.open) {
+      return ChatErrorCode.WindowClosed;
+    }
+
+    return null;
+  }
+
+  // Never relayed to the game server, and no new notification: a push still
+  // being held for the message just says what it says now.
+  private async announceEdit(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    author: string,
+    text: string,
+    editedAt: string,
+  ): Promise<ChatEditResult> {
+    void this.to(
+      type,
+      id,
+      "edited",
+      {
+        id: messageId,
+        message: text,
+        edited_at: editedAt,
+      },
+      author,
+    ).catch((error) => {
+      this.logger.warn(`unable to broadcast an edit to ${type}:${id}`, error);
+    });
+
+    await this.pushNotifications
+      .editChatMessage(messageId, ChatService.notificationPreview(text))
+      .catch((error) => {
+        this.logger.warn(
+          `unable to update notifications for ${type}:${id} message ${messageId}`,
+          error,
+        );
+      });
+
+    return { edited: true, message: text, edited_at: editedAt };
+  }
+
+  private async retractNotifications(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+  ) {
+    await this.pushNotifications
+      .retractChatMessage(messageId)
+      .catch((error) => {
+        this.logger.warn(
+          `unable to retract notifications for ${type}:${id} message ${messageId}`,
+          error,
+        );
+      });
+  }
+
+  private async recordDeletion(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    message: ChatMessage,
+    deletedBy: User,
+  ) {
+    await this.postgres.query(
+      `INSERT INTO public.chat_message_deletions
+              (message_id, room_type, room_id, author_steam_id, message,
+               message_created_at, source, deleted_by_steam_id,
+               attachments, gif)
+            SELECT $1::uuid, $2, $3,
+                   (SELECT steam_id FROM public.players
+                     WHERE steam_id = $4::bigint),
+                   $5, $6::timestamptz, $7, $8::bigint, $9::jsonb, $10::jsonb
+       ON CONFLICT (room_type, room_id, message_id) DO NOTHING`,
+      [
+        messageId,
+        type,
+        id,
+        ChatService.authorSteamId(message),
+        String(message.message ?? ""),
+        ChatService.messageCreatedAt(message),
+        message.source ?? null,
+        deletedBy.steam_id,
+        message.attachments?.length
+          ? JSON.stringify(message.attachments)
+          : null,
+        message.gif ? JSON.stringify(message.gif) : null,
+      ],
+    );
+  }
+
+  // edited_at is the one the message itself now carries, so a row can be
+  // matched to the edit clients were shown.
+  private async recordEdit(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    message: ChatMessage,
+    text: string,
+    editedAt: string,
+  ): Promise<string> {
+    const [row] = await this.postgres.query<Array<{ id: string }>>(
+      `INSERT INTO public.chat_message_edits
+              (message_id, room_type, room_id, author_steam_id,
+               previous_message, new_message, message_created_at, edited_at)
+            SELECT $1::uuid, $2, $3,
+                   (SELECT steam_id FROM public.players
+                     WHERE steam_id = $4::bigint),
+                   $5, $6, $7::timestamptz, $8::timestamptz
+         RETURNING id::text AS id`,
+      [
+        messageId,
+        type,
+        id,
+        ChatService.authorSteamId(message),
+        String(message.message ?? ""),
+        text,
+        ChatService.messageCreatedAt(message),
+        editedAt,
+      ],
+    );
+
+    return row.id;
+  }
+
+  // Only for a swap that found the message gone or changed, so the edit never
+  // happened. A swap that failed outright keeps its row: it may have applied.
+  private async discardEdit(auditId: string) {
+    await this.postgres
+      .query(`DELETE FROM public.chat_message_edits WHERE id = $1::uuid`, [
+        auditId,
+      ])
+      .catch((error) => {
+        this.logger.warn(
+          `unable to discard the audit row of an edit that did not apply`,
+          error,
+        );
+      });
+  }
+
+  private static messageCreatedAt(message: ChatMessage): string | null {
+    const sentAt = new Date(message.timestamp);
+
+    return Number.isNaN(sentAt.getTime()) ? null : sentAt.toISOString();
+  }
+
+  // A steam id stored as a JSON number has already been rounded by JSON.parse
+  // onto some other account, and would pin the message on the wrong player.
+  private static authorSteamId(message: ChatMessage): string | null {
+    const steamId: unknown = message.from?.steam_id;
+
+    if (typeof steamId !== "string" || !/^\d{1,20}$/.test(steamId)) {
+      return null;
+    }
+
+    return steamId;
+  }
+
+  // The name and role caches are separate keys with separate lifetimes, so
+  // either can be missing while the other is not.
+  private static cachedOr<T>(cached: string | null, fallback: T): T {
+    if (cached === null) {
+      return fallback;
+    }
+
+    return (JSON.parse(cached) as T) ?? fallback;
   }
 
   // Notifies the whole roster and lets the delivery gate decide who actually
@@ -593,68 +2320,66 @@ export class ChatService {
   // What replaced it is a signal that means what it says: the client reports
   // the thread it is showing while visible, and the recipient's read cursor
   // says how far they have got. Both are checked at send time rather than here,
-  // because between an insert and a push is precisely when someone opens the
-  // conversation. See notifications/push/push-notifications.service.ts.
+  // because a burst's summary goes out seconds after its messages, which is
+  // precisely when someone opens the conversation. See
+  // notifications/push/push-notifications.service.ts.
   private async notifyLobbyMembers(
     type: ChatLobbyType,
     id: string,
     sender: User,
     senderName: string,
     message: string,
+    messageId: string,
   ) {
     const members = await this.getLobbyMemberSteamIds(type, id);
     const senderSteamId = String(sender.steam_id);
 
-    const targets = members.filter((steamId) => steamId !== senderSteamId);
+    const others = members.filter((steamId) => steamId !== senderSteamId);
+    const hiding = await this.playerBlocks.blockedAmong(
+      others,
+      [senderSteamId],
+      ChatService.blockExemptRoles(type),
+    );
+    const targets = others.filter((steamId) => !hiding.has(steamId));
 
     if (targets.length === 0) {
       return;
     }
 
-    const entityId = `${type}:${id}`;
-    const notificationType = ChatService.notificationTypeFor(type);
-
-    await this.notifications.notifyPlayers(notificationType, {
+    await this.pushNotifications.sendChatMessage(targets, {
+      messageId,
+      type: ChatService.notificationTypeFor(type),
       title: senderName,
-      message: NotificationsService.escapeHtml(
-        message.length > 140 ? `${message.slice(0, 140)}…` : message,
-      ),
-      role: "user",
-      entity_id: entityId,
-      steamIds: targets,
-      data: {
-        threadKey: chatThreadKey(type, id),
-        threadLabel: await this.threadLabel(type, id, sender),
-        icon: sender.avatar_url,
-        senderSteamId,
-      },
+      message: ChatService.notificationPreview(message),
+      entityId: `${type}:${id}`,
+      threadKey: chatThreadKey(type, id),
+      threadLabel: await this.threadLabel(type, id, sender),
+      icon: sender.avatar_url,
+      senderSteamId,
+      blockExemptRoles: ChatService.blockExemptRoles(type),
     });
+  }
 
-    // Collapse to one unread bell row per conversation, and only after the
-    // insert above. Editing an existing row instead would produce no INSERT,
-    // and the INSERT is what the push event trigger fires on -- so the bell
-    // would be tidy and the phone would stay silent.
-    await this.notifications.collapseOlderUnread(
-      notificationType,
-      entityId,
-      targets,
+  private static notificationPreview(message: string) {
+    return NotificationsService.escapeHtml(
+      message.length > 140 ? `${message.slice(0, 140)}…` : message,
     );
   }
 
   // Match chat is its own notification type, and so its own push category.
   //
-  // Every line typed in-game is relayed into the match room by
-  // ChatMessageEvent, so a live match fires this per lineup member per line --
-  // and the player it reaches is the one already reading those lines in the
-  // game. Sharing a category with direct messages meant the only way to stop
-  // that was to mute DMs too.
-  //
-  // The insert, the bell collapse and the read-clear all have to agree on the
-  // type or the collapse stops collapsing and the badge never clears.
+  // Every line typed in-game is relayed -- all chat into the match room by
+  // ChatMessageEvent, team chat into the lineup's team room by
+  // TeamChatMessageEvent -- so a live match fires this per lineup member per
+  // line, and the player it reaches is the one already reading those lines in
+  // the game. Sharing a category with direct messages meant the only way to
+  // stop that was to mute DMs too.
   public static notificationTypeFor(
     type: ChatLobbyType,
   ): e_notification_types_enum {
-    return type === ChatLobbyType.Match ? "MatchChatMessage" : "ChatMessage";
+    return type === ChatLobbyType.Match || type === ChatLobbyType.MatchTeam
+      ? "MatchChatMessage"
+      : "ChatMessage";
   }
 
   // What to call this room when a push has to name it -- "3 new messages from
@@ -846,6 +2571,16 @@ export class ChatService {
               owner_steam_id: true,
               roster: { player_steam_id: true },
             },
+            free_agents: {
+              __args: {
+                where: {
+                  status: {
+                    _in: ChatService.TOURNAMENT_CHAT_FREE_AGENT_STATUSES,
+                  },
+                },
+              },
+              player_steam_id: true,
+            },
           },
         });
 
@@ -860,6 +2595,10 @@ export class ChatService {
           for (const roster of team.roster ?? []) {
             add(roster.player_steam_id);
           }
+        }
+
+        for (const freeAgent of tournaments_by_pk?.free_agents ?? []) {
+          add(freeAgent.player_steam_id);
         }
 
         break;
@@ -903,9 +2642,8 @@ export class ChatService {
         // notifyLobbyMembers bailed on the empty list -- the organizers' room
         // has never notified anyone in it.
         //
-        // Not narrowed to recently active staff. The list is small, and
-        // notifyPlayers already drops anyone with neither the bell nor a
-        // subscription to deliver to.
+        // Not narrowed to recently active staff. The list is small, and the
+        // push only reaches those with a device subscribed.
         for (const steamId of await this.organizerSteamIds()) {
           add(steamId);
         }
@@ -974,6 +2712,12 @@ export class ChatService {
         continue;
       }
 
+      if (
+        await this.playerBlocks.hasBlocked(steamId, String(sender.steam_id))
+      ) {
+        continue;
+      }
+
       await this.redis.publish(
         "send-message-to-steam-id",
         JSON.stringify({
@@ -1003,21 +2747,81 @@ export class ChatService {
   // milliseconds ahead leaves a just-read message looking unread -- forever,
   // and pushing every time. The websocket broadcast keeps the pod's timestamp;
   // clients dedupe on the message id, not on when it claims to have happened.
+  //
+  // A block committed after the send's access check still stops the insert,
+  // and with it the rail, the delivery and the notification.
+  //
+  // Its files are claimed in the same transaction, so a refused insert gives
+  // them back.
   private async storeDirectMessage(
     roomId: string,
-    message: { id: string; message: string; from: User },
-  ) {
+    message: ChatMessage,
+    attachmentIds: string[],
+    claim: ChatAttachmentClaim,
+  ): Promise<ChatErrorCode | null> {
     const parties = parseDirectRoomId(roomId);
 
     if (!parties) {
-      return;
+      return ChatErrorCode.NotAllowed;
     }
 
-    await this.postgres.query(
-      `INSERT INTO public.direct_messages (id, room_id, from_steam_id, message)
-            VALUES ($1::uuid, $2, $3::bigint, $4)`,
-      [message.id, roomId, message.from.steam_id, message.message],
-    );
+    try {
+      const refusal = await this.postgres.transaction(async (client) => {
+        let attachments: ChatAttachment[] = [];
+
+        if (attachmentIds.length > 0) {
+          const claimed = await this.attachments.claim(
+            attachmentIds,
+            claim,
+            client,
+          );
+
+          if (!claimed) {
+            return ChatErrorCode.Invalid;
+          }
+
+          attachments = claimed;
+        }
+
+        const { rows } = await client.query(
+          `INSERT INTO public.direct_messages
+                  (id, room_id, from_steam_id, message, attachments, gif)
+                SELECT $1::uuid, $2, $3::bigint, $4, $5::jsonb, $6::jsonb
+                 WHERE NOT public.is_blocked_either_way(
+                         split_part($2, ':', 1)::bigint,
+                         split_part($2, ':', 2)::bigint)
+             RETURNING id::text AS id`,
+          [
+            message.id,
+            roomId,
+            message.from.steam_id,
+            message.message,
+            attachments.length > 0 ? JSON.stringify(attachments) : null,
+            message.gif ? JSON.stringify(message.gif) : null,
+          ],
+        );
+
+        if (rows.length === 0) {
+          throw ChatService.DIRECT_MESSAGE_REFUSED;
+        }
+
+        if (attachments.length > 0) {
+          message.attachments = attachments;
+        }
+
+        return null;
+      });
+
+      if (refusal) {
+        return refusal;
+      }
+    } catch (error) {
+      if (error === ChatService.DIRECT_MESSAGE_REFUSED) {
+        return ChatErrorCode.NotAllowed;
+      }
+
+      throw error;
+    }
 
     // A message puts the conversation back on the bar, even if it was removed
     // from it -- someone writing to you is exactly when you want to see them
@@ -1043,7 +2847,14 @@ export class ChatService {
     );
 
     await this.enforceDirectBarLimit(parties);
+
+    return null;
   }
+
+  // Thrown to roll back a claim whose message the block check refused.
+  private static readonly DIRECT_MESSAGE_REFUSED = new Error(
+    "direct message refused",
+  );
 
   // How many conversations the rail holds. Past this the quietest one drops
   // off -- it still exists, and comes back the moment that person writes.
@@ -1138,6 +2949,10 @@ export class ChatService {
         id: string;
         message: string;
         created_at: Date;
+        edited_at: Date | null;
+        reactions: ChatReactions | null;
+        attachments: ChatAttachment[] | null;
+        gif: ChatGif | null;
         steam_id: string;
         name: string;
         role: e_player_roles_enum;
@@ -1145,29 +2960,41 @@ export class ChatService {
         profile_url: string | null;
       }>
     >(
-      `SELECT dm.id::text AS id, dm.message, dm.created_at,
+      `SELECT dm.id::text AS id, dm.message, dm.created_at, dm.edited_at,
+              dm.attachments, dm.gif, reactions.reactions,
               p.steam_id::text AS steam_id, p.name, p.role::text AS role,
               p.avatar_url, p.profile_url
          FROM public.direct_messages dm
          JOIN public.players p ON p.steam_id = dm.from_steam_id
+         ${ChatService.DIRECT_MESSAGE_REACTIONS}
         WHERE dm.room_id = $1
         ORDER BY dm.created_at DESC, dm.seq DESC
         LIMIT 200`,
       [roomId],
     );
 
-    return rows.reverse().map((row) => ({
-      id: row.id,
-      message: row.message,
-      timestamp: new Date(row.created_at).toISOString(),
-      from: {
-        role: row.role,
-        name: row.name,
-        steam_id: row.steam_id,
-        avatar_url: row.avatar_url,
-        profile_url: row.profile_url,
-      },
-    }));
+    return rows.reverse().map(
+      (row): ChatMessage => ({
+        id: row.id,
+        message: row.message,
+        timestamp: new Date(row.created_at).toISOString(),
+        // Nothing relays from the game into a DM.
+        source: "web",
+        ...(row.edited_at
+          ? { edited_at: new Date(row.edited_at).toISOString() }
+          : {}),
+        reactions: ChatService.orderedReactions(row.reactions),
+        ...(row.attachments ? { attachments: row.attachments } : {}),
+        ...(row.gif ? { gif: row.gif } : {}),
+        from: {
+          role: row.role,
+          name: row.name,
+          steam_id: row.steam_id,
+          avatar_url: row.avatar_url,
+          profile_url: row.profile_url,
+        },
+      }),
+    );
   }
 
   // Server-side read state, so unread counts survive a reload instead of
@@ -1203,12 +3030,6 @@ export class ChatService {
        ON CONFLICT (steam_id, thread) DO UPDATE SET last_read_at = now()
          RETURNING last_read_at`,
       [user.steam_id, thread],
-    );
-
-    await this.notifications.markConversationRead(
-      ChatService.notificationTypeFor(type),
-      `${type}:${id}`,
-      user.steam_id,
     );
 
     if (!row) {
@@ -1262,6 +3083,17 @@ export class ChatService {
           AND other.steam_id <> dc.steam_id
     LEFT JOIN public.players peer ON peer.steam_id = other.steam_id
         WHERE dc.steam_id = $1::bigint
+          -- Only the blocker's rail: the other side's stays as it was, so it
+          -- does not tell them. The room id is directRoomId()'s.
+          AND NOT EXISTS (
+            SELECT 1
+              FROM public.player_blocks pb
+             WHERE pb.blocker_steam_id = dc.steam_id
+               AND dc.room_id =
+                   LEAST(pb.blocker_steam_id, pb.blocked_steam_id)::text
+                   || ':' ||
+                   GREATEST(pb.blocker_steam_id, pb.blocked_steam_id)::text
+          )
         -- The rail's own order. last_message_at only breaks ties between rows
         -- that have never been arranged relative to each other.
         ORDER BY dc.position ASC, dc.last_message_at DESC
@@ -1297,9 +3129,8 @@ export class ChatService {
   //
   // Cursors rather than counts, deliberately. The client is handed a room's
   // whole history when it joins, so it can count what is newer than the cursor
-  // itself -- and counting server side would mean either reaching into every
-  // lobby's redis hash on page load, or reading the bell, where
-  // collapseOlderUnread has already reduced each conversation to one row.
+  // itself -- and counting server side would mean reaching into every lobby's
+  // redis hash on page load.
   public async getReadState(user: User) {
     const rows = await this.postgres.query<
       Array<{ thread: string; last_read_at: Date }>
@@ -1316,25 +3147,116 @@ export class ChatService {
     }));
   }
 
+  // What someone said, and whom they reacted with, never reaches a player who
+  // blocked them. History is per recipient, so it has no way out through
+  // here: see resendHistory.
+  public to(
+    type: ChatLobbyType,
+    id: string,
+    event: "chat" | "edited",
+    data: Record<string, any>,
+    author: string,
+  ): Promise<void>;
+  public to(
+    type: ChatLobbyType,
+    id: string,
+    event: "reaction",
+    data: { id: string; reactions: ChatReactions },
+  ): Promise<void>;
+  public to(
+    type: ChatLobbyType,
+    id: string,
+    event: "deleted" | "list" | "joined" | "left",
+    data: Record<string, any>,
+  ): Promise<void>;
   public async to(
     type: ChatLobbyType,
     id: string,
-    event: "chat" | "list" | "messages" | "joined" | "left",
+    event: string,
     data: Record<string, any>,
-  ) {
+    author?: string,
+  ): Promise<void> {
     const users = await this.getAllUsersInLobby(type, id);
     const eventName = `lobby:${type}:${id}:${event}`;
+    const roster = await this.teamRoomRoster(type, id);
+
+    const hiding = await this.playerBlocks.blockedAmong(
+      users.map(({ steamId }) => steamId),
+      event === "reaction"
+        ? ChatService.reactorsOf(data.reactions)
+        : author === undefined
+          ? []
+          : [author],
+      ChatService.blockExemptRoles(type),
+    );
 
     for (const { steamId } of users) {
-      await this.redis.publish(
-        "send-message-to-steam-id",
-        JSON.stringify({
-          steamId,
-          event: eventName,
-          data,
-        }),
-      );
+      if (roster && !roster.has(String(steamId))) {
+        continue;
+      }
+
+      const blocked = hiding.get(steamId);
+
+      if (event === "reaction") {
+        await this.publishTo(steamId, eventName, {
+          ...data,
+          reactions: ChatService.withoutReactors(data.reactions, blocked),
+        });
+        continue;
+      }
+
+      if (blocked) {
+        continue;
+      }
+
+      await this.publishTo(steamId, eventName, data);
     }
+  }
+
+  private async resendHistory(
+    type: ChatLobbyType,
+    id: string,
+    messages: ChatMessage[],
+  ) {
+    const users = await this.getAllUsersInLobby(type, id);
+    const blocked = await this.playerBlocks.blockedAmong(
+      users.map(({ steamId }) => steamId),
+      ChatService.peopleIn(messages),
+      ChatService.blockExemptRoles(type),
+    );
+
+    for (const { steamId } of users) {
+      await this.publishTo(steamId, `lobby:${type}:${id}:messages`, {
+        id,
+        messages: ChatService.withoutBlocked(messages, blocked.get(steamId)),
+      });
+    }
+  }
+
+  private async publishTo(
+    steamId: string,
+    event: string,
+    data: Record<string, any>,
+  ) {
+    await this.redis.publish(
+      "send-message-to-steam-id",
+      JSON.stringify({ steamId, event, data }),
+    );
+  }
+
+  // Presence outlives membership (see canPostIn), and a team room is the one
+  // whose lines the rest of the match must never see: a player moved to the
+  // other lineup, or benched, would otherwise keep receiving them until their
+  // presence expired.
+  private async teamRoomRoster(
+    type: ChatLobbyType,
+    id: string,
+  ): Promise<Set<string> | null> {
+    if (type !== ChatLobbyType.MatchTeam) {
+      return null;
+    }
+
+    return new Set(await this.getLobbyMemberSteamIds(type, id));
   }
 
   public async removeFromLobby(
@@ -1375,7 +3297,56 @@ export class ChatService {
     }
   }
 
-  public async sendChatToServer(matchId: string, message: string) {
+  // The message is inlined into an rcon command inside quotes, so a quote ends
+  // the argument and a newline ends the command: either one turns the rest of
+  // what a player typed into console input. Chat in game is one line anyway.
+  // SwiftlyS2's tokenizer also reads U+200B as a quote, which would split the
+  // line into tokens the plugin never shows.
+  private static oneRconArgument(message: string) {
+    return message
+      .replace(/[\r\n]+/g, " ")
+      .replace(/["\u200b]/g, "")
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1f]/g, "")
+      .trim();
+  }
+
+  private static readonly GRAPHEMES = new Intl.Segmenter(undefined, {
+    granularity: "grapheme",
+  });
+
+  // Counted in code points, which bounds the bytes an rcon packet has to carry
+  // whatever the script. Cut only between graphemes, so a flag or a joined
+  // emoji at the boundary is dropped whole rather than left in pieces.
+  private static clampForGame(message: string) {
+    const limit = ChatService.RCON_MESSAGE_MAX_LENGTH;
+
+    if (Array.from(message).length <= limit) {
+      return message;
+    }
+
+    let clamped = "";
+    let length = 0;
+
+    for (const { segment } of ChatService.GRAPHEMES.segment(message)) {
+      const size = Array.from(segment).length;
+
+      if (length + size > limit - 1) {
+        break;
+      }
+
+      clamped += segment;
+      length += size;
+    }
+
+    return `${clamped.trimEnd()}…`;
+  }
+
+  public async sendChatToServer(
+    matchId: string,
+    message: string,
+    isOrganizer = false,
+  ) {
     try {
       const { matches_by_pk } = await this.hasuraService.query({
         matches_by_pk: {
@@ -1410,7 +3381,9 @@ export class ChatService {
           ? "css_web_chat"
           : "sw_web_chat";
 
-      return await rcon.send(`${command} "${message}"`);
+      return await rcon.send(
+        `${command} "${ChatService.clampForGame(ChatService.oneRconArgument(message))}" ${isOrganizer ? 1 : 0}`,
+      );
     } catch (error) {
       this.logger.warn(
         `[${matchId}] unable to send match to server`,
@@ -1578,6 +3551,265 @@ export class ChatService {
     await this.redis.hdel(lobbyKey, steamId);
   }
 
+  // Staff at match organizer and above, by the role held now, once the match
+  // has ended. Someone who took part (on a lineup or coaching now, or seen
+  // writing in a team room) gets all chat only. Blocks are not applied:
+  // reviewing a match means seeing every line of it.
+  public async matchChatLog(
+    matchId: string,
+    user: User | undefined,
+  ): Promise<MatchChatLog | null> {
+    if (!user?.steam_id || !ChatService.UUID.test(matchId)) {
+      return null;
+    }
+
+    const current = await this.getCurrentUser(user.steam_id);
+
+    if (!current || !isRoleAbove(current.role, "match_organizer")) {
+      return null;
+    }
+
+    const viewer = String(current.steam_id);
+
+    const [match] = await this.postgres.query<
+      Array<{
+        status: e_match_status_enum;
+        lineup_1_id: string | null;
+        lineup_2_id: string | null;
+        on_lineup: boolean;
+      }>
+    >(
+      `SELECT m.status, m.lineup_1_id::text, m.lineup_2_id::text,
+              EXISTS (
+                SELECT 1 FROM public.match_lineup_players mlp
+                 WHERE mlp.match_lineup_id IN (m.lineup_1_id, m.lineup_2_id)
+                   AND mlp.steam_id = $2::bigint
+              ) OR EXISTS (
+                SELECT 1 FROM public.match_lineups ml
+                 WHERE ml.id IN (m.lineup_1_id, m.lineup_2_id)
+                   AND ml.coach_steam_id = $2::bigint
+              ) AS on_lineup
+         FROM public.matches m
+        WHERE m.id = $1::uuid`,
+      [matchId, viewer],
+    );
+
+    if (!match || !ChatService.MATCH_CHAT_LOG_STATUSES.includes(match.status)) {
+      return null;
+    }
+
+    const key = ChatService.archiveKey(matchId);
+
+    const [stored, expiresAt] = await Promise.all([
+      this.redis.hgetall(key),
+      this.redis.call("PEXPIRETIME", key) as Promise<number>,
+    ]);
+
+    const entries = Object.entries(stored)
+      .filter(([field]) => !field.startsWith("~"))
+      .map(([, raw]) => JSON.parse(raw) as MatchChatArchiveEntry)
+      .sort(
+        (a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      );
+
+    const withheld =
+      match.on_lineup ||
+      entries.some(
+        (entry) => entry.room !== "match" && entry.from?.steam_id === viewer,
+      );
+
+    return {
+      match: entries.filter((entry) => entry.room === "match"),
+      teams: withheld
+        ? []
+        : [match.lineup_1_id, match.lineup_2_id]
+            .filter((lineupId): lineupId is string => !!lineupId)
+            .map((lineupId) => ({
+              lineup_id: lineupId,
+              messages: entries.filter((entry) => entry.room === lineupId),
+            })),
+      team_chat_withheld: withheld,
+      archive_truncated: stored["~truncated"] === "1",
+      expires_at: expiresAt > 0 ? new Date(expiresAt).toISOString() : null,
+    };
+  }
+
+  public async anchorMatchArchive(matchId: string) {
+    await this.archiveSafely(matchId, () =>
+      this.redis.eval(
+        ChatService.ARCHIVE_ANCHOR_SCRIPT,
+        1,
+        ChatService.archiveKey(matchId),
+        ChatService.MATCH_CHAT_ARCHIVE_TTL,
+      ),
+    );
+  }
+
+  public async reopenMatchArchive(matchId: string) {
+    await this.archiveSafely(matchId, () =>
+      this.redis.eval(
+        ChatService.ARCHIVE_REOPEN_SCRIPT,
+        1,
+        ChatService.archiveKey(matchId),
+        ChatService.MATCH_CHAT_ARCHIVE_TTL,
+      ),
+    );
+  }
+
+  public async removeMatchArchive(matchId: string) {
+    await this.archiveSafely(matchId, () =>
+      this.redis.del(ChatService.archiveKey(matchId)),
+    );
+  }
+
+  // The archive is for review afterwards; nothing about it may stop a line
+  // being delivered, edited, deleted or moved.
+  private async archiveSafely(matchId: string, work: () => Promise<unknown>) {
+    try {
+      await work();
+    } catch (error) {
+      this.logger.warn(
+        `unable to update the chat archive of ${matchId}`,
+        error,
+      );
+    }
+  }
+
+  private static archiveKey(matchId: string) {
+    return `chat:archive:${matchId}`;
+  }
+
+  private static archiveRoom(
+    type: ChatLobbyType,
+    id: string,
+  ): { matchId: string; room: string } | null {
+    if (type === ChatLobbyType.Match) {
+      return { matchId: id, room: "match" };
+    }
+
+    if (type === ChatLobbyType.MatchTeam) {
+      const [matchId, lineupId] = id.split(":");
+
+      if (matchId && lineupId) {
+        return { matchId, room: lineupId };
+      }
+    }
+
+    return null;
+  }
+
+  private async archiveMessages(
+    type: ChatLobbyType,
+    id: string,
+    load: () => ChatMessage[],
+  ) {
+    const target = ChatService.archiveRoom(type, id);
+
+    if (!target) {
+      return;
+    }
+
+    const key = ChatService.archiveKey(target.matchId);
+
+    await this.archiveSafely(target.matchId, async () => {
+      for (const message of load()) {
+        await this.redis.eval(
+          ChatService.ARCHIVE_APPEND_SCRIPT,
+          1,
+          key,
+          message.id,
+          ChatService.archiveEntryJson({
+            id: message.id,
+            room: target.room,
+            message: ChatService.wellFormed(message.message),
+            timestamp: message.timestamp,
+            source: message.source,
+            from: {
+              steam_id: String(message.from.steam_id),
+              name: ChatService.wellFormed(message.from.name ?? ""),
+            },
+            ...(message.edited_at ? { edited_at: message.edited_at } : {}),
+          }),
+          ChatService.MATCH_CHAT_ARCHIVE_MAX_ENTRIES,
+          ChatService.MATCH_CHAT_ARCHIVE_MAX_BYTES,
+          ChatService.MATCH_CHAT_ARCHIVE_TTL,
+        );
+      }
+    });
+  }
+
+  // Halved by whole code points, never through a surrogate pair, until the
+  // entry fits its byte cap.
+  private static archiveEntryJson(entry: MatchChatArchiveEntry): string {
+    const marker = " [truncated]";
+    let json = JSON.stringify(entry);
+
+    while (
+      Buffer.byteLength(json) >
+        ChatService.MATCH_CHAT_ARCHIVE_MAX_ENTRY_BYTES &&
+      entry.message.length > 0
+    ) {
+      const points = Array.from(
+        entry.message.endsWith(marker)
+          ? entry.message.slice(0, -marker.length)
+          : entry.message,
+      );
+      entry = {
+        ...entry,
+        message:
+          points.slice(0, Math.floor(points.length / 2)).join("") + marker,
+      };
+      json = JSON.stringify(entry);
+    }
+
+    return json;
+  }
+
+  private async archiveEdit(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    text: string,
+    editedAt: string,
+  ) {
+    await this.updateArchivedMessage(
+      type,
+      id,
+      messageId,
+      ChatService.ARCHIVE_EDIT_SCRIPT,
+      ChatService.wellFormed(text),
+      editedAt,
+      ChatService.MATCH_CHAT_ARCHIVE_KEPT_EDITS,
+      ChatService.MATCH_CHAT_ARCHIVE_MAX_ENTRY_BYTES,
+      ChatService.MATCH_CHAT_ARCHIVE_MAX_BYTES,
+    );
+  }
+
+  private async updateArchivedMessage(
+    type: ChatLobbyType,
+    id: string,
+    messageId: string,
+    script: string,
+    ...args: Array<string | number>
+  ) {
+    const target = ChatService.archiveRoom(type, id);
+
+    if (!target) {
+      return;
+    }
+
+    await this.archiveSafely(target.matchId, () =>
+      this.redis.eval(
+        script,
+        1,
+        ChatService.archiveKey(target.matchId),
+        messageId,
+        ...args,
+      ),
+    );
+  }
+
   private async getAllUsersInLobby(type: ChatLobbyType, id: string) {
     const lobbyKey = this.getLobbyKey(type, id);
     const users = await this.redis.hgetall(lobbyKey);
@@ -1599,39 +3831,53 @@ export class ChatService {
     toType: ChatLobbyType,
     toId: string,
   ) {
-    const fromKey = `chat_${fromType}_${fromId}`;
-    const toKey = `chat_${toType}_${toId}`;
+    const moved = (await this.redis.eval(
+      ChatService.MOVE_ROOM_MESSAGES_SCRIPT,
+      4,
+      `chat_${fromType}_${fromId}`,
+      `chat_${toType}_${toId}`,
+      ChatService.reactionsKey(fromType, fromId),
+      ChatService.reactionsKey(toType, toId),
+      this.ttlFor(toType),
+    )) as string[];
 
-    const messagesObject = await this.redis.hgetall(fromKey);
-
-    for (const [field, message] of Object.entries(messagesObject)) {
-      await this.redis.hset(toKey, field, message);
-      await this.redis.sendCommand(
-        new Redis.Command("HEXPIRE", [
-          toKey,
-          this.ttlFor(toType),
-          "FIELDS",
-          1,
-          field,
-        ]),
-      );
-    }
-
-    await this.redis.del(fromKey);
     await this.removeLobby(fromType, fromId);
 
-    if (Object.keys(messagesObject).length === 0) {
+    await this.attachments
+      .moveRoom(
+        fromType,
+        fromId,
+        toType,
+        toId,
+        ChatAttachmentsService.expiresOnSend(
+          toType,
+          this.ttlFor(toType),
+          new Date(),
+        ),
+      )
+      .catch((error) => {
+        this.logger.warn(
+          `unable to move the files of ${fromType}:${fromId} to ${toType}:${toId}`,
+          error,
+        );
+      });
+
+    if (!Array.isArray(moved) || moved.length === 0) {
       return;
     }
 
-    const merged = await this.redis.hgetall(toKey);
-    const messages = Object.values(merged)
-      .map((value) => JSON.parse(value))
-      .sort(
-        (a, b) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-      );
+    const messages = await this.getRoomMessages(toType, toId);
 
-    void this.to(toType, toId, "messages", { id: toId, messages });
+    void this.resendHistory(toType, toId, messages).catch((error) => {
+      this.logger.warn(`unable to re-send history to ${toType}:${toId}`, error);
+    });
+
+    // Only what this move carried: the room also holds lines the archive
+    // already has, with their edits.
+    await this.archiveMessages(toType, toId, () =>
+      moved
+        .filter((_, index) => index % 2 === 1)
+        .map((raw) => JSON.parse(raw) as ChatMessage),
+    );
   }
 }
