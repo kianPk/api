@@ -898,6 +898,25 @@ export class HostedServersService {
     return hosted;
   }
 
+  /** True when steamId owns the hosted public server backing this game server id. */
+  public async isOwnerOfGameServer(
+    serverId: string,
+    steamId: string,
+  ): Promise<boolean> {
+    if (!/^[0-9a-f-]{36}$/i.test(serverId || "")) {
+      return false;
+    }
+    const [owned] = await this.postgres.query<Array<{ ok: number }>>(
+      `SELECT 1 AS ok FROM hosted_servers
+       WHERE (server_id = $1 OR pending_server_id = $1)
+         AND owner_steam_id = $2::bigint
+         AND status <> 'deleted'
+       LIMIT 1`,
+      [serverId, steamId],
+    );
+    return !!owned;
+  }
+
   private requireRunnable(hosted: HostedRow): string {
     if (hosted.status !== "active" || !hosted.server_id) {
       throw new BadRequestException(`Server is ${hosted.status}`);

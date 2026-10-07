@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { StoreController } from "./store.controller";
 import { HostedCheckoutController } from "./hosted-checkout.controller";
+import { HostedVipOwnerController } from "./hosted-vip-owner.controller";
 import { VipAdminController } from "./vip-admin.controller";
 import { StoreService } from "./store.service";
 import { PostgresModule } from "../postgres/postgres.module";
@@ -24,7 +25,12 @@ import { HostedServersModule } from "../hosted-servers/hosted-servers.module";
     ChallengesModule,
     HostedServersModule,
   ],
-  controllers: [StoreController, HostedCheckoutController, VipAdminController],
+  controllers: [
+    StoreController,
+    HostedCheckoutController,
+    HostedVipOwnerController,
+    VipAdminController,
+  ],
   providers: [StoreService, loggerFactory()],
   exports: [StoreService],
 })
