@@ -1199,6 +1199,8 @@ export class HostedServersService {
     }
     await rcon.send(`sv_autobunnyhopping ${bunnyHop ? "1" : "0"}`);
     await rcon.send(`sv_enablebunnyhopping ${bunnyHop ? "1" : "0"}`);
+    // Instant parachute / pref sync for YGuardNoFF (plugin polls every ~15s otherwise).
+    await rcon.send("css_yguard_nof_reload").catch(() => undefined);
   }
 
   public async updateChatAds(
