@@ -990,6 +990,7 @@ export class HostedServersService {
           chat_ads_color: string;
           friendly_fire: boolean;
           bunny_hop: boolean;
+          parachute: boolean;
           vip_sale_enabled: boolean;
           vip_price_7d: number;
           vip_price_30d: number;
@@ -1004,6 +1005,7 @@ export class HostedServersService {
               h.chat_ads_color,
               COALESCE(h.friendly_fire, false) AS friendly_fire,
               COALESCE(h.bunny_hop, false) AS bunny_hop,
+              COALESCE(h.parachute, false) AS parachute,
               COALESCE(h.vip_sale_enabled, false) AS vip_sale_enabled,
               COALESCE(h.vip_price_7d, 0) AS vip_price_7d,
               COALESCE(h.vip_price_30d, 0) AS vip_price_30d,
@@ -1058,6 +1060,7 @@ export class HostedServersService {
         gameplay: {
           friendly_fire: !!row.friendly_fire,
           bunny_hop: !!row.bunny_hop,
+          parachute: !!row.parachute,
         },
         vip_shop: {
           ...HostedServersService.normalizeVipShop({
@@ -1125,7 +1128,11 @@ export class HostedServersService {
 
   public async updateGameplay(
     hosted: HostedRow,
-    input: { friendly_fire?: boolean; bunny_hop?: boolean },
+    input: {
+      friendly_fire?: boolean;
+      bunny_hop?: boolean;
+      parachute?: boolean;
+    },
   ) {
     const set: string[] = [];
     const params: Array<string | boolean> = [hosted.id];
@@ -1136,6 +1143,10 @@ export class HostedServersService {
     if (typeof input.bunny_hop === "boolean") {
       params.push(input.bunny_hop);
       set.push(`bunny_hop = $${params.length}`);
+    }
+    if (typeof input.parachute === "boolean") {
+      params.push(input.parachute);
+      set.push(`parachute = $${params.length}`);
     }
     if (!set.length) {
       return this.getHostedView(hosted.id);
@@ -1517,7 +1528,11 @@ export class HostedServersService {
     ]);
     // Ads / gameplay prefs are optional — never let missing columns break sync.
     let ads = HostedServersService.normalizeChatAds({});
-    let gameplay = { friendly_fire: false, bunny_hop: false };
+    let gameplay = {
+      friendly_fire: false,
+      bunny_hop: false,
+      parachute: false,
+    };
     try {
       const adsRow = await this.postgres.query<
         Array<{
@@ -1527,11 +1542,13 @@ export class HostedServersService {
           chat_ads_color?: string;
           friendly_fire?: boolean;
           bunny_hop?: boolean;
+          parachute?: boolean;
         }>
       >(
         `SELECT chat_ads_enabled, chat_ads_interval_seconds, chat_ads_messages, chat_ads_color,
                 COALESCE(friendly_fire, false) AS friendly_fire,
-                COALESCE(bunny_hop, false) AS bunny_hop
+                COALESCE(bunny_hop, false) AS bunny_hop,
+                COALESCE(parachute, false) AS parachute
          FROM hosted_servers WHERE id = $1`,
         [hosted.id],
       );
@@ -1544,6 +1561,7 @@ export class HostedServersService {
       gameplay = {
         friendly_fire: !!adsRow[0]?.friendly_fire,
         bunny_hop: !!adsRow[0]?.bunny_hop,
+        parachute: !!adsRow[0]?.parachute,
       };
     } catch {
       try {

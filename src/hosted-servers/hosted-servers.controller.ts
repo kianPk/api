@@ -224,7 +224,12 @@ export class HostedServersController {
   public async gameplay(
     @Req() request: Request,
     @Param("id") id: string,
-    @Body() body: { friendly_fire?: boolean; bunny_hop?: boolean },
+    @Body()
+    body: {
+      friendly_fire?: boolean;
+      bunny_hop?: boolean;
+      parachute?: boolean;
+    },
   ) {
     const user = this.requireUser(request);
     const hosted = await this.hostedServers.requireAccess(id, user);
