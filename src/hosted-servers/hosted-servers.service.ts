@@ -988,6 +988,8 @@ export class HostedServersService {
           chat_ads_interval_seconds: number;
           chat_ads_messages: unknown;
           chat_ads_color: string;
+          friendly_fire: boolean;
+          bunny_hop: boolean;
           vip_sale_enabled: boolean;
           vip_price_7d: number;
           vip_price_30d: number;
@@ -1000,6 +1002,8 @@ export class HostedServersService {
               h.label, h.status, h.status_detail, h.expires_at, h.created_at,
               h.chat_ads_enabled, h.chat_ads_interval_seconds, h.chat_ads_messages,
               h.chat_ads_color,
+              COALESCE(h.friendly_fire, false) AS friendly_fire,
+              COALESCE(h.bunny_hop, false) AS bunny_hop,
               COALESCE(h.vip_sale_enabled, false) AS vip_sale_enabled,
               COALESCE(h.vip_price_7d, 0) AS vip_price_7d,
               COALESCE(h.vip_price_30d, 0) AS vip_price_30d,
@@ -1051,6 +1055,10 @@ export class HostedServersService {
           color: row.chat_ads_color,
           messages: row.chat_ads_messages,
         }),
+        gameplay: {
+          friendly_fire: !!row.friendly_fire,
+          bunny_hop: !!row.bunny_hop,
+        },
         vip_shop: {
           ...HostedServersService.normalizeVipShop({
             enabled: row.vip_sale_enabled,
@@ -1113,6 +1121,73 @@ export class HostedServersService {
       );
     }
     return this.getHostedView(hosted.id);
+  }
+
+  public async updateGameplay(
+    hosted: HostedRow,
+    input: { friendly_fire?: boolean; bunny_hop?: boolean },
+  ) {
+    const set: string[] = [];
+    const params: unknown[] = [hosted.id];
+    if (typeof input.friendly_fire === "boolean") {
+      params.push(input.friendly_fire);
+      set.push(`friendly_fire = $${params.length}`);
+    }
+    if (typeof input.bunny_hop === "boolean") {
+      params.push(input.bunny_hop);
+      set.push(`bunny_hop = $${params.length}`);
+    }
+    if (!set.length) {
+      return this.getHostedView(hosted.id);
+    }
+    await this.postgres.query(
+      `UPDATE hosted_servers
+       SET ${set.join(", ")}, updated_at = now()
+       WHERE id = $1`,
+      params,
+    );
+
+    const view = await this.getHostedView(hosted.id);
+    if (hosted.status === "active" && hosted.server_id) {
+      await this.applyGameplayRcon(
+        hosted.server_id,
+        !!view.gameplay?.friendly_fire,
+        !!view.gameplay?.bunny_hop,
+      ).catch((error) => {
+        this.logger.warn(
+          `gameplay RCON failed for ${hosted.server_id}: ${String(error)}`,
+        );
+      });
+    }
+    return view;
+  }
+
+  private async applyGameplayRcon(
+    serverId: string,
+    friendlyFire: boolean,
+    bunnyHop: boolean,
+  ) {
+    const rcon = await this.rcon.connect(serverId).catch((): null => null);
+    if (!rcon) {
+      throw new BadRequestException("Server is not reachable over RCON");
+    }
+    if (friendlyFire) {
+      await rcon.send("mp_friendlyfire 1");
+      await rcon.send("mp_tkpunish 0");
+      await rcon.send("ff_damage_reduction_bullets 0.33");
+      await rcon.send("ff_damage_reduction_grenade 0.85");
+      await rcon.send("ff_damage_reduction_grenade_self 1");
+      await rcon.send("ff_damage_reduction_other 0.4");
+    } else {
+      await rcon.send("mp_friendlyfire 0");
+      await rcon.send("mp_tkpunish 0");
+      await rcon.send("ff_damage_reduction_bullets 0");
+      await rcon.send("ff_damage_reduction_grenade 0");
+      await rcon.send("ff_damage_reduction_grenade_self 0");
+      await rcon.send("ff_damage_reduction_other 0");
+    }
+    await rcon.send(`sv_autobunnyhopping ${bunnyHop ? "1" : "0"}`);
+    await rcon.send(`sv_enablebunnyhopping ${bunnyHop ? "1" : "0"}`);
   }
 
   public async updateChatAds(
@@ -1440,8 +1515,9 @@ export class HostedServersService {
       ),
       this.listBans(hosted),
     ]);
-    // Ads are optional — never let a missing column / bad row break admin+ban sync.
+    // Ads / gameplay prefs are optional — never let missing columns break sync.
     let ads = HostedServersService.normalizeChatAds({});
+    let gameplay = { friendly_fire: false, bunny_hop: false };
     try {
       const adsRow = await this.postgres.query<
         Array<{
@@ -1449,9 +1525,13 @@ export class HostedServersService {
           chat_ads_interval_seconds: number;
           chat_ads_messages: unknown;
           chat_ads_color?: string;
+          friendly_fire?: boolean;
+          bunny_hop?: boolean;
         }>
       >(
-        `SELECT chat_ads_enabled, chat_ads_interval_seconds, chat_ads_messages, chat_ads_color
+        `SELECT chat_ads_enabled, chat_ads_interval_seconds, chat_ads_messages, chat_ads_color,
+                COALESCE(friendly_fire, false) AS friendly_fire,
+                COALESCE(bunny_hop, false) AS bunny_hop
          FROM hosted_servers WHERE id = $1`,
         [hosted.id],
       );
@@ -1461,6 +1541,10 @@ export class HostedServersService {
         color: adsRow[0]?.chat_ads_color,
         messages: adsRow[0]?.chat_ads_messages,
       });
+      gameplay = {
+        friendly_fire: !!adsRow[0]?.friendly_fire,
+        bunny_hop: !!adsRow[0]?.bunny_hop,
+      };
     } catch {
       try {
         const adsRow = await this.postgres.query<
@@ -1496,6 +1580,9 @@ export class HostedServersService {
         expires_at: ban.expires_at,
       })),
       chat_ads: ads,
+      gameplay,
+      friendly_fire: gameplay.friendly_fire,
+      bunny_hop: gameplay.bunny_hop,
     };
   }
 

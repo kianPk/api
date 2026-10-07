@@ -220,6 +220,17 @@ export class HostedServersController {
     return this.hostedServers.updateChatAds(hosted, body || {});
   }
 
+  @Post(":id/gameplay")
+  public async gameplay(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Body() body: { friendly_fire?: boolean; bunny_hop?: boolean },
+  ) {
+    const user = this.requireUser(request);
+    const hosted = await this.hostedServers.requireAccess(id, user);
+    return this.hostedServers.updateGameplay(hosted, body || {});
+  }
+
   @Post(":id/vip-shop")
   public async vipShop(
     @Req() request: Request,
