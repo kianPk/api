@@ -1601,8 +1601,10 @@ export class HostedServersService {
       })),
       chat_ads: ads,
       gameplay,
+      // Flat mirrors for YGuardNoFF (reads top-level keys, not gameplay.*).
       friendly_fire: gameplay.friendly_fire,
       bunny_hop: gameplay.bunny_hop,
+      parachute: gameplay.parachute,
     };
   }
 
