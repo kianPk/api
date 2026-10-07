@@ -1128,7 +1128,7 @@ export class HostedServersService {
     input: { friendly_fire?: boolean; bunny_hop?: boolean },
   ) {
     const set: string[] = [];
-    const params: unknown[] = [hosted.id];
+    const params: Array<string | boolean> = [hosted.id];
     if (typeof input.friendly_fire === "boolean") {
       params.push(input.friendly_fire);
       set.push(`friendly_fire = $${params.length}`);
