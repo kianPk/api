@@ -941,9 +941,22 @@ export class HostedServersService {
     return this.getHostedViews(rows.map((r) => r.id));
   }
 
+  /** Platform administrators: every non-deleted purchased hosted server. */
+  public async listForPlatformAdmin() {
+    const rows = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id FROM hosted_servers
+       WHERE status <> 'deleted'
+       ORDER BY created_at DESC
+       LIMIT 500`,
+    );
+    return this.getHostedViews(rows.map((r) => r.id));
+  }
+
   public async listAll() {
     const rows = await this.postgres.query<Array<{ id: string }>>(
-      `SELECT id FROM hosted_servers ORDER BY created_at DESC LIMIT 200`,
+      `SELECT id FROM hosted_servers
+       ORDER BY (status = 'deleted') ASC, created_at DESC
+       LIMIT 500`,
     );
     return this.getHostedViews(rows.map((r) => r.id));
   }

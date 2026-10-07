@@ -25,6 +25,10 @@ export class HostedServersController {
   @Get("mine")
   public async mine(@Req() request: Request) {
     const user = this.requireUser(request);
+    // Site administrators get every purchased hosted server (full panel access).
+    if (user.role === "administrator") {
+      return this.hostedServers.listForPlatformAdmin();
+    }
     return this.hostedServers.listForOwner(user.steam_id);
   }
 
