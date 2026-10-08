@@ -374,4 +374,50 @@ export class PublicRanksService {
   public thresholds() {
     return SKILL_THRESHOLDS;
   }
+
+  /** Absolute points for one player on one public box (owner / admin). */
+  public async setServerPoints(
+    serverId: string,
+    steamId: string,
+    points: number,
+    name?: string | null,
+  ): Promise<RankView> {
+    if (!/^[0-9a-f-]{36}$/i.test(serverId || "")) {
+      throw new BadRequestException("Invalid server");
+    }
+    const sid = String(steamId || "").match(/\b(7656119\d{10})\b/)?.[1];
+    if (!sid) {
+      throw new BadRequestException("Valid steam_id required");
+    }
+    const pts = Math.max(0, Math.min(1_000_000, Math.floor(Number(points) || 0)));
+    const [row] = await this.postgres.query<
+      Array<{ steam_id: string; name: string | null; points: number }>
+    >(
+      `INSERT INTO public_server_rank_presence
+         (server_id, steam_id, name, points, updated_at)
+       VALUES ($1, $2::bigint, $3, $4, now())
+       ON CONFLICT (server_id, steam_id) DO UPDATE SET
+         name = COALESCE(NULLIF(EXCLUDED.name, ''), public_server_rank_presence.name),
+         points = EXCLUDED.points,
+         updated_at = now()
+       RETURNING steam_id::text AS steam_id, name, points`,
+      [serverId, sid, name?.slice(0, 64) || null, pts],
+    );
+    return this.decorate({
+      steam_id: row?.steam_id ?? sid,
+      name: row?.name ?? name ?? null,
+      points: row?.points ?? pts,
+      kills: 0,
+      deaths: 0,
+      assists: 0,
+      headshots: 0,
+    });
+  }
+
+  /** Map skill group 1–18 → minimum points for that badge. */
+  public pointsForSkillGroup(skillGroup: number): number {
+    const skill = Math.max(1, Math.min(18, Math.floor(Number(skillGroup) || 1)));
+    const row = SKILL_THRESHOLDS.find((t) => t.skill === skill);
+    return row?.points ?? 0;
+  }
 }

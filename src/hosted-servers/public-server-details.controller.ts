@@ -43,6 +43,26 @@ export class PublicServerDetailsController {
     return this.details.updateSettings(serverId, user, body || {});
   }
 
+  /** Owner / site admin: set a player's points (or skill group) on this box. */
+  @Post("public-details/:serverId/ranks/set")
+  public async setRank(
+    @Req() request: Request,
+    @Param("serverId") serverId: string,
+    @Body()
+    body: {
+      steam_id?: string;
+      points?: number;
+      skill_group?: number;
+      name?: string;
+    },
+  ) {
+    const user = request.user as User | undefined;
+    if (!user?.steam_id) {
+      throw new UnauthorizedException("Authentication required");
+    }
+    return this.details.setPlayerRank(serverId, user, body || {});
+  }
+
   @Post("plugin/server-bans/sync")
   public async pluginBanSync(
     @Headers("authorization") authorization: string,

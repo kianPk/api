@@ -137,6 +137,50 @@ export class PublicServerDetailsService {
     return { packages };
   }
 
+  public async setPlayerRank(
+    serverId: string,
+    user: User | undefined,
+    body: {
+      steam_id?: string;
+      points?: number;
+      skill_group?: number;
+      name?: string;
+    },
+  ) {
+    if (!(await this.canManage(serverId, user))) {
+      throw new ForbiddenException("Not allowed");
+    }
+    await this.requireServer(serverId);
+
+    const steamId = String(body?.steam_id || "").match(
+      /\b(7656119\d{10})\b/,
+    )?.[1];
+    if (!steamId) {
+      throw new BadRequestException("Valid steam_id required");
+    }
+
+    let points: number;
+    if (body?.skill_group != null && body?.skill_group !== undefined) {
+      points = this.ranks.pointsForSkillGroup(Number(body.skill_group));
+    } else if (body?.points != null && body?.points !== undefined) {
+      points = Number(body.points);
+    } else {
+      throw new BadRequestException("points or skill_group required");
+    }
+
+    const [player] = await this.postgres.query<
+      Array<{ name: string | null }>
+    >(`SELECT name FROM players WHERE steam_id = $1::bigint`, [steamId]);
+
+    const rank = await this.ranks.setServerPoints(
+      serverId,
+      steamId,
+      points,
+      body?.name || player?.name || null,
+    );
+    return { success: true, rank };
+  }
+
   public async updateSettings(
     serverId: string,
     user: User | undefined,

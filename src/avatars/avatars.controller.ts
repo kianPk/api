@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Post,
   Get,
@@ -22,6 +23,37 @@ import { User } from "../auth/types/User";
 @Controller("avatars")
 export class AvatarsController {
   constructor(private readonly avatarsService: AvatarsService) {}
+
+  /** Site admin: overwrite players.avatar_url from Steam GetPlayerSummaries. */
+  @Post("admin/refresh-steam")
+  async refreshSteam(
+    @Req() request: Request,
+    @Body()
+    body: {
+      steam_id?: string;
+      steam_ids?: string[];
+      all?: boolean;
+      limit?: number;
+    },
+  ) {
+    const user = this.requireUser(request);
+    if (user.role !== "administrator") {
+      throw new ForbiddenException("Administrator access required");
+    }
+
+    const steamIds: string[] = [];
+    if (body?.steam_id) steamIds.push(String(body.steam_id));
+    if (Array.isArray(body?.steam_ids)) {
+      steamIds.push(...body.steam_ids.map(String));
+    }
+
+    const result = await this.avatarsService.refreshSteamAvatars({
+      steamIds,
+      all: body?.all === true,
+      limit: body?.limit,
+    });
+    return { success: true, ...result };
+  }
 
   @Post("teams/:teamId")
   @UseInterceptors(FileInterceptor("file"))

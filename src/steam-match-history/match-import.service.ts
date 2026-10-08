@@ -751,20 +751,22 @@ export class MatchImportService {
       return;
     }
 
-    const needs = await this.postgres.query<Array<{ steam_id: string }>>(
-      `SELECT steam_id::text AS steam_id
-         FROM public.players
-        WHERE steam_id = ANY($1::bigint[])
-          AND (avatar_url IS NULL OR country IS NULL OR profile_url IS NULL)`,
-      [steamIds],
-    );
+    // Always re-fetch summaries for the given steam IDs so avatar_url stays
+    // current when Steam CDN hashes change. Cap to the caller's list.
+    const needs = [
+      ...new Set(
+        steamIds
+          .map((id) => String(id || "").match(/\b(7656119\d{10})\b/)?.[1])
+          .filter(Boolean) as string[],
+      ),
+    ];
     if (needs.length === 0) {
       return;
     }
 
     const summaries: SteamPlayerSummary[] = [];
     for (let i = 0; i < needs.length; i += 100) {
-      const batch = needs.slice(i, i + 100).map((r) => r.steam_id);
+      const batch = needs.slice(i, i + 100);
       const url = new URL(
         "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",
       );
@@ -810,8 +812,8 @@ export class MatchImportService {
     await this.postgres.query(
       `UPDATE public.players AS p
           SET name = CASE WHEN p.name IS NULL OR p.name = '' THEN COALESCE(NULLIF(v.name, ''), p.name) ELSE p.name END,
-              avatar_url = COALESCE(p.avatar_url, v.avatar_url),
-              profile_url = COALESCE(p.profile_url, v.profile_url),
+              avatar_url = COALESCE(v.avatar_url, p.avatar_url),
+              profile_url = COALESCE(v.profile_url, p.profile_url),
               country = COALESCE(p.country, v.country)
          FROM (
            SELECT UNNEST($1::bigint[]) AS steam_id,

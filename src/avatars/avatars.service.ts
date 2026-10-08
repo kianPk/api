@@ -1,9 +1,17 @@
 import crypto from "crypto";
 import { Readable } from "stream";
-import { ForbiddenException, Injectable, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { S3Service } from "../s3/s3.service";
 import { HasuraService } from "../hasura/hasura.service";
+import { PostgresService } from "../postgres/postgres.service";
 import { User } from "../auth/types/User";
+import { SteamConfig } from "../configs/types/SteamConfig";
 
 export type AvatarKind =
   | "teams"
@@ -18,13 +26,131 @@ const EXTENSION_BY_MIMETYPE: Record<string, string> = {
   "image/webp": "webp",
 };
 
+type SteamPlayerSummary = {
+  steamid: string;
+  personaname?: string;
+  profileurl?: string;
+  avatarfull?: string;
+  loccountrycode?: string;
+};
+
 @Injectable()
 export class AvatarsService {
+  private readonly steamApiKey: string | undefined;
+
   constructor(
     private readonly logger: Logger,
     private readonly s3: S3Service,
     private readonly hasura: HasuraService,
-  ) {}
+    private readonly postgres: PostgresService,
+    private readonly config: ConfigService,
+  ) {
+    this.steamApiKey = this.config.get<SteamConfig>("steam")?.steamApiKey;
+  }
+
+  /**
+   * Pull latest Steam avatarfull (and profile URL) for players and overwrite
+   * players.avatar_url. Custom / roster uploads are left alone.
+   */
+  async refreshSteamAvatars(options: {
+    steamIds?: string[];
+    all?: boolean;
+    limit?: number;
+  }): Promise<{ updated: number; checked: number }> {
+    if (!this.steamApiKey) {
+      throw new BadRequestException("STEAM_WEB_API_KEY is not configured");
+    }
+
+    let ids: string[] = [];
+    if (options.all) {
+      const limit = Math.min(
+        50_000,
+        Math.max(1, Math.floor(Number(options.limit) || 5000)),
+      );
+      const rows = await this.postgres.query<Array<{ steam_id: string }>>(
+        `SELECT steam_id::text AS steam_id
+         FROM players
+         ORDER BY last_sign_in_at DESC NULLS LAST, steam_id ASC
+         LIMIT $1`,
+        [limit],
+      );
+      ids = rows.map((r) => r.steam_id);
+    } else {
+      ids = [
+        ...new Set(
+          (options.steamIds || [])
+            .map((id) => String(id || "").match(/\b(7656119\d{10})\b/)?.[1])
+            .filter(Boolean) as string[],
+        ),
+      ].slice(0, 200);
+    }
+
+    if (!ids.length) {
+      return { updated: 0, checked: 0 };
+    }
+
+    let updated = 0;
+    for (let i = 0; i < ids.length; i += 100) {
+      const batch = ids.slice(i, i + 100);
+      const summaries = await this.fetchSteamSummaries(batch);
+      if (!summaries.length) continue;
+
+      const steamIds: string[] = [];
+      const avatars: string[] = [];
+      const profiles: (string | null)[] = [];
+      for (const s of summaries) {
+        if (!s.steamid || !s.avatarfull) continue;
+        steamIds.push(s.steamid);
+        avatars.push(s.avatarfull);
+        profiles.push(s.profileurl || null);
+      }
+      if (!steamIds.length) continue;
+
+      const result = await this.postgres.query<Array<{ steam_id: string }>>(
+        `UPDATE public.players AS p
+            SET avatar_url = v.avatar_url,
+                profile_url = COALESCE(v.profile_url, p.profile_url)
+           FROM (
+             SELECT UNNEST($1::bigint[]) AS steam_id,
+                    UNNEST($2::text[])   AS avatar_url,
+                    UNNEST($3::text[])   AS profile_url
+           ) AS v
+          WHERE p.steam_id = v.steam_id
+            AND (
+              p.avatar_url IS DISTINCT FROM v.avatar_url
+              OR (v.profile_url IS NOT NULL AND p.profile_url IS DISTINCT FROM v.profile_url)
+            )
+          RETURNING p.steam_id::text AS steam_id`,
+        [steamIds, avatars, profiles],
+      );
+      updated += result.length;
+    }
+
+    this.logger.log(
+      `Steam avatar refresh: checked=${ids.length} updated=${updated}`,
+    );
+    return { updated, checked: ids.length };
+  }
+
+  private async fetchSteamSummaries(
+    steamIds: string[],
+  ): Promise<SteamPlayerSummary[]> {
+    if (!this.steamApiKey || !steamIds.length) return [];
+    const url = new URL(
+      "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",
+    );
+    url.searchParams.set("key", this.steamApiKey);
+    url.searchParams.set("steamids", steamIds.join(","));
+    const res = await fetch(url.toString());
+    if (!res.ok) {
+      this.logger.warn(`GetPlayerSummaries http ${res.status}`);
+      return [];
+    }
+    const body = (await res.json()) as {
+      response?: { players?: SteamPlayerSummary[] };
+    };
+    return body.response?.players ?? [];
+  }
 
   async uploadTeamAvatar(
     teamId: string,
