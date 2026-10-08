@@ -49,6 +49,135 @@ export class AvatarsService {
   }
 
   /**
+   * Site admin: set a player's current ladder ELO.
+   * player_elo.type is text FK → e_match_types (not a Postgres enum).
+   */
+  async setPlayerElo(options: {
+    steamId: string;
+    type: string;
+    elo: number;
+    adminSteamId: string;
+  }): Promise<{
+    steam_id: string;
+    type: string;
+    previous: number;
+    current: number;
+    change: number;
+  }> {
+    const steamId = String(options.steamId || "").match(
+      /\b(7656119\d{10})\b/,
+    )?.[1];
+    if (!steamId) {
+      throw new BadRequestException("Valid steam_id required");
+    }
+
+    const preferred = String(options.type || "").trim();
+    const allowed = [
+      "Competitive",
+      "Rush",
+      "Wingman",
+      "Duel",
+      "Trios",
+    ] as const;
+    const preferredCanon =
+      allowed.find((t) => t.toLowerCase() === preferred.toLowerCase()) || null;
+    if (!preferredCanon) {
+      throw new BadRequestException(
+        `type must be one of: ${allowed.join(", ")}`,
+      );
+    }
+
+    const typeRows = await this.postgres.query<Array<{ value: string }>>(
+      `SELECT value FROM e_match_types WHERE lower(value) = lower($1) LIMIT 1`,
+      [preferredCanon],
+    );
+    const type = typeRows[0]?.value;
+    if (!type) {
+      throw new BadRequestException(
+        `Match type "${preferredCanon}" is not available on this panel`,
+      );
+    }
+
+    const elo = Math.round(Number(options.elo));
+    if (!Number.isFinite(elo) || elo < 0 || elo > 100_000) {
+      throw new BadRequestException("elo must be between 0 and 100000");
+    }
+
+    const [player] = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT steam_id::text AS steam_id FROM players WHERE steam_id = $1::bigint`,
+      [steamId],
+    );
+    if (!player) {
+      throw new BadRequestException("Player not found");
+    }
+
+    try {
+      const [latest] = await this.postgres.query<
+        Array<{ match_id: string; current: string }>
+      >(
+        `SELECT match_id::text AS match_id, current::text AS current
+         FROM player_elo
+         WHERE steam_id = $1::bigint AND type = $2
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [steamId, type],
+      );
+
+      let previous = latest ? Number(latest.current) : 5000;
+      if (!Number.isFinite(previous)) previous = 5000;
+      const change = elo - previous;
+
+      if (latest) {
+        await this.postgres.query(
+          `UPDATE player_elo
+           SET current = $1::numeric,
+               change = $2::numeric
+           WHERE steam_id = $3::bigint
+             AND match_id = $4::uuid
+             AND type = $5`,
+          [elo, change, steamId, latest.match_id, type],
+        );
+      } else {
+        const [donor] = await this.postgres.query<Array<{ id: string }>>(
+          `SELECT id::text AS id FROM matches ORDER BY created_at DESC LIMIT 1`,
+        );
+        if (!donor) {
+          throw new BadRequestException(
+            "No matches exist yet — cannot seed ELO without a donor match row",
+          );
+        }
+        await this.postgres.query(
+          `INSERT INTO player_elo (steam_id, match_id, type, current, change)
+           VALUES ($1::bigint, $2::uuid, $3, $4::numeric, $5::numeric)
+           ON CONFLICT (steam_id, match_id, type) DO UPDATE SET
+             current = EXCLUDED.current,
+             change = EXCLUDED.change`,
+          [steamId, donor.id, type, elo, change],
+        );
+      }
+
+      this.logger.log(
+        `Admin ${options.adminSteamId} set ELO ${type}=${elo} (was ${previous}) for ${steamId}`,
+      );
+
+      return {
+        steam_id: steamId,
+        type,
+        previous,
+        current: elo,
+        change,
+      };
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      const message =
+        (error as Error)?.message ||
+        (typeof error === "string" ? error : "Failed to set ELO");
+      this.logger.error(`setPlayerElo failed for ${steamId}: ${message}`);
+      throw new BadRequestException(message);
+    }
+  }
+
+  /**
    * Pull latest Steam avatarfull (and profile URL) for players and overwrite
    * players.avatar_url. Custom / roster uploads are left alone.
    */

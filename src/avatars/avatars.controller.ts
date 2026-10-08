@@ -55,6 +55,30 @@ export class AvatarsController {
     return { success: true, ...result };
   }
 
+  /** Site admin: manually set a player's ladder ELO. */
+  @Post("admin/player-elo")
+  async setPlayerElo(
+    @Req() request: Request,
+    @Body()
+    body: {
+      steam_id?: string;
+      type?: string;
+      elo?: number;
+    },
+  ) {
+    const user = this.requireUser(request);
+    if (user.role !== "administrator") {
+      throw new ForbiddenException("Administrator access required");
+    }
+    const result = await this.avatarsService.setPlayerElo({
+      steamId: String(body?.steam_id || ""),
+      type: String(body?.type || ""),
+      elo: Number(body?.elo),
+      adminSteamId: String(user.steam_id),
+    });
+    return { success: true, ...result };
+  }
+
   @Post("teams/:teamId")
   @UseInterceptors(FileInterceptor("file"))
   async uploadTeam(

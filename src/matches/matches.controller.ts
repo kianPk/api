@@ -1,13 +1,9 @@
 import {
-  BadRequestException,
-  Body,
   Controller,
-  ForbiddenException,
   forwardRef,
   Get,
   Inject,
   Logger,
-  Post,
   Query,
   Req,
   Res,
@@ -69,14 +65,6 @@ import { CameraMonitorService } from "./camera/camera-monitor.service";
 import { ClipSpec } from "./clips/types/ClipSpec";
 import { UtilityPracticeService } from "../utility/utility-practice.service";
 import { VoiceService } from "../voice/voice.service";
-
-const ADMIN_ELO_TYPES = [
-  "Competitive",
-  "Rush",
-  "Wingman",
-  "Duel",
-  "Trios",
-] as const;
 
 @Controller("matches")
 export class MatchesController {
@@ -156,130 +144,6 @@ export class MatchesController {
     private readonly anticheat: AnticheatService,
   ) {
     this.appConfig = this.configService.get<AppConfig>("app");
-  }
-
-  /**
-   * Site administrator: set a player's current ELO for one ladder type.
-   * Updates the latest player_elo row (or inserts against a donor match if none).
-   */
-  @Post("admin/player-elo")
-  public async setPlayerEloAdmin(
-    @Req() request: Request,
-    @Body()
-    body: {
-      steam_id?: string;
-      type?: string;
-      elo?: number;
-    },
-  ) {
-    const user = request.user as User | undefined;
-    if (!user?.steam_id || !isRoleAbove(user.role, "administrator")) {
-      throw new ForbiddenException("Administrator access required");
-    }
-
-    const steamId = String(body?.steam_id || "").match(
-      /\b(7656119\d{10})\b/,
-    )?.[1];
-    if (!steamId) {
-      throw new BadRequestException("Valid steam_id required");
-    }
-
-    const typeRaw = String(body?.type || "").trim();
-    const preferred =
-      ADMIN_ELO_TYPES.find((t) => t.toLowerCase() === typeRaw.toLowerCase()) ||
-      null;
-    if (!preferred) {
-      throw new BadRequestException(
-        `type must be one of: ${ADMIN_ELO_TYPES.join(", ")}`,
-      );
-    }
-    // player_elo.type is text FK → e_match_types (Hasura enum), not a PG enum.
-    const typeRows = await this.postgres.query<Array<{ value: string }>>(
-      `SELECT value FROM e_match_types WHERE lower(value) = lower($1) LIMIT 1`,
-      [preferred],
-    );
-    const type = typeRows[0]?.value;
-    if (!type) {
-      throw new BadRequestException(
-        `Match type "${preferred}" is not available on this panel`,
-      );
-    }
-
-    const elo = Math.round(Number(body?.elo));
-    if (!Number.isFinite(elo) || elo < 0 || elo > 100_000) {
-      throw new BadRequestException("elo must be between 0 and 100000");
-    }
-
-    const [player] = await this.postgres.query<Array<{ steam_id: string }>>(
-      `SELECT steam_id::text AS steam_id FROM players WHERE steam_id = $1::bigint`,
-      [steamId],
-    );
-    if (!player) {
-      throw new BadRequestException("Player not found");
-    }
-
-    const [latest] = await this.postgres.query<
-      Array<{
-        match_id: string;
-        current: string;
-        type: string;
-      }>
-    >(
-      `SELECT match_id::text AS match_id, current::text AS current, type::text AS type
-       FROM player_elo
-       WHERE steam_id = $1::bigint AND type = $2
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [steamId, type],
-    );
-
-    let previous = latest ? Number(latest.current) : 5000;
-    if (!Number.isFinite(previous)) previous = 5000;
-    const change = elo - previous;
-
-    if (latest) {
-      await this.postgres.query(
-        `UPDATE player_elo
-         SET current = $1::numeric,
-             change = $2::numeric,
-             created_at = now()
-         WHERE steam_id = $3::bigint
-           AND match_id = $4::uuid
-           AND type = $5`,
-        [elo, change, steamId, latest.match_id, type],
-      );
-    } else {
-      const [donor] = await this.postgres.query<Array<{ id: string }>>(
-        `SELECT id::text AS id FROM matches ORDER BY created_at DESC LIMIT 1`,
-      );
-      if (!donor) {
-        throw new BadRequestException(
-          "No matches exist yet — cannot seed ELO without a donor match row",
-        );
-      }
-      await this.postgres.query(
-        `INSERT INTO player_elo (steam_id, match_id, type, current, change, created_at)
-         VALUES ($1::bigint, $2::uuid, $3, $4::numeric, $5::numeric, now())
-         ON CONFLICT (steam_id, match_id, type) DO UPDATE SET
-           current = EXCLUDED.current,
-           change = EXCLUDED.change,
-           created_at = now()`,
-        [steamId, donor.id, type, elo, change],
-      );
-    }
-
-    this.logger.log(
-      `Admin ${user.steam_id} set ELO ${type}=${elo} (was ${previous}) for ${steamId}`,
-    );
-
-    return {
-      success: true,
-      steam_id: steamId,
-      type,
-      previous,
-      current: elo,
-      change,
-    };
   }
 
   @Get("stream-viewers")
