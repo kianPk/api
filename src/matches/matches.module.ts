@@ -49,6 +49,7 @@ import { CancelInvalidTournaments } from "./jobs/CancelInvalidTournaments";
 import { SocketsModule } from "../sockets/sockets.module";
 import { CleanAbandonedMatches } from "./jobs/CleanAbandonedMatches";
 import { ReapIdleDemoSessions } from "./jobs/ReapIdleDemoSessions";
+import { ReapOrphanMatchServers } from "./jobs/ReapOrphanMatchServers";
 import { PollMediaMtxViewers } from "./jobs/PollMediaMtxViewers";
 import { MonitorMatchCameras } from "./jobs/MonitorMatchCameras";
 import { MatchMaking } from "src/matchmaking/matchmaking.module";
@@ -192,6 +193,7 @@ import { AnticheatModule } from "../anticheat/anticheat.module";
     CancelInvalidTournaments,
     CleanAbandonedMatches,
     ReapIdleDemoSessions,
+    ReapOrphanMatchServers,
     PollMediaMtxViewers,
     MonitorMatchCameras,
     EloCalculation,
@@ -368,6 +370,18 @@ export class MatchesModule implements NestModule {
 
     void scheduleMatchQueue.add(
       ReapIdleDemoSessions.name,
+      {},
+      {
+        repeat: {
+          pattern: "* * * * *",
+        },
+      },
+    );
+
+    // Safety net: force-delete on-demand match Jobs left behind after Finished/
+    // Canceled so hostNetwork ports are freed before the game node fills up.
+    void scheduleMatchQueue.add(
+      ReapOrphanMatchServers.name,
       {},
       {
         repeat: {

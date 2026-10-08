@@ -16,6 +16,8 @@ export class StopOnDemandServer extends WorkerHost {
     }>,
   ): Promise<void> {
     const { matchId } = job.data;
-    await this.matchAssistant.stopOnDemandServer(matchId);
+    // Always force-delete the Job/pods. SIGUSR1 alone left zombie pods holding
+    // hostNetwork ports until the node could not schedule any new match.
+    await this.matchAssistant.stopOnDemandServer(matchId, true);
   }
 }

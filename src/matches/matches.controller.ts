@@ -850,25 +850,12 @@ export class MatchesController {
         matchId,
       });
 
-      const serverId = data.new.server_id;
-
-      if (!serverId) {
-        return;
-      }
-
-      const { servers_by_pk: server } = await this.hasura.query({
-        servers_by_pk: {
-          __args: {
-            id: serverId,
-          },
-          is_dedicated: true,
-        },
-      });
+      const serverId = data.new.server_id ?? data.old.server_id;
 
       const { match_options_by_pk: matchOptions } = await this.hasura.query({
         match_options_by_pk: {
           __args: {
-            id: data.new.match_options_id,
+            id: data.new.match_options_id || data.old.match_options_id,
           },
           tv_delay: true,
         },
@@ -880,11 +867,27 @@ export class MatchesController {
         delay = 0;
       }
 
+      let isDedicated = false;
+      if (serverId) {
+        const { servers_by_pk: server } = await this.hasura.query({
+          servers_by_pk: {
+            __args: {
+              id: serverId,
+            },
+            is_dedicated: true,
+          },
+        });
+        isDedicated = !!server?.is_dedicated;
+      }
+
       this.logger.log(
         `[${matchId}] adding stop / restart server job in ${delay} seconds`,
       );
 
-      if (!server.is_dedicated) {
+      // Always tear down the on-demand Job when the match ends — even if
+      // server_id was already cleared. Leaving m-<matchId> Running holds
+      // hostNetwork ports and blocks every later match on that node.
+      if (!isDedicated) {
         await this.scheduledMatchesQueue.add(
           StopOnDemandServer.name,
           { matchId },
@@ -892,19 +895,21 @@ export class MatchesController {
         );
       }
 
-      await this.hasura.mutation({
-        update_matches_by_pk: {
-          __args: {
-            pk_columns: {
-              id: data.new.id || data.old.id,
+      if (data.op !== "DELETE") {
+        await this.hasura.mutation({
+          update_matches_by_pk: {
+            __args: {
+              pk_columns: {
+                id: data.new.id || data.old.id,
+              },
+              _set: {
+                server_id: null,
+              },
             },
-            _set: {
-              server_id: null,
-            },
+            __typename: true,
           },
-          __typename: true,
-        },
-      });
+        });
+      }
 
       await this.handleGpuFreed();
 
@@ -919,7 +924,7 @@ export class MatchesController {
       data.old.region !== data.new.region
     ) {
       try {
-        await this.matchAssistant.stopOnDemandServer(matchId);
+        await this.matchAssistant.stopOnDemandServer(matchId, true);
       } catch (error) {
         this.logger.error(
           `[${matchId}] unable to stop on demand server`,

@@ -1128,14 +1128,22 @@ export class MatchAssistantService {
               kind: "Job",
               metadata: {
                 name: jobName,
+                labels: {
+                  app: "match-server",
+                  "match-id": matchId,
+                },
               },
               spec: {
-                ttlSecondsAfterFinished: 60 * 60 * 24,
+                // Finished Jobs only — Running zombies are reaped explicitly.
+                // Keep short so completed pods release hostNetwork ports fast.
+                ttlSecondsAfterFinished: 60 * 10,
                 template: {
                   metadata: {
                     name: jobName,
                     labels: {
+                      app: "match-server",
                       job: jobName,
+                      "match-id": matchId,
                     },
                   },
                   spec: {
@@ -1716,6 +1724,10 @@ export class MatchAssistantService {
       }
 
       if (!remove) {
+        // Graceful signal only — caller must follow up with remove=true or the
+        // reaper will. Still clear the DB reservation so ports can be reused
+        // once the process actually exits.
+        await this.clearOnDemandServerReservation(matchId);
         return;
       }
 
@@ -1761,6 +1773,10 @@ export class MatchAssistantService {
       );
     }
 
+    await this.clearOnDemandServerReservation(matchId);
+  }
+
+  private async clearOnDemandServerReservation(matchId: string) {
     await this.hasura.mutation({
       update_servers: {
         __args: {
@@ -1781,6 +1797,86 @@ export class MatchAssistantService {
     });
 
     await this.setServerError(matchId, null);
+  }
+
+  /**
+   * Deletes on-demand match Jobs whose match is already terminal (or gone).
+   * Safety net for any path that forgot to force-remove — zombies hold
+   * hostNetwork ports and eventually block all scheduling on the game node.
+   */
+  public async reapOrphanMatchServers(): Promise<number> {
+    const kc = new KubeConfig();
+    kc.loadFromDefault();
+    const batch = kc.makeApiClient(BatchV1Api);
+
+    // List all Jobs and filter by the m-<uuid> name convention so older Jobs
+    // without the app=match-server label are still caught.
+    let jobs;
+    try {
+      jobs = await batch.listNamespacedJob({
+        namespace: this.namespace,
+      });
+    } catch (listError) {
+      this.logger.error(
+        `reapOrphanMatchServers listJobs failed: ${(listError as Error)?.message}`,
+      );
+      return 0;
+    }
+
+    const matchJobIds = jobs.items
+      .map((j) => j.metadata?.name)
+      .filter(
+        (name): name is string =>
+          !!name && /^m-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name),
+      );
+
+    if (matchJobIds.length === 0) {
+      return 0;
+    }
+
+    const matchIds = matchJobIds.map((name) => name.slice(2));
+
+    const { matches } = await this.hasura.query({
+      matches: {
+        __args: {
+          where: {
+            id: { _in: matchIds },
+          },
+        },
+        id: true,
+        status: true,
+      },
+    });
+
+    const statusById = new Map(
+      (matches ?? []).map((m) => [m.id as string, m.status as string]),
+    );
+
+    let reaped = 0;
+    for (const matchId of matchIds) {
+      const status = statusById.get(matchId);
+      const isOrphan =
+        !status ||
+        (
+          MatchAssistantService.TERMINAL_MATCH_STATUSES as readonly string[]
+        ).includes(status);
+
+      if (!isOrphan) {
+        continue;
+      }
+
+      this.logger.warn(
+        `[${matchId}] reaping orphan match-server job (status=${status ?? "missing"})`,
+      );
+      await this.stopOnDemandServer(matchId, true);
+      reaped++;
+    }
+
+    if (reaped > 0) {
+      this.logger.log(`reaped ${reaped} orphan match-server job(s)`);
+    }
+
+    return reaped;
   }
 
   public async getAvailableMaps(matchId: string) {
