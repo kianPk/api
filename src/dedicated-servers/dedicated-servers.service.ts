@@ -900,10 +900,17 @@ export class DedicatedServersService {
   }
 
   public async restartDedicatedServer(serverId: string): Promise<void> {
-    await this.systemService.restartDeployment(
-      this.getDedicatedServerDeploymentName(serverId),
-      this.namespace,
-    );
+    // Recreate rather than flip the existing Deployment: ENABLED_PLUGINS is
+    // baked into the pod env at setup time. A plain rollout restart kept the
+    // old list, so newly installed auto-load plugins (e.g. AntiNoclip) never
+    // linked into Public servers until the Deployment was rebuilt.
+    await this.removeDedicatedServer(serverId);
+    const ok = await this.setupDedicatedServer(serverId);
+    if (!ok) {
+      throw new Error(
+        `failed to recreate dedicated server ${serverId} after restart`,
+      );
+    }
   }
 
   public async getAllDedicatedServerStats(): Promise<
