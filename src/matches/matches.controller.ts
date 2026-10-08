@@ -193,14 +193,12 @@ export class MatchesController {
         `type must be one of: ${ADMIN_ELO_TYPES.join(", ")}`,
       );
     }
-    // Some deployments omit Rush/Trios from e_match_types_enum — resolve live.
-    const enumRows = await this.postgres.query<Array<{ value: string }>>(
-      `SELECT unnest(enum_range(NULL::e_match_types_enum))::text AS value`,
+    // player_elo.type is text FK → e_match_types (Hasura enum), not a PG enum.
+    const typeRows = await this.postgres.query<Array<{ value: string }>>(
+      `SELECT value FROM e_match_types WHERE lower(value) = lower($1) LIMIT 1`,
+      [preferred],
     );
-    const allowed = new Set(enumRows.map((r) => r.value));
-    const type = allowed.has(preferred)
-      ? preferred
-      : [...allowed].find((v) => v.toLowerCase() === preferred.toLowerCase());
+    const type = typeRows[0]?.value;
     if (!type) {
       throw new BadRequestException(
         `Match type "${preferred}" is not available on this panel`,
@@ -229,7 +227,7 @@ export class MatchesController {
     >(
       `SELECT match_id::text AS match_id, current::text AS current, type::text AS type
        FROM player_elo
-       WHERE steam_id = $1::bigint AND type = $2::e_match_types_enum
+       WHERE steam_id = $1::bigint AND type = $2
        ORDER BY created_at DESC
        LIMIT 1`,
       [steamId, type],
@@ -247,7 +245,7 @@ export class MatchesController {
              created_at = now()
          WHERE steam_id = $3::bigint
            AND match_id = $4::uuid
-           AND type = $5::e_match_types_enum`,
+           AND type = $5`,
         [elo, change, steamId, latest.match_id, type],
       );
     } else {
@@ -261,7 +259,7 @@ export class MatchesController {
       }
       await this.postgres.query(
         `INSERT INTO player_elo (steam_id, match_id, type, current, change, created_at)
-         VALUES ($1::bigint, $2::uuid, $3::e_match_types_enum, $4::numeric, $5::numeric, now())
+         VALUES ($1::bigint, $2::uuid, $3, $4::numeric, $5::numeric, now())
          ON CONFLICT (steam_id, match_id, type) DO UPDATE SET
            current = EXCLUDED.current,
            change = EXCLUDED.change,
