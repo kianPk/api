@@ -1,4 +1,8 @@
-import { GameModesService, RequiredPluginMissing } from "./game-modes.service";
+import {
+  GameModesService,
+  RequiredPluginMissing,
+  type ResolvedGameMode,
+} from "./game-modes.service";
 
 // Auto-loading shipped broken: the merge lived in environmentFor(), which
 // nothing called, so a plugin set to load without a mode never reached a
@@ -415,5 +419,90 @@ describe("GameModesService server guidelines", () => {
     const asked = seen.find((entry) => entry.sql.includes("AS disable"));
 
     expect(asked?.params[0]).toEqual(["inventory-simulator"]);
+  });
+});
+
+describe("GameModesService plugin config files", () => {
+  const path = "addons/swiftlys2/configs/plugins/MapChooser/config.jsonc";
+
+  it("writes __files beside the main config and keeps them out of it", () => {
+    const files = GameModesService.pluginConfigFiles(path, {
+      MapChooser: { MapsInCooldown: 1 },
+      __files: {
+        "maps.jsonc": { MapChooserMaps: { Maps: [{ Name: "A", Id: "1" }] } },
+      },
+    });
+
+    expect(Object.keys(files).sort()).toEqual([
+      path,
+      "addons/swiftlys2/configs/plugins/MapChooser/maps.jsonc",
+    ]);
+    expect(JSON.parse(files[path])).toEqual({
+      MapChooser: { MapsInCooldown: 1 },
+    });
+  });
+
+  it("refuses sibling names that would leave the plugin's folder", () => {
+    const files = GameModesService.pluginConfigFiles(path, {
+      __files: { "../core.jsonc": "x", "a/b.jsonc": "y", ".hidden": "z" },
+    });
+
+    expect(Object.keys(files)).toEqual([path]);
+  });
+});
+
+describe("GameModesService public server cfg", () => {
+  const service = new GameModesService(
+    { warn: jest.fn(), log: jest.fn() } as never,
+    {} as never,
+    {} as never,
+  );
+
+  const mode: ResolvedGameMode = {
+    id: "mode-1",
+    slug: "awp",
+    name: "AWP",
+    cfg: "mp_buytime 0",
+    extraGameParams: null,
+    enabledPlugins: "",
+    pluginConfigs: null,
+    missingRequired: [],
+    disableServerGuidelines: false,
+  };
+
+  const decode = (value: string | null) =>
+    JSON.parse(Buffer.from(value as string, "base64").toString());
+
+  it("rides the cfg along as every public gamemode server cfg", () => {
+    const configs = decode(service.withPublicServerCfg(mode)!.pluginConfigs);
+
+    expect(Object.keys(configs).sort()).toEqual(
+      GameModesService.PUBLIC_GAMEMODE_CFGS.map((file) => `cfg/${file}`).sort(),
+    );
+    expect(configs["cfg/gamemode_casual_server.cfg"]).toEqual("mp_buytime 0\n");
+  });
+
+  it("keeps the plugin configs the mode already had", () => {
+    const pluginConfigs = Buffer.from(
+      JSON.stringify({ "addons/x/config.jsonc": "{}" }),
+    ).toString("base64");
+
+    const configs = decode(
+      service.withPublicServerCfg({ ...mode, pluginConfigs })!.pluginConfigs,
+    );
+
+    expect(configs["addons/x/config.jsonc"]).toEqual("{}");
+  });
+
+  it("sends the configs even when the mode loads no plugins", () => {
+    const env = service.environmentFor(service.withPublicServerCfg(mode));
+
+    expect(env.map((entry) => entry.name)).toEqual(["PLUGIN_CONFIGS"]);
+  });
+
+  it("leaves a mode without a cfg untouched", () => {
+    const bare = { ...mode, cfg: null };
+
+    expect(service.withPublicServerCfg(bare)).toBe(bare);
   });
 });

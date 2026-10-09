@@ -317,7 +317,10 @@ export class GameModesService {
 
       if (plugin.config && plugin.config_path) {
         const path = plugin.config_path.replace("{runtime}", runtime);
-        configs[path] = JSON.stringify(plugin.config, null, 2);
+        Object.assign(
+          configs,
+          GameModesService.pluginConfigFiles(path, plugin.config),
+        );
       }
     }
 
@@ -336,6 +339,75 @@ export class GameModesService {
       // Set once the whole plugin list is known; a mode's own plugins are only
       // half of what a server loads.
       disableServerGuidelines: false,
+    };
+  }
+
+  // Some plugins split their config across files (MapChooser keeps its map list
+  // in maps.jsonc beside config.jsonc), and a file the plugin generates on first
+  // load from its own template would win over anything the mode said. A
+  // "__files" key names those siblings; each lands next to config_path. Names
+  // are bare file names so a mode can never write outside the plugin's folder.
+  public static pluginConfigFiles(
+    configPath: string,
+    config: Record<string, unknown>,
+  ): Record<string, string> {
+    const { __files: siblings, ...main } = config;
+    const files: Record<string, string> = {
+      [configPath]: JSON.stringify(main, null, 2),
+    };
+
+    if (!siblings || typeof siblings !== "object" || Array.isArray(siblings)) {
+      return files;
+    }
+
+    const directory = configPath.includes("/")
+      ? configPath.slice(0, configPath.lastIndexOf("/") + 1)
+      : "";
+
+    for (const [name, contents] of Object.entries(siblings)) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.includes("..")) {
+        continue;
+      }
+
+      files[`${directory}${name}`] =
+        typeof contents === "string"
+          ? contents
+          : JSON.stringify(contents, null, 2);
+    }
+
+    return files;
+  }
+
+  // A public server has no match plugin to exec a mode's cfg, which is the only
+  // way matches get it. CS2 runs gamemode_<mode>_server.cfg after every map
+  // load, so writing the cfg there keeps the rules across map changes. Every
+  // mode the public types boot into is covered rather than mapping server type
+  // to file name, which would silently go stale the next time a type changes.
+  public static readonly PUBLIC_GAMEMODE_CFGS = [
+    "gamemode_casual_server.cfg",
+    "gamemode_competitive_server.cfg",
+    "gamemode_competitive2v2_server.cfg",
+    "gamemode_deathmatch_server.cfg",
+  ];
+
+  public withPublicServerCfg(
+    mode: ResolvedGameMode | null,
+  ): ResolvedGameMode | null {
+    if (!mode?.cfg?.trim()) {
+      return mode;
+    }
+
+    const configs: Record<string, string> = mode.pluginConfigs
+      ? JSON.parse(Buffer.from(mode.pluginConfigs, "base64").toString())
+      : {};
+
+    for (const file of GameModesService.PUBLIC_GAMEMODE_CFGS) {
+      configs[`cfg/${file}`] = `${mode.cfg.trim()}\n`;
+    }
+
+    return {
+      ...mode,
+      pluginConfigs: Buffer.from(JSON.stringify(configs)).toString("base64"),
     };
   }
 
@@ -443,13 +515,15 @@ export class GameModesService {
   public environmentFor(
     mode: ResolvedGameMode | null,
   ): Array<{ name: string; value: string }> {
-    if (!mode?.enabledPlugins) {
+    if (!mode?.enabledPlugins && !mode?.pluginConfigs) {
       return [];
     }
 
-    const environment = [
-      { name: "ENABLED_PLUGINS", value: mode.enabledPlugins },
-    ];
+    const environment: Array<{ name: string; value: string }> = [];
+
+    if (mode.enabledPlugins) {
+      environment.push({ name: "ENABLED_PLUGINS", value: mode.enabledPlugins });
+    }
 
     if (mode.pluginConfigs) {
       environment.push({ name: "PLUGIN_CONFIGS", value: mode.pluginConfigs });

@@ -162,10 +162,20 @@ export class DedicatedServersService {
 
       // A Ranked server resolves to no mode by design, so matchmaking capacity
       // always comes up on a clean plugin set.
-      const gameMode = await this.gameModesService.resolveForServer(serverId);
+      const gameMode = this.gameModesService.withPublicServerCfg(
+        await this.gameModesService.resolveForServer(serverId),
+      );
 
       const gameModeEnvironment =
         this.gameModesService.environmentFor(gameMode);
+
+      // A mode built around workshop maps names its first one; booting
+      // de_dust2 underneath it would load a map only to leave it again.
+      const startMap = /(^|\s)\+(map|host_workshop_map)\s/.test(
+        gameMode?.extraGameParams || "",
+      )
+        ? ""
+        : "+map de_dust2";
 
       const dedicatedServerDeploymentName =
         this.getDedicatedServerDeploymentName(serverId);
@@ -315,7 +325,7 @@ export class DedicatedServersService {
                         // for endmatch VOTING UI with real names/thumbnails.
                         // Custom mg_* in gamemodes_server.txt often shows "undefined".
                         // Ranked picks maps from the match, so leave mapgroup off there.
-                        value: `-maxplayers ${server.type === "Ranked" ? 16 : server.max_players} +map de_dust2${server.type === "Ranked" ? "" : " +mapgroup mg_active"} +game_type ${this.getGameType(server.type)} +game_mode ${this.getGameMode(server.type)} +sv_skirmish_id ${this.getWarGameType(server.type)} ${server.connect_password ? ` +sv_password ${server.connect_password}` : ""}${launchExtras ? ` ${launchExtras}` : ""}${gameMode?.extraGameParams ? ` ${gameMode.extraGameParams}` : ""}`,
+                        value: `-maxplayers ${server.type === "Ranked" ? 16 : server.max_players} ${startMap}${server.type === "Ranked" ? "" : " +mapgroup mg_active"} +game_type ${this.getGameType(server.type)} +game_mode ${this.getGameMode(server.type)} +sv_skirmish_id ${this.getWarGameType(server.type)} ${server.connect_password ? ` +sv_password ${server.connect_password}` : ""}${launchExtras ? ` ${launchExtras}` : ""}${gameMode?.extraGameParams ? ` ${gameMode.extraGameParams}` : ""}`,
                       },
                       { name: "SERVER_ID", value: server.id },
                       {

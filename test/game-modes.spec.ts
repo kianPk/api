@@ -719,4 +719,16 @@ describe("starter game modes (SQL-driven)", () => {
     expect(retakes.competitive_safe).toBe(true);
     expect(retakes.cfg).toEqual("mp_freezetime 99");
   });
+
+  it("ships the public-server modes with the map each one boots into", async () => {
+    const modes = await postgres.query<Array<Record<string, any>>>(
+      `SELECT slug, extra_game_params, competitive_safe
+         FROM game_modes WHERE slug IN ('duels','awp','2x2')
+        ORDER BY slug`,
+    );
+
+    expect(modes.map((mode) => mode.slug)).toEqual(["2x2", "awp", "duels"]);
+    expect(modes.every((mode) => /\+(map|host_workshop_map) /.test(mode.extra_game_params))).toBe(true);
+    expect(modes.every((mode) => mode.competitive_safe === false)).toBe(true);
+  });
 });
