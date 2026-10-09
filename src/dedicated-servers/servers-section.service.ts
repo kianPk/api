@@ -80,15 +80,13 @@ export class ServersSectionService {
           await this.reconcileMode(mode, desired, reserve);
         } catch (error) {
           this.logger.warn(
-            `servers section: unable to reconcile ${mode.key}`,
-            error?.message ?? error,
+            `servers section: unable to reconcile ${mode.key}: ${error?.message ?? error}`,
           );
         }
       }
     } catch (error) {
       this.logger.warn(
-        `servers section: reconcile failed`,
-        error?.message ?? error,
+        `servers section: reconcile failed: ${error?.message ?? error}`,
       );
     } finally {
       await this.redis.del(LOCK_KEY);
