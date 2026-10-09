@@ -584,8 +584,21 @@ describe("GameModesService Servers-section modes", () => {
     expect(resolved?.enabledPlugins).toEqual("");
   });
 
-  it.each(["duels", "awp"])(
-    "refuses to boot %s without the plugin that moves it to its workshop maps",
+  it("boots Deathmatch on a stock map, with its own plugin", async () => {
+    const { service } = build(
+      { section_mode: "dm", game_server_node_id: "node-a" },
+      { "servers-dm": "1.0.0" },
+    );
+
+    const resolved = await service.resolveForServer("server-1");
+
+    expect(resolved?.extraGameParams).toEqual("+map de_dust2");
+    expect(resolved?.cfg).toContain("mp_respawn_on_death_t 0");
+    expect(resolved?.enabledPlugins).toEqual("servers-dm@1.0.0");
+  });
+
+  it.each(["duels", "dm", "bhop"])(
+    "refuses to boot %s without the plugin that runs it",
     async (section) => {
       const { service } = build(
         { section_mode: section, game_server_node_id: "node-a" },
@@ -601,7 +614,7 @@ describe("GameModesService Servers-section modes", () => {
   it("lets a match's own mode win over the section", async () => {
     const { service, seen } = build(
       {
-        section_mode: "awp",
+        section_mode: "bhop",
         game_mode_id: null,
         game_server_node_id: "node-a",
       },
@@ -617,7 +630,7 @@ describe("GameModesService Servers-section modes", () => {
 describe("ServersSectionService numbering", () => {
   it("reads the server number from its label", () => {
     expect(ServersSectionService.numberOf("Duels #3")).toEqual(3);
-    expect(ServersSectionService.numberOf("AWP #12 ")).toEqual(12);
+    expect(ServersSectionService.numberOf("BHOP #12 ")).toEqual(12);
   });
 
   it("puts a label without a number last, so it is removed first", () => {

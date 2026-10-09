@@ -7,7 +7,7 @@
 // The database mirrors type and max_players in tbiu_servers_section_mode,
 // which forces them on every write; keep the two in step.
 
-export type ServerSectionModeKey = "duels" | "awp" | "2x2";
+export type ServerSectionModeKey = "duels" | "dm" | "bhop" | "2x2";
 
 // id is a stock map name (de_inferno) or a workshop id.
 export type ServerSectionMap = {
@@ -70,10 +70,14 @@ const INVENTORY: ServerSectionPlugin = {
   config: null,
 };
 
+// servers-awp is a retired mode's: still installed on a panel, it must not
+// auto-load onto matches either.
 export const SERVER_SECTION_PLUGIN_SLUGS = [
   "servers-duels",
-  "servers-awp",
+  "servers-dm",
+  "servers-bhop",
   "servers-2x2",
+  "servers-awp",
 ];
 
 export const SERVER_SECTION_MODES: Record<
@@ -141,17 +145,21 @@ export const SERVER_SECTION_MODES: Record<
       { id: "3139172262", name: "Redline" },
     ],
   },
-  awp: {
-    key: "awp",
-    label: "AWP",
-    type: "Casual",
-    maxPlayers: 20,
+  // xplay's Deathmatch: free for all on the stock maps, the weapons each
+  // player picks with !guns, and health, armour and ammo back on every kill.
+  // The plugin does the respawning, after each player's own delay
+  // (!fast/!medium/!slow), so the game's is off.
+  dm: {
+    key: "dm",
+    label: "Deathmatch",
+    type: "Deathmatch",
+    maxPlayers: 18,
     cfg: [
-      'mp_t_default_primary "weapon_awp"',
-      'mp_ct_default_primary "weapon_awp"',
+      'mp_t_default_primary ""',
+      'mp_ct_default_primary ""',
       'mp_t_default_secondary ""',
       'mp_ct_default_secondary ""',
-      "mp_free_armor 1",
+      "mp_free_armor 2",
       "mp_startmoney 0",
       "mp_maxmoney 0",
       "mp_afterroundmoney 0",
@@ -162,21 +170,99 @@ export const SERVER_SECTION_MODES: Record<
       "mp_death_drop_grenade 0",
       "mp_death_drop_defuser 0",
       "sv_infinite_ammo 2",
-      "mp_freezetime 1",
-      "mp_roundtime 1.5",
-      "mp_round_restart_delay 3",
+      "mp_freezetime 0",
+      "mp_roundtime 60",
+      "mp_ignore_round_win_conditions 1",
+      "mp_respawn_on_death_t 0",
+      "mp_respawn_on_death_ct 0",
+      "mp_teammates_are_enemies 1",
+      "mp_randomspawn 1",
+      "mp_randomspawn_los 1",
+      "mp_respawn_immunitytime 1",
+      "mp_dm_bonus_length_max 0",
+      "mp_dm_bonus_length_min 0",
+      "mp_dm_time_between_bonus_max 9999",
+      "mp_dm_time_between_bonus_min 9999",
+      "mp_autoteambalance 0",
+      "mp_limitteams 0",
+      "mp_friendlyfire 0",
       ...TIMED_MAP,
-      "mp_solid_teammates 1",
+      ...NO_BOTS,
+      ...HAND_END_OF_MATCH_TO_PLUGIN,
+    ].join("\n"),
+    extraGameParams: "+map de_dust2",
+    plugins: [{ slug: "servers-dm", required: true, config: null }, INVENTORY],
+    defaultMaps: [
+      { id: "de_dust2", name: "Dust 2" },
+      { id: "de_mirage", name: "Mirage" },
+      { id: "de_anubis", name: "Anubis" },
+      { id: "de_cache", name: "Cache" },
+      { id: "de_ancient_night", name: "Ancient Night" },
+      { id: "de_overpass", name: "Overpass" },
+      { id: "de_ancient", name: "Ancient" },
+      { id: "de_train", name: "Train" },
+      { id: "de_inferno", name: "Inferno" },
+      { id: "de_vertigo", name: "Vertigo" },
+      { id: "de_nuke", name: "Nuke" },
+    ],
+  },
+  // xplay's BHOP: auto-bhop with no stamina on the bhop workshop maps, everyone
+  // on one side and passing through each other, and the plugin's timer on each
+  // map's own start and end zones. A run takes longer than a fight, so a map
+  // stays up longer.
+  bhop: {
+    key: "bhop",
+    label: "BHOP",
+    type: "Casual",
+    maxPlayers: 20,
+    cfg: [
+      "sv_enablebunnyhopping 1",
+      "sv_autobunnyhopping 1",
+      "sv_airaccelerate 1000",
+      "sv_staminamax 0",
+      "sv_staminajumpcost 0",
+      "sv_staminalandcost 0",
+      "sv_staminarecoveryrate 0",
+      "sv_accelerate_use_weapon_speed 0",
+      "sv_falldamage_scale 0",
+      'mp_humanteam "CT"',
+      "mp_solid_teammates 0",
+      "mp_friendlyfire 0",
+      "mp_autoteambalance 0",
+      "mp_limitteams 0",
+      'mp_ct_default_primary ""',
+      'mp_ct_default_secondary "weapon_usp_silencer"',
+      "mp_startmoney 0",
+      "mp_maxmoney 0",
+      "mp_buytime 0",
+      "mp_freezetime 0",
+      "mp_roundtime 60",
+      "mp_ignore_round_win_conditions 1",
+      "mp_respawn_on_death_t 1",
+      "mp_respawn_on_death_ct 1",
+      ...TIMED_MAP,
+      "mp_timelimit 30",
       ...NO_BOTS,
       ...HAND_END_OF_MATCH_TO_PLUGIN,
     ].join("\n"),
     extraGameParams: WORKSHOP_BOOT_MAP,
-    plugins: [{ slug: "servers-awp", required: true, config: null }, INVENTORY],
+    plugins: [
+      { slug: "servers-bhop", required: true, config: null },
+      INVENTORY,
+    ],
     defaultMaps: [
-      { id: "3077655898", name: "awp_lego_2" },
-      { id: "3081154235", name: "awp_creek" },
-      { id: "3070577601", name: "awp_roost_fp" },
-      { id: "3094723224", name: "awp_gony_v2" },
+      { id: "3070665979", name: "bhop_emevaelx3" },
+      { id: "3738689616", name: "bhop_dust_temple" },
+      { id: "3162105298", name: "bhop_rc_nuclear" },
+      { id: "3071726325", name: "bhop_colour" },
+      { id: "3082038560", name: "bhop_cherryblossom" },
+      { id: "3721089159", name: "bhop_bug100_2nd" },
+      { id: "3225291020", name: "bhop_skylook2" },
+      { id: "3658482686", name: "bhop_winterland" },
+      { id: "3659295388", name: "bhop_treehouse2" },
+      { id: "3694996467", name: "bhop_easyjump_daily2" },
+      { id: "3459040844", name: "bhop_alt_vaahtera" },
+      { id: "3647662024", name: "bhop_quaker" },
     ],
   },
   "2x2": {
