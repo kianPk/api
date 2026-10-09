@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { DedicatedServersService } from "./dedicated-servers.service";
 import { ServersSectionService } from "./servers-section.service";
 import { DedicatedServersController } from "./dedicated-servers.controller";
+import { ServersSectionController } from "./servers-section.controller";
 import { HasuraModule } from "src/hasura/hasura.module";
 import { loggerFactory } from "src/utilities/LoggerFactory";
 import { EncryptionModule } from "src/encryption/encryption.module";
@@ -45,7 +46,7 @@ import { PostgresModule } from "../postgres/postgres.module";
     loggerFactory(),
   ],
   exports: [DedicatedServersService],
-  controllers: [DedicatedServersController],
+  controllers: [DedicatedServersController, ServersSectionController],
 })
 export class DedicatedServersModule {
   constructor(

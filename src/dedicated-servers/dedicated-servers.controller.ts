@@ -1,4 +1,4 @@
-import { Controller, Get, NotFoundException, Param } from "@nestjs/common";
+import { Controller } from "@nestjs/common";
 import { HasuraEvent } from "src/hasura/hasura.controller";
 import { HasuraEventData } from "src/hasura/types/HasuraEventData";
 import { server_regions_set_input, servers_set_input } from "generated";
@@ -8,18 +8,12 @@ import { HasuraAction } from "src/hasura/hasura.controller";
 import { game_server_nodes_set_input } from "generated/schema";
 import { User } from "src/auth/types/User";
 import { isRoleAbove } from "src/utilities/isRoleAbove";
-import { ServersSectionService } from "./servers-section.service";
-import {
-  SERVER_SECTION_MODES,
-  isServerSectionMode,
-} from "../game-plugins/server-section-modes";
 
 @Controller("dedicated-servers")
 export class DedicatedServersController {
   constructor(
     private readonly hasura: HasuraService,
     private readonly dedicatedServersService: DedicatedServersService,
-    private readonly serversSection: ServersSectionService,
   ) {}
 
   @HasuraEvent()
@@ -107,17 +101,6 @@ export class DedicatedServersController {
         await this.dedicatedServersService.restartDedicatedServer(server.id);
       }
     }
-  }
-
-  // Read by each mode's plugin on every map start, and by the Servers page.
-  @Get("section-maps/:mode")
-  public async sectionMaps(@Param("mode") mode: string) {
-    if (!isServerSectionMode(mode)) {
-      throw new NotFoundException();
-    }
-    return {
-      maps: await this.serversSection.maps(SERVER_SECTION_MODES[mode]),
-    };
   }
 
   @HasuraAction()
