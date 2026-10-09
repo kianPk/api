@@ -341,6 +341,10 @@ export class DedicatedServersService {
                         value: this.appConfig.apiDomain,
                       },
                       {
+                        name: "WEB_DOMAIN",
+                        value: this.appConfig.webDomain,
+                      },
+                      {
                         name: "RELAY_DOMAIN",
                         value: this.appConfig.relayDomain,
                       },
