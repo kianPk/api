@@ -55,6 +55,18 @@ const TIMED_MAP = [
 
 const NO_BOTS = ["bot_quota 0", "mp_autokick 0"];
 
+// Expert bots fill the server and each player who joins takes one's place.
+// servers-dm sets the same on every map, so the two never fight over it.
+const FILL_WITH_BOTS = [
+  "bot_quota 10",
+  "bot_quota_mode fill",
+  "bot_difficulty 3",
+  "bot_join_after_player 0",
+  "bot_join_team any",
+  "bot_chatter off",
+  "mp_autokick 0",
+];
+
 // CS2 logs into Steam only once a map has loaded, and a workshop map cannot
 // download before that: booting straight into +host_workshop_map hangs the
 // server forever. So a workshop mode boots on a stock map and its plugin moves
@@ -145,8 +157,9 @@ export const SERVER_SECTION_MODES: Record<
       { id: "3139172262", name: "Redline" },
     ],
   },
-  // xplay's Deathmatch: free for all on the stock maps, the weapons each
-  // player picks with !guns, and health, armour and ammo back on every kill.
+  // xplay's Deathmatch: free for all on the stock maps against expert bots,
+  // the weapons each player picks with !guns, and health, armour and ammo
+  // back on every kill.
   // The plugin does the respawning, after each player's own delay
   // (!fast/!medium/!slow), so the game's is off.
   dm: {
@@ -187,7 +200,7 @@ export const SERVER_SECTION_MODES: Record<
       "mp_limitteams 0",
       "mp_friendlyfire 0",
       ...TIMED_MAP,
-      ...NO_BOTS,
+      ...FILL_WITH_BOTS,
       ...HAND_END_OF_MATCH_TO_PLUGIN,
     ].join("\n"),
     extraGameParams: "+map de_dust2",
