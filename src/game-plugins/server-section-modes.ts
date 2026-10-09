@@ -24,7 +24,7 @@ export type ServerSectionPlugin = {
 export type ServerSectionMode = {
   key: ServerSectionModeKey;
   label: string;
-  type: "Casual" | "Wingman";
+  type: "Casual" | "Wingman" | "Deathmatch";
   maxPlayers: number;
   cfg: string;
   // The map the server boots into.
@@ -84,11 +84,13 @@ export const SERVER_SECTION_MODES: Record<
   // CS2 arena maps instead. The plugin owns teams, spawns and loadouts: every
   // arena runs on its own inside one round that never ends, free players are
   // paired by rating the moment a duel is decided, and each gets the weapons
-  // they picked with !guns.
+  // they picked with !guns. It boots as Deathmatch, as xplay's does, for the
+  // HUD of each player's own score; the plugin does the respawning, and the
+  // mode's random spawns, spawn immunity and bonus weapons are off.
   duels: {
     key: "duels",
     label: "Duels",
-    type: "Casual",
+    type: "Deathmatch",
     maxPlayers: 18,
     cfg: [
       'mp_t_default_secondary ""',
@@ -112,6 +114,12 @@ export const SERVER_SECTION_MODES: Record<
       "mp_respawn_on_death_ct 0",
       "mp_join_grace_time 0",
       "mp_teammates_are_enemies 1",
+      "mp_randomspawn 0",
+      "mp_respawn_immunitytime 0",
+      "mp_dm_bonus_length_max 0",
+      "mp_dm_bonus_length_min 0",
+      "mp_dm_time_between_bonus_max 9999",
+      "mp_dm_time_between_bonus_min 9999",
       "mp_autoteambalance 0",
       "mp_limitteams 0",
       "mp_force_assign_teams 1",
