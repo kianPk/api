@@ -81,12 +81,13 @@ export const SERVER_SECTION_MODES: Record<
   ServerSectionMode
 > = {
   // xplay's own duels_* maps are not public, so Duels rotates the most-played
-  // CS2 arena maps instead. The plugin owns teams, spawns and loadouts: every
-  // arena runs on its own inside one round that never ends, free players are
-  // paired by rating the moment a duel is decided, and each gets the weapons
-  // they picked with !guns. It boots as Deathmatch, as xplay's does, for the
-  // HUD of each player's own score; the plugin does the respawning, and the
-  // mode's random spawns, spawn immunity and bonus weapons are off.
+  // CS2 arena maps instead. The plugin owns arenas and loadouts: every arena
+  // runs on its own inside one round that never ends, free players are paired
+  // by rating the moment a duel is decided, and each gets the weapons they
+  // picked with !guns. It boots as Deathmatch, as xplay's does, for the HUD of
+  // each player's own score; the game does the respawning (a pawn a plugin
+  // respawns can come out without a model) and the plugin places players
+  // after, with the mode's random spawns, spawn immunity and bonus weapons off.
   duels: {
     key: "duels",
     label: "Duels",
