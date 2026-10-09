@@ -25,6 +25,11 @@ export class PublicServerDetailsController {
     return this.details.getDetails(serverId, user);
   }
 
+  @Get("public-details/:serverId/players")
+  public async players(@Param("serverId") serverId: string) {
+    return this.details.getLivePlayers(serverId);
+  }
+
   @Post("public-details/:serverId/settings")
   public async settings(
     @Req() request: Request,

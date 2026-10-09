@@ -9,6 +9,7 @@ import { User } from "../auth/types/User";
 import { PostgresService } from "../postgres/postgres.service";
 import { PublicRanksService } from "./public-ranks.service";
 import { timingSafeStringEqual } from "../utilities/timingSafeStringEqual";
+import { DedicatedServersService } from "../dedicated-servers/dedicated-servers.service";
 
 type Profile = {
   show_vips: boolean;
@@ -27,7 +28,74 @@ export class PublicServerDetailsService {
   constructor(
     private readonly postgres: PostgresService,
     private readonly ranks: PublicRanksService,
+    private readonly dedicatedServers: DedicatedServersService,
   ) {}
+
+  /**
+   * Who is on a public server right now, from the status the ping job already
+   * pulls every minute -- so a page full of visitors never turns into RCON
+   * traffic against the game server.
+   */
+  public async getLivePlayers(serverId: string) {
+    const { id } = await this.requireServer(serverId);
+    const [server] = await this.postgres.query<
+      Array<{ type: string; enabled: boolean }>
+    >(`SELECT type, enabled FROM servers WHERE id = $1`, [id]);
+    if (!server?.enabled || server.type === "Ranked") {
+      return { map: null, last_ping: null, players: [] };
+    }
+
+    const cached = await this.dedicatedServers.getCachedServerPlayers(
+      serverId,
+    );
+    const steamIds = cached.players
+      .map((p) => String(p.steam_id || ""))
+      .filter((id) => /^7656119\d{10}$/.test(id));
+
+    if (steamIds.length === 0) {
+      return { map: cached.map, last_ping: cached.last_ping, players: [] };
+    }
+
+    const rows = await this.postgres.query<
+      Array<{
+        steam_id: string;
+        name: string | null;
+        avatar_url: string | null;
+        custom_avatar_url: string | null;
+        points: number | null;
+      }>
+    >(
+      `SELECT ids.steam_id::text AS steam_id,
+              pl.name,
+              pl.avatar_url,
+              pl.custom_avatar_url,
+              r.points
+       FROM unnest($2::bigint[]) AS ids(steam_id)
+       LEFT JOIN players pl ON pl.steam_id = ids.steam_id
+       LEFT JOIN public_server_rank_presence r
+              ON r.server_id = $1 AND r.steam_id = ids.steam_id`,
+      [serverId, steamIds],
+    );
+    const byId = new Map(rows.map((r) => [r.steam_id, r]));
+
+    const players = cached.players
+      .filter((p) => byId.has(String(p.steam_id)))
+      .map((p) => {
+        const row = byId.get(String(p.steam_id))!;
+        const points = Number(row.points) || 0;
+        return {
+          steam_id: String(p.steam_id),
+          name: row.name || p.name || null,
+          avatar_url: row.custom_avatar_url || row.avatar_url || null,
+          registered: row.name !== null,
+          points,
+          ...(points > 0 ? PublicRanksService.skillFromPoints(points) : {}),
+        };
+      })
+      .sort((a, b) => b.points - a.points);
+
+    return { map: cached.map, last_ping: cached.last_ping, players };
+  }
 
   private async requireServer(serverId: string) {
     if (!/^[0-9a-f-]{36}$/i.test(serverId || "")) {

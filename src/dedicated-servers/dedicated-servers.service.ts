@@ -545,7 +545,12 @@ export class DedicatedServersService {
     serverId: string,
     game: string,
     steamRelayEnabled: boolean,
-  ): Promise<{ steamId: string | null; clients_human: number; map: string }> {
+  ): Promise<{
+    steamId: string | null;
+    clients_human: number;
+    map: string;
+    players: Array<{ steam_id: string; name: string }>;
+  }> {
     const rcon = await this.RconService.connect(serverId);
     if (!rcon) {
       return;
@@ -559,13 +564,22 @@ export class DedicatedServersService {
         steamId: null,
         clients_human: playersMatch ? parseInt(playersMatch[1]) : 0,
         map: mapMatch ? mapMatch[1] : "unknown",
+        players: this.parseStatusText(output).map(({ steam_id, name }) => ({
+          steam_id,
+          name,
+        })),
       };
     } else {
-      const status = JSON.parse(await rcon.send("status_json"));
+      const raw = await rcon.send("status_json");
+      const status = JSON.parse(raw);
       return {
         steamId: steamRelayEnabled ? status.server.steamid : null,
         clients_human: status.server.clients_human,
         map: status.server.map || "unknown",
+        players: this.parseStatusJson(raw).map(({ steam_id, name }) => ({
+          steam_id,
+          name,
+        })),
       };
     }
   }
@@ -867,7 +881,7 @@ export class DedicatedServersService {
       return;
     }
 
-    const { steamId, clients_human, map } = statusInfo;
+    const { steamId, clients_human, map, players } = statusInfo;
 
     await this.redis.hset(
       "dedicated-servers:stats",
@@ -875,6 +889,7 @@ export class DedicatedServersService {
       JSON.stringify({
         clients_human,
         map,
+        players: players.slice(0, 64),
         last_ping: new Date().toISOString(),
       }),
     );
@@ -955,6 +970,27 @@ export class DedicatedServersService {
         error,
       );
       return [];
+    }
+  }
+
+  public async getCachedServerPlayers(serverId: string): Promise<{
+    map: string | null;
+    last_ping: string | null;
+    players: Array<{ steam_id: string; name: string }>;
+  }> {
+    const raw = await this.redis.hget("dedicated-servers:stats", serverId);
+    if (!raw) {
+      return { map: null, last_ping: null, players: [] };
+    }
+    try {
+      const data = JSON.parse(raw);
+      return {
+        map: data.map ?? null,
+        last_ping: data.last_ping ?? null,
+        players: Array.isArray(data.players) ? data.players : [],
+      };
+    } catch {
+      return { map: null, last_ping: null, players: [] };
     }
   }
 
