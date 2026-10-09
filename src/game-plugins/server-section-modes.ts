@@ -21,7 +21,7 @@ export type ServerSectionMode = {
   type: "Casual" | "Wingman";
   maxPlayers: number;
   cfg: string;
-  // The first map; the server boots straight into it instead of de_dust2.
+  // The map the server boots into.
   extraGameParams: string;
   plugins: Array<ServerSectionPlugin>;
 };
@@ -45,6 +45,12 @@ const TIMED_MAP = [
 ];
 
 const NO_BOTS = ["bot_quota 0", "mp_autokick 0"];
+
+// CS2 logs into Steam only once a map has loaded, and a workshop map cannot
+// download before that: booting straight into +host_workshop_map hangs the
+// server forever. So a workshop mode boots on a stock map and its plugin moves
+// it onto the mode's pool, which is why that plugin is required.
+const WORKSHOP_BOOT_MAP = "+map de_dust2";
 
 // A mode's plugin carries its rules, map pool and vote in code, so it takes
 // no config. Skins are the one thing shared with the rest of the site.
@@ -98,7 +104,7 @@ export const SERVER_SECTION_MODES: Record<
       ...NO_BOTS,
       ...HAND_END_OF_MATCH_TO_PLUGIN,
     ].join("\n"),
-    extraGameParams: "+host_workshop_map 3145424712",
+    extraGameParams: WORKSHOP_BOOT_MAP,
     plugins: [
       { slug: "servers-duels", required: true, config: null },
       INVENTORY,
@@ -133,13 +139,8 @@ export const SERVER_SECTION_MODES: Record<
       ...NO_BOTS,
       ...HAND_END_OF_MATCH_TO_PLUGIN,
     ].join("\n"),
-    // The cfg alone already makes it AWP-only, so the server still runs if
-    // the plugin is missing -- just without the map rotation.
-    extraGameParams: "+host_workshop_map 3077655898",
-    plugins: [
-      { slug: "servers-awp", required: false, config: null },
-      INVENTORY,
-    ],
+    extraGameParams: WORKSHOP_BOOT_MAP,
+    plugins: [{ slug: "servers-awp", required: true, config: null }, INVENTORY],
   },
   "2x2": {
     key: "2x2",

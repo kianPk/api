@@ -560,7 +560,8 @@ describe("GameModesService Servers-section modes", () => {
     const resolved = await service.resolveForServer("server-1");
 
     expect(resolved?.slug).toEqual("duels");
-    expect(resolved?.extraGameParams).toEqual("+host_workshop_map 3145424712");
+    // Its plugin moves it onto the workshop pool once Steam is up.
+    expect(resolved?.extraGameParams).toEqual("+map de_dust2");
     expect(resolved?.cfg).toContain("mp_timelimit 20");
     expect(resolved?.cfg).toContain("mp_match_end_restart 1");
     expect(resolved?.enabledPlugins).toEqual(
@@ -571,28 +572,31 @@ describe("GameModesService Servers-section modes", () => {
     expect(seen.some((sql) => sql.includes("load_ranked"))).toBe(false);
   });
 
-  it("still boots AWP and 2x2 when their plugin is missing", async () => {
+  it("still boots 2x2, on stock maps, when its plugin is missing", async () => {
     const { service } = build(
-      { section_mode: "awp", game_server_node_id: "node-a" },
+      { section_mode: "2x2", game_server_node_id: "node-a" },
       {},
     );
 
     const resolved = await service.resolveForServer("server-1");
 
-    expect(resolved?.cfg).toContain('mp_ct_default_primary "weapon_awp"');
+    expect(resolved?.extraGameParams).toEqual("+map de_inferno");
     expect(resolved?.enabledPlugins).toEqual("");
   });
 
-  it("refuses to boot Duels without its plugin", async () => {
-    const { service } = build(
-      { section_mode: "duels", game_server_node_id: "node-a" },
-      { "inventory-simulator": "3.1.0" },
-    );
+  it.each(["duels", "awp"])(
+    "refuses to boot %s without the plugin that moves it to its workshop maps",
+    async (section) => {
+      const { service } = build(
+        { section_mode: section, game_server_node_id: "node-a" },
+        { "inventory-simulator": "3.1.0" },
+      );
 
-    await expect(service.resolveForServer("server-1")).rejects.toBeInstanceOf(
-      RequiredPluginMissing,
-    );
-  });
+      await expect(service.resolveForServer("server-1")).rejects.toBeInstanceOf(
+        RequiredPluginMissing,
+      );
+    },
+  );
 
   it("lets a match's own mode win over the section", async () => {
     const { service, seen } = build(
