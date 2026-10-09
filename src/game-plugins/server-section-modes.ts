@@ -81,9 +81,10 @@ export const SERVER_SECTION_MODES: Record<
   ServerSectionMode
 > = {
   // xplay's own duels_* maps are not public, so Duels rotates the most-played
-  // CS2 arena maps instead. The plugin owns teams, spawns and loadouts: it
-  // pairs players into arenas, ends the round once every arena is decided and
-  // hands out the weapons each player picked with !guns.
+  // CS2 arena maps instead. The plugin owns teams, spawns and loadouts: every
+  // arena runs on its own inside one round that never ends, free players are
+  // paired by rating the moment a duel is decided, and each gets the weapons
+  // they picked with !guns.
   duels: {
     key: "duels",
     label: "Duels",
@@ -102,9 +103,15 @@ export const SERVER_SECTION_MODES: Record<
       "mp_death_drop_grenade 0",
       "mp_death_drop_defuser 0",
       "sv_infinite_ammo 2",
-      "mp_freezetime 2",
-      "mp_roundtime 1.5",
-      "mp_round_restart_delay 3",
+      "mp_freezetime 0",
+      "mp_roundtime 60",
+      "mp_roundtime_defuse 60",
+      "mp_roundtime_hostage 60",
+      "mp_ignore_round_win_conditions 1",
+      "mp_respawn_on_death_t 0",
+      "mp_respawn_on_death_ct 0",
+      "mp_join_grace_time 0",
+      "mp_teammates_are_enemies 1",
       "mp_autoteambalance 0",
       "mp_limitteams 0",
       "mp_force_assign_teams 1",
