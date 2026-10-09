@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { DedicatedServersService } from "./dedicated-servers.service";
+import { ServersSectionService } from "./servers-section.service";
 import { DedicatedServersController } from "./dedicated-servers.controller";
 import { HasuraModule } from "src/hasura/hasura.module";
 import { loggerFactory } from "src/utilities/LoggerFactory";
@@ -38,6 +39,7 @@ import { PostgresModule } from "../postgres/postgres.module";
   ],
   providers: [
     DedicatedServersService,
+    ServersSectionService,
     PingDedicatedServers,
     ...getQueuesProcessors("DedicatedServers"),
     loggerFactory(),

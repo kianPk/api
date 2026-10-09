@@ -3,6 +3,8 @@ import {
   RequiredPluginMissing,
   type ResolvedGameMode,
 } from "./game-modes.service";
+import { SERVER_SECTION_MODES } from "./server-section-modes";
+import { ServersSectionService } from "../dedicated-servers/servers-section.service";
 
 // Auto-loading shipped broken: the merge lived in environmentFor(), which
 // nothing called, so a plugin set to load without a mode never reached a
@@ -501,8 +503,118 @@ describe("GameModesService public server cfg", () => {
   });
 
   it("leaves a mode without a cfg untouched", () => {
-    const bare = { ...mode, cfg: null };
+    const bare: ResolvedGameMode = { ...mode, cfg: null };
 
     expect(service.withPublicServerCfg(bare)).toBe(bare);
+  });
+});
+
+describe("GameModesService Servers-section modes", () => {
+  const build = (
+    server: Record<string, unknown>,
+    installed: Record<string, string>,
+  ) => {
+    const seen: Array<string> = [];
+    const postgres = {
+      query: jest.fn(async (sql: string, params: Array<unknown> = []) => {
+        seen.push(sql);
+
+        if (sql.includes("COALESCE(")) {
+          return [server];
+        }
+        if (sql.includes("AS disable")) {
+          return [{ disable: false }];
+        }
+        if (sql.includes("FROM game_plugins p")) {
+          return (params[0] as Array<string>).map((slug) => ({
+            slug,
+            config_path: "addons/swiftlys2/configs/plugins/{slug}/config.jsonc".replace(
+              "{slug}",
+              slug,
+            ),
+            version: installed[slug] ?? null,
+          }));
+        }
+        return [];
+      }),
+    };
+
+    const service = new GameModesService(
+      { warn: jest.fn(), log: jest.fn() } as never,
+      postgres as never,
+      {
+        getPluginRuntime: jest.fn(async () => "swiftlys2"),
+        resolvePluginRuntime: jest.fn(async () => "swiftlys2"),
+      } as never,
+    );
+
+    return { service, seen };
+  };
+
+  it("boots a section server with its mode's rules, maps and plugins", async () => {
+    const { service, seen } = build(
+      { section_mode: "duels", game_server_node_id: "node-a" },
+      { arenas: "1.2.0", "map-chooser": "0.9.0" },
+    );
+
+    const resolved = await service.resolveForServer("server-1");
+
+    expect(resolved?.slug).toEqual("duels");
+    expect(resolved?.extraGameParams).toEqual("+host_workshop_map 3145424712");
+    expect(resolved?.cfg).toContain("mp_timelimit 20");
+    expect(resolved?.enabledPlugins).toEqual("arenas@1.2.0,map-chooser@0.9.0");
+    expect(seen.some((sql) => sql.includes("FROM game_modes"))).toBe(false);
+
+    const files = JSON.parse(
+      Buffer.from(resolved!.pluginConfigs!, "base64").toString(),
+    );
+    expect(
+      JSON.parse(files["addons/swiftlys2/configs/plugins/map-chooser/maps.jsonc"])
+        .MapChooserMaps.Maps.map((map: { Name: string }) => map.Name),
+    ).toEqual(["Mirage Duels", "Redline", "Anubis Duels", "Forgotten Yard"]);
+  });
+
+  it("refuses to boot Duels without the arenas plugin", async () => {
+    const { service } = build(
+      { section_mode: "duels", game_server_node_id: "node-a" },
+      { "map-chooser": "0.9.0" },
+    );
+
+    await expect(service.resolveForServer("server-1")).rejects.toBeInstanceOf(
+      RequiredPluginMissing,
+    );
+  });
+
+  it("lets a match's own mode win over the section", async () => {
+    const { service, seen } = build(
+      { section_mode: "awp", game_mode_id: null, game_server_node_id: "node-a" },
+      {},
+    );
+
+    await service.resolveForServer("server-1", "match-1");
+
+    expect(seen.some((sql) => sql.includes("FROM game_plugins p"))).toBe(false);
+  });
+});
+
+describe("ServersSectionService numbering", () => {
+  it("reads the server number from its label", () => {
+    expect(ServersSectionService.numberOf("Duels #3")).toEqual(3);
+    expect(ServersSectionService.numberOf("AWP #12 ")).toEqual(12);
+  });
+
+  it("puts a label without a number last, so it is removed first", () => {
+    expect(ServersSectionService.numberOf("my server")).toEqual(
+      Number.POSITIVE_INFINITY,
+    );
+    expect(ServersSectionService.numberOf(null)).toEqual(
+      Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("labels a server the way players refer to it", () => {
+    expect(
+      ServersSectionService.labelFor(SERVER_SECTION_MODES["2x2"], 4),
+    ).toEqual("2x2 #4");
   });
 });

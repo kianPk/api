@@ -2,6 +2,11 @@ import { Injectable, Logger } from "@nestjs/common";
 import { PostgresService } from "../postgres/postgres.service";
 import { PluginRuntimeService } from "../plugin-runtime/plugin-runtime.service";
 import { PluginRuntime } from "../configs/types/GameServersConfig";
+import {
+  SERVER_SECTION_MODES,
+  isServerSectionMode,
+  type ServerSectionMode,
+} from "./server-section-modes";
 
 export type ResolvedGameMode = {
   id: string;
@@ -84,6 +89,7 @@ export class GameModesService {
         is_ranked: boolean;
         is_tournament: boolean;
         is_ranked_server: boolean;
+        section_mode: string | null;
       }>
     >(
       `SELECT COALESCE(
@@ -104,7 +110,8 @@ export class GameModesService {
               EXISTS (
                 SELECT 1 FROM tournament_brackets tb WHERE tb.match_id = $2
               ) AS is_tournament,
-              s.type = 'Ranked' AS is_ranked_server
+              s.type = 'Ranked' AS is_ranked_server,
+              s.section_mode
          FROM servers s
          LEFT JOIN game_server_nodes n ON n.id = s.game_server_node_id
         WHERE s.id = $1`,
@@ -134,9 +141,15 @@ export class GameModesService {
           : undefined,
     };
 
-    const mode = row?.game_mode_id
-      ? await this.resolve(row.game_mode_id, scope)
-      : null;
+    const mode =
+      !matchId && isServerSectionMode(row?.section_mode)
+        ? await this.resolveSection(
+            SERVER_SECTION_MODES[row.section_mode],
+            scope,
+          )
+        : row?.game_mode_id
+          ? await this.resolve(row.game_mode_id, scope)
+          : null;
 
     if (mode?.missingRequired.length) {
       throw new RequiredPluginMissing(
@@ -294,6 +307,67 @@ export class GameModesService {
       [gameModeId, runtime, nodeId],
     );
 
+    return this.build(mode, plugins, runtime, nodeId);
+  }
+
+  // A Servers-section mode is defined in code rather than in game_modes, so
+  // only the installed versions come from the database. A plugin the catalog
+  // does not know at all counts as not installed.
+  public async resolveSection(
+    section: ServerSectionMode,
+    scope?: PluginScope,
+  ): Promise<ResolvedGameMode> {
+    const runtime =
+      scope?.runtime ?? (await this.pluginRuntime.getPluginRuntime());
+    const nodeId = scope?.nodeId ?? null;
+    const slugs = section.plugins.map((plugin) => plugin.slug);
+
+    const rows = await this.postgres.query<
+      Array<{ slug: string; config_path: string | null; version: string | null }>
+    >(
+      `SELECT p.slug,
+              p.config_path,
+              (SELECT n.version
+                 FROM game_server_node_plugins n
+                WHERE n.plugin_slug = p.slug
+                  AND n.runtime = $2
+                  AND n.status = 'Installed'
+                  AND n.version IS NOT NULL
+                  AND ($3::text IS NULL OR n.game_server_node_id = $3)
+                ORDER BY n.updated_at DESC
+                LIMIT 1) AS version
+         FROM game_plugins p
+        WHERE p.slug = ANY($1::text[])`,
+      [slugs, runtime, nodeId],
+    );
+    const bySlug = new Map(rows.map((row) => [row.slug, row]));
+
+    return this.build(
+      {
+        id: "",
+        slug: section.key,
+        name: section.label,
+        cfg: section.cfg,
+        extra_game_params: section.extraGameParams,
+      },
+      section.plugins.map((plugin) => ({
+        plugin_slug: plugin.slug,
+        config: plugin.config,
+        required: plugin.required,
+        config_path: bySlug.get(plugin.slug)?.config_path ?? null,
+        version: bySlug.get(plugin.slug)?.version ?? null,
+      })),
+      runtime,
+      nodeId,
+    );
+  }
+
+  private build(
+    mode: ModeRow,
+    plugins: Array<ModePluginRow>,
+    runtime: PluginRuntime,
+    nodeId: string | null,
+  ): ResolvedGameMode {
     const enabled: Array<string> = [];
     const configs: Record<string, string> = {};
     const missingRequired: Array<string> = [];

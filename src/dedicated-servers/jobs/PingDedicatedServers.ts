@@ -3,16 +3,21 @@ import { UseQueue } from "../../utilities/QueueProcessors";
 import { HasuraService } from "../../hasura/hasura.service";
 import { DedicatedServerQueues } from "../enums/DedicatedServerQueues";
 import { DedicatedServersService } from "../dedicated-servers.service";
+import { ServersSectionService } from "../servers-section.service";
 
 @UseQueue("DedicatedServers", DedicatedServerQueues.PingDedicatedServers)
 export class PingDedicatedServers extends WorkerHost {
   constructor(
     private readonly hasura: HasuraService,
     private readonly dedicatedServersService: DedicatedServersService,
+    private readonly serversSection: ServersSectionService,
   ) {
     super();
   }
   async process(): Promise<void> {
+    // reconcile logs its own failures; the fleet still gets its status ping.
+    await this.serversSection.reconcile().catch((): void => undefined);
+
     const { servers } = await this.hasura.query({
       servers: {
         __args: {
