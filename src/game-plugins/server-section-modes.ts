@@ -115,7 +115,7 @@ export const SERVER_SECTION_MODES: Record<
       "mp_join_grace_time 0",
       "mp_teammates_are_enemies 1",
       "mp_randomspawn 0",
-      "mp_respawn_immunitytime 0",
+      "mp_respawn_immunitytime -1",
       "mp_dm_bonus_length_max 0",
       "mp_dm_bonus_length_min 0",
       "mp_dm_time_between_bonus_max 9999",
