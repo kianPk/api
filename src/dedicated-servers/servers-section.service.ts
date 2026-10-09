@@ -4,6 +4,8 @@ import { PostgresService } from "../postgres/postgres.service";
 import { RedisManagerService } from "../redis/redis-manager/redis-manager.service";
 import {
   SERVER_SECTION_MODES,
+  sectionMapsFrom,
+  type ServerSectionMap,
   type ServerSectionMode,
 } from "../game-plugins/server-section-modes";
 
@@ -31,7 +33,19 @@ export class ServersSectionService {
     return `servers_section_${mode}`;
   }
 
+  public static mapsSetting(mode: ServerSectionMode["key"]) {
+    return `servers_section_${mode}_maps`;
+  }
+
   public static readonly RESERVE_SETTING = "servers_section_reserve_slots";
+
+  public async maps(mode: ServerSectionMode): Promise<Array<ServerSectionMap>> {
+    const [row] = await this.postgres.query<Array<{ value: string }>>(
+      `SELECT value FROM settings WHERE name = $1`,
+      [ServersSectionService.mapsSetting(mode.key)],
+    );
+    return sectionMapsFrom(mode, row?.value);
+  }
 
   // "Duels #3" is server 3. Anything else sorts last, so it is the first to go
   // when the count comes down and its number is free to be reused.

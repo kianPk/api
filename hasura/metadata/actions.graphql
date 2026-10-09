@@ -267,6 +267,13 @@ type Query {
   ): [ServerPlayer!]!
 }
 
+type Mutation {
+  changeSectionServerMap(
+    server_id: uuid!
+    map: String!
+  ): SuccessOutput
+}
+
 type Query {
   getIndexIOStats(
     schemas: [String!]

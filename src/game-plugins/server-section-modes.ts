@@ -9,6 +9,12 @@
 
 export type ServerSectionModeKey = "duels" | "awp" | "2x2";
 
+// id is a stock map name (de_inferno) or a workshop id.
+export type ServerSectionMap = {
+  id: string;
+  name: string;
+};
+
 export type ServerSectionPlugin = {
   slug: string;
   required: boolean;
@@ -24,6 +30,9 @@ export type ServerSectionMode = {
   // The map the server boots into.
   extraGameParams: string;
   plugins: Array<ServerSectionPlugin>;
+  // The rotation until an operator saves one in the
+  // servers_section_<mode>_maps setting.
+  defaultMaps: Array<ServerSectionMap>;
 };
 
 // Each mode's own plugin (kianPk/ServersModes) runs the map vote and the
@@ -52,8 +61,9 @@ const NO_BOTS = ["bot_quota 0", "mp_autokick 0"];
 // it onto the mode's pool, which is why that plugin is required.
 const WORKSHOP_BOOT_MAP = "+map de_dust2";
 
-// A mode's plugin carries its rules, map pool and vote in code, so it takes
-// no config. Skins are the one thing shared with the rest of the site.
+// A mode's plugin carries its rules and vote in code and fetches its map pool
+// from the api, so it takes no config. Skins are the one thing shared with
+// the rest of the site.
 const INVENTORY: ServerSectionPlugin = {
   slug: "inventory-simulator",
   required: false,
@@ -109,6 +119,11 @@ export const SERVER_SECTION_MODES: Record<
       { slug: "servers-duels", required: true, config: null },
       INVENTORY,
     ],
+    defaultMaps: [
+      { id: "3626024193", name: "am_map" },
+      { id: "3679824083", name: "Redline NGNW" },
+      { id: "3139172262", name: "Redline" },
+    ],
   },
   awp: {
     key: "awp",
@@ -141,6 +156,12 @@ export const SERVER_SECTION_MODES: Record<
     ].join("\n"),
     extraGameParams: WORKSHOP_BOOT_MAP,
     plugins: [{ slug: "servers-awp", required: true, config: null }, INVENTORY],
+    defaultMaps: [
+      { id: "3077655898", name: "awp_lego_2" },
+      { id: "3081154235", name: "awp_creek" },
+      { id: "3070577601", name: "awp_roost_fp" },
+      { id: "3094723224", name: "awp_gony_v2" },
+    ],
   },
   "2x2": {
     key: "2x2",
@@ -153,8 +174,53 @@ export const SERVER_SECTION_MODES: Record<
       { slug: "servers-2x2", required: false, config: null },
       INVENTORY,
     ],
+    defaultMaps: [
+      { id: "de_inferno", name: "Inferno" },
+      { id: "de_nuke", name: "Nuke" },
+      { id: "de_overpass", name: "Overpass" },
+      { id: "de_vertigo", name: "Vertigo" },
+      { id: "3522144043", name: "Poseidon" },
+    ],
   },
 };
+
+// Both end up in a console command, so nothing but these characters gets
+// through: a workshop id or a stock map name.
+export const SECTION_MAP_ID = /^(\d{6,12}|[a-z][a-z0-9_]{1,63})$/;
+const MAX_SECTION_MAPS = 30;
+
+// An operator's saved pool, or the mode's defaults when there is none or
+// nothing in it survives the checks.
+export function sectionMapsFrom(
+  mode: ServerSectionMode,
+  saved: string | null | undefined,
+): Array<ServerSectionMap> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(saved || "null");
+  } catch {
+    parsed = null;
+  }
+
+  const maps: Array<ServerSectionMap> = [];
+  for (const entry of Array.isArray(parsed) ? parsed : []) {
+    const id = String(entry?.id ?? "").trim();
+    const name = String(entry?.name ?? "")
+      .replace(/[\x00-\x1f";]/g, "")
+      .trim()
+      .slice(0, 48);
+    if (
+      SECTION_MAP_ID.test(id) &&
+      name &&
+      !maps.some((map) => map.id === id) &&
+      maps.length < MAX_SECTION_MAPS
+    ) {
+      maps.push({ id, name });
+    }
+  }
+
+  return maps.length > 0 ? maps : mode.defaultMaps;
+}
 
 export function isServerSectionMode(
   value: unknown,

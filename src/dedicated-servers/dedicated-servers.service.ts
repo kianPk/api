@@ -13,6 +13,10 @@ import { SystemService } from "src/system/system.service";
 import { PluginRuntimeService } from "src/plugin-runtime/plugin-runtime.service";
 import { GameModesService } from "../game-plugins/game-modes.service";
 import { PostgresService } from "../postgres/postgres.service";
+import {
+  SECTION_MAP_ID,
+  isServerSectionMode,
+} from "../game-plugins/server-section-modes";
 
 @Injectable()
 export class DedicatedServersService {
@@ -591,6 +595,33 @@ export class DedicatedServersService {
           name,
         })),
       };
+    }
+  }
+
+  // The mode's plugin makes the change, so it knows the map it is on and its
+  // vote and rotation carry on from there.
+  public async changeSectionServerMap(serverId: string, mapId: string) {
+    if (!SECTION_MAP_ID.test(mapId)) {
+      throw Error("not a workshop id or a map name");
+    }
+
+    const [server] = await this.postgres.query<
+      Array<{ section_mode: string | null }>
+    >(`SELECT section_mode FROM servers WHERE id = $1`, [serverId]);
+
+    if (!isServerSectionMode(server?.section_mode)) {
+      throw Error("only a Servers section server changes its map from here");
+    }
+
+    const rcon = await this.RconService.connect(serverId);
+    if (!rcon) {
+      throw Error(`unable to connect to rcon for server ${serverId}`);
+    }
+
+    try {
+      await rcon.send(`css_servers_map ${mapId}`);
+    } finally {
+      await this.RconService.disconnect(serverId);
     }
   }
 
