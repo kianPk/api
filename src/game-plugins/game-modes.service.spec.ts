@@ -528,12 +528,12 @@ describe("GameModesService Servers-section modes", () => {
         if (sql.includes("FROM game_plugins p")) {
           return (params[0] as Array<string>).map((slug) => ({
             slug,
-            config_path: "addons/swiftlys2/configs/plugins/{slug}/config.jsonc".replace(
-              "{slug}",
-              slug,
-            ),
+            config_path: null as string | null,
             version: installed[slug] ?? null,
           }));
+        }
+        if (sql.includes("load_ranked")) {
+          return [{ plugin_slug: "deathmatch", version: "2.0.0" }];
         }
         return [];
       }),
@@ -543,18 +543,18 @@ describe("GameModesService Servers-section modes", () => {
       { warn: jest.fn(), log: jest.fn() } as never,
       postgres as never,
       {
-        getPluginRuntime: jest.fn(async () => "swiftlys2"),
-        resolvePluginRuntime: jest.fn(async () => "swiftlys2"),
+        getPluginRuntime: jest.fn(async () => "counterstrikesharp"),
+        resolvePluginRuntime: jest.fn(async () => "counterstrikesharp"),
       } as never,
     );
 
     return { service, seen };
   };
 
-  it("boots a section server with its mode's rules, maps and plugins", async () => {
+  it("boots a section server with its own plugin and skins, and nothing auto-loaded", async () => {
     const { service, seen } = build(
       { section_mode: "duels", game_server_node_id: "node-a" },
-      { arenas: "1.2.0", "map-chooser": "0.9.0" },
+      { "servers-duels": "1.0.0", "inventory-simulator": "3.1.0" },
     );
 
     const resolved = await service.resolveForServer("server-1");
@@ -562,22 +562,31 @@ describe("GameModesService Servers-section modes", () => {
     expect(resolved?.slug).toEqual("duels");
     expect(resolved?.extraGameParams).toEqual("+host_workshop_map 3145424712");
     expect(resolved?.cfg).toContain("mp_timelimit 20");
-    expect(resolved?.enabledPlugins).toEqual("arenas@1.2.0,map-chooser@0.9.0");
-    expect(seen.some((sql) => sql.includes("FROM game_modes"))).toBe(false);
-
-    const files = JSON.parse(
-      Buffer.from(resolved!.pluginConfigs!, "base64").toString(),
+    expect(resolved?.cfg).toContain("mp_match_end_restart 1");
+    expect(resolved?.enabledPlugins).toEqual(
+      "servers-duels@1.0.0,inventory-simulator@3.1.0",
     );
-    expect(
-      JSON.parse(files["addons/swiftlys2/configs/plugins/map-chooser/maps.jsonc"])
-        .MapChooserMaps.Maps.map((map: { Name: string }) => map.Name),
-    ).toEqual(["Mirage Duels", "Redline", "Anubis Duels", "Forgotten Yard"]);
+    expect(resolved?.pluginConfigs).toBeNull();
+    expect(seen.some((sql) => sql.includes("FROM game_modes"))).toBe(false);
+    expect(seen.some((sql) => sql.includes("load_ranked"))).toBe(false);
   });
 
-  it("refuses to boot Duels without the arenas plugin", async () => {
+  it("still boots AWP and 2x2 when their plugin is missing", async () => {
+    const { service } = build(
+      { section_mode: "awp", game_server_node_id: "node-a" },
+      {},
+    );
+
+    const resolved = await service.resolveForServer("server-1");
+
+    expect(resolved?.cfg).toContain('mp_ct_default_primary "weapon_awp"');
+    expect(resolved?.enabledPlugins).toEqual("");
+  });
+
+  it("refuses to boot Duels without its plugin", async () => {
     const { service } = build(
       { section_mode: "duels", game_server_node_id: "node-a" },
-      { "map-chooser": "0.9.0" },
+      { "inventory-simulator": "3.1.0" },
     );
 
     await expect(service.resolveForServer("server-1")).rejects.toBeInstanceOf(
@@ -587,7 +596,11 @@ describe("GameModesService Servers-section modes", () => {
 
   it("lets a match's own mode win over the section", async () => {
     const { service, seen } = build(
-      { section_mode: "awp", game_mode_id: null, game_server_node_id: "node-a" },
+      {
+        section_mode: "awp",
+        game_mode_id: null,
+        game_server_node_id: "node-a",
+      },
       {},
     );
 

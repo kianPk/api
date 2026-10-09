@@ -4,8 +4,10 @@ import { PluginRuntimeService } from "../plugin-runtime/plugin-runtime.service";
 import { PluginRuntime } from "../configs/types/GameServersConfig";
 import {
   SERVER_SECTION_MODES,
+  SERVER_SECTION_PLUGIN_SLUGS,
   isServerSectionMode,
   type ServerSectionMode,
+  type ServerSectionModeKey,
 } from "./server-section-modes";
 
 export type ResolvedGameMode = {
@@ -141,15 +143,16 @@ export class GameModesService {
           : undefined,
     };
 
-    const mode =
-      !matchId && isServerSectionMode(row?.section_mode)
-        ? await this.resolveSection(
-            SERVER_SECTION_MODES[row.section_mode],
-            scope,
-          )
-        : row?.game_mode_id
-          ? await this.resolve(row.game_mode_id, scope)
-          : null;
+    const isSection = !matchId && isServerSectionMode(row?.section_mode);
+
+    const mode = isSection
+      ? await this.resolveSection(
+          SERVER_SECTION_MODES[row.section_mode as ServerSectionModeKey],
+          scope,
+        )
+      : row?.game_mode_id
+        ? await this.resolve(row.game_mode_id, scope)
+        : null;
 
     if (mode?.missingRequired.length) {
       throw new RequiredPluginMissing(
@@ -157,6 +160,12 @@ export class GameModesService {
         mode.missingRequired,
         scope.nodeId ?? `any node for ${scope.runtime}`,
       );
+    }
+
+    // A Servers-section server runs its mode's plugins and nothing else: an
+    // auto-load plugin such as deathmatch would rewrite the mode's rules.
+    if (isSection) {
+      return await this.withServerGuidelines(mode);
     }
 
     return await this.withAutoLoad(mode, scope);
@@ -323,7 +332,11 @@ export class GameModesService {
     const slugs = section.plugins.map((plugin) => plugin.slug);
 
     const rows = await this.postgres.query<
-      Array<{ slug: string; config_path: string | null; version: string | null }>
+      Array<{
+        slug: string;
+        config_path: string | null;
+        version: string | null;
+      }>
     >(
       `SELECT p.slug,
               p.config_path,
@@ -568,6 +581,7 @@ export class GameModesService {
                 LIMIT 1) AS version
          FROM game_plugin_installs i
         WHERE i.enabled = true
+          AND NOT (i.plugin_slug = ANY($4::text[]))
           AND CASE $3::text
                 WHEN 'ranked' THEN i.load_ranked
                 WHEN 'tournaments' THEN i.load_tournaments
@@ -575,7 +589,9 @@ export class GameModesService {
                 ELSE i.load_ranked OR i.load_tournaments OR i.load_custom
               END
         ORDER BY i.plugin_slug`,
-      [runtime, nodeId, scope?.match ?? null],
+      // A Servers-section mode's plugin is that mode: auto-loaded anywhere
+      // else it would put Duels rules on a match.
+      [runtime, nodeId, scope?.match ?? null, SERVER_SECTION_PLUGIN_SLUGS],
     );
 
     return rows
