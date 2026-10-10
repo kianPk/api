@@ -12,6 +12,7 @@ import {
   Param,
   ParseFilePipe,
   Post,
+  Query,
   Req,
   Res,
   UploadedFile,
@@ -28,6 +29,15 @@ import { UtilityRendersService } from "./utility-renders.service";
 // Cloudflare caps proxied request bodies at ~100MB, and a lineup clip is
 // seconds long, so one direct post is all an upload ever needs.
 const VIDEO_MAX_SIZE = 90 * 1024 * 1024;
+
+// The extension rides on the S3 key, which is how a reader of preview_file
+// knows what it is holding. A rendered preview is always mp4.
+const FORMATS = {
+  mp4: "video/mp4",
+  webm: "video/webm",
+} as const;
+
+type Format = keyof typeof FORMATS;
 
 /**
  * A lineup's video, uploaded by hand. It lands where a rendered preview would
@@ -54,7 +64,7 @@ export class UtilityVideosController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: VIDEO_MAX_SIZE }),
-          new FileTypeValidator({ fileType: /video\/mp4/ }),
+          new FileTypeValidator({ fileType: /video\/(mp4|webm)/ }),
         ],
       }),
     )
@@ -63,15 +73,24 @@ export class UtilityVideosController {
     const user = this.assertAdmin(request);
     await this.assertLineup(lineupId);
 
-    // The mimetype above is client-claimed; confirm the bytes really are mp4.
-    if (file.buffer.subarray(4, 8).toString() !== "ftyp") {
+    // The mimetype above is client-claimed; the bytes decide what it is.
+    const format = UtilityVideosController.sniff(file.buffer);
+
+    if (!format) {
       throw new BadRequestException("file content does not match its type");
     }
 
     const durationMs = Number(body?.duration_ms);
-    const key = UtilityRendersService.GetPreviewS3Key(lineupId);
+    const key = UtilityVideosController.key(lineupId, format);
 
-    await this.s3.put(key, file.buffer, "video/mp4");
+    await this.s3.put(key, file.buffer, FORMATS[format]);
+
+    // Replacing an mp4 with a webm (or back) leaves the other key orphaned.
+    for (const other of Object.keys(FORMATS) as Array<Format>) {
+      if (other !== format) {
+        await this.removeQuietly(UtilityVideosController.key(lineupId, other));
+      }
+    }
 
     // The thumbnail belonged to whatever clip was here before.
     await this.postgres.query(
@@ -116,16 +135,12 @@ export class UtilityVideosController {
     );
 
     for (const key of [
-      UtilityRendersService.GetPreviewS3Key(lineupId),
+      ...(Object.keys(FORMATS) as Array<Format>).map((format) =>
+        UtilityVideosController.key(lineupId, format),
+      ),
       UtilityRendersService.GetPreviewThumbnailS3Key(lineupId),
     ]) {
-      try {
-        await this.s3.remove(key);
-      } catch (error) {
-        this.logger.warn(
-          `[utility-video] could not remove ${key}: ${(error as Error)?.message}`,
-        );
-      }
+      await this.removeQuietly(key);
     }
 
     this.logger.log(`[utility-video] ${user.steam_id} removed ${lineupId}`);
@@ -133,14 +148,19 @@ export class UtilityVideosController {
     return { success: true };
   }
 
-  // Where preview_url points when no Cloudflare worker is configured. Range
-  // support is not optional: iOS <video> refuses to play a 200-only response.
-  @Get(":lineupId")
+  // Where preview_url points when no Cloudflare worker is configured, as
+  // <id>.<ext> so the address says what it holds. Range support is not
+  // optional: iOS <video> refuses to play a 200-only response.
+  @Get(":file")
   public async serve(
-    @Param("lineupId") lineupId: string,
+    @Param("file") fileName: string,
+    @Query("dl") dl: string | undefined,
+    @Query("name") name: string | undefined,
     @Req() request: Request,
     @Res() response: Response,
   ) {
+    const lineupId = String(fileName ?? "").replace(/\.(mp4|webm)$/i, "");
+
     if (!UtilityVideosController.isUuid(lineupId)) {
       throw new NotFoundException("video not found");
     }
@@ -170,7 +190,16 @@ export class UtilityVideosController {
       return;
     }
 
-    response.setHeader("Content-Type", "video/mp4");
+    const format: Format = key.endsWith(".webm") ? "webm" : "mp4";
+    const safeName = String(name ?? "").replace(/[^a-zA-Z0-9._-]/g, "");
+
+    response.setHeader("Content-Type", FORMATS[format]);
+    if (dl === "1") {
+      response.setHeader(
+        "Content-Disposition",
+        safeName ? `attachment; filename="${safeName}"` : "attachment",
+      );
+    }
     response.setHeader("Accept-Ranges", "bytes");
     response.setHeader("X-Content-Type-Options", "nosniff");
     // preview_url carries ?v=<upload time>, so a replaced clip is a new URL.
@@ -214,6 +243,43 @@ export class UtilityVideosController {
       } else {
         response.destroy();
       }
+    }
+  }
+
+  // mp4 carries "ftyp" at byte 4; webm is EBML, which opens with 1A 45 DF A3.
+  private static sniff(buffer: Buffer): Format | null {
+    if (buffer.length >= 8 && buffer.subarray(4, 8).toString() === "ftyp") {
+      return "mp4";
+    }
+
+    if (
+      buffer.length >= 4 &&
+      buffer[0] === 0x1a &&
+      buffer[1] === 0x45 &&
+      buffer[2] === 0xdf &&
+      buffer[3] === 0xa3
+    ) {
+      return "webm";
+    }
+
+    return null;
+  }
+
+  // Same clips/utility/ prefix a rendered preview uses: it is the only one the
+  // Cloudflare worker's route patterns match.
+  private static key(lineupId: string, format: Format): string {
+    return format === "mp4"
+      ? UtilityRendersService.GetPreviewS3Key(lineupId)
+      : `clips/utility/${lineupId}.webm`;
+  }
+
+  private async removeQuietly(key: string): Promise<void> {
+    try {
+      await this.s3.remove(key);
+    } catch (error) {
+      this.logger.warn(
+        `[utility-video] could not remove ${key}: ${(error as Error)?.message}`,
+      );
     }
   }
 

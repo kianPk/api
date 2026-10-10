@@ -42,7 +42,11 @@ CREATE OR REPLACE FUNCTION public.utility_lineup_preview_url(utility_lineups pub
             RETURN NULL;
         END IF;
 
-        RETURN CONCAT(api_domain, '/utility/videos/', utility_lineups.id, '?v=', version);
+        RETURN CONCAT(
+            api_domain, '/utility/videos/', utility_lineups.id,
+            CASE WHEN utility_lineups.preview_file LIKE '%.webm' THEN '.webm' ELSE '.mp4' END,
+            '?v=', version
+        );
     END;
 $$;
 
