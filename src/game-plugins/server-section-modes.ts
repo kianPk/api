@@ -53,6 +53,15 @@ const TIMED_MAP = [
   "mp_warmuptime 10",
 ];
 
+// The map stays until an admin changes it from the site.
+const MAP_NEVER_ENDS = [
+  "mp_timelimit 0",
+  "mp_maxrounds 0",
+  "mp_halftime 0",
+  "mp_match_can_clinch 0",
+  "mp_warmuptime 10",
+];
+
 const NO_BOTS = ["bot_quota 0", "mp_autokick 0"];
 
 // Expert bots fill the server and each player who joins takes one's place.
@@ -168,9 +177,9 @@ export const SERVER_SECTION_MODES: Record<
   },
   // xplay's Deathmatch: free for all on the stock maps against expert bots,
   // the weapons each player picks with !guns, and health, armour and ammo
-  // back on every kill.
-  // The game respawns everyone (a bot a plugin respawns stands idle); the
-  // plugin only brings back sooner a player who picked !fast.
+  // back on every kill. The map only changes when an admin changes it.
+  // The game respawns bots (a bot a plugin respawns stands idle); the plugin
+  // brings players straight back.
   dm: {
     key: "dm",
     label: "Deathmatch",
@@ -212,7 +221,7 @@ export const SERVER_SECTION_MODES: Record<
       "mp_autoteambalance 0",
       "mp_limitteams 0",
       "mp_friendlyfire 0",
-      ...TIMED_MAP,
+      ...MAP_NEVER_ENDS,
       ...FILL_WITH_BOTS,
       ...HAND_END_OF_MATCH_TO_PLUGIN,
     ].join("\n"),
