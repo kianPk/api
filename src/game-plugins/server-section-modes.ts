@@ -160,8 +160,8 @@ export const SERVER_SECTION_MODES: Record<
   // xplay's Deathmatch: free for all on the stock maps against expert bots,
   // the weapons each player picks with !guns, and health, armour and ammo
   // back on every kill.
-  // The plugin does the respawning, after each player's own delay
-  // (!fast/!medium/!slow), so the game's is off.
+  // The game respawns everyone (a bot a plugin respawns stands idle); the
+  // plugin only brings back sooner a player who picked !fast.
   dm: {
     key: "dm",
     label: "Deathmatch",
@@ -186,8 +186,8 @@ export const SERVER_SECTION_MODES: Record<
       "mp_freezetime 0",
       "mp_roundtime 60",
       "mp_ignore_round_win_conditions 1",
-      "mp_respawn_on_death_t 0",
-      "mp_respawn_on_death_ct 0",
+      "mp_respawn_on_death_t 1",
+      "mp_respawn_on_death_ct 1",
       "mp_teammates_are_enemies 1",
       "mp_randomspawn 1",
       "mp_randomspawn_los 1",

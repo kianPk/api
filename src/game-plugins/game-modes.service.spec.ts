@@ -593,7 +593,8 @@ describe("GameModesService Servers-section modes", () => {
     const resolved = await service.resolveForServer("server-1");
 
     expect(resolved?.extraGameParams).toEqual("+map de_dust2");
-    expect(resolved?.cfg).toContain("mp_respawn_on_death_t 0");
+    expect(resolved?.cfg).toContain("mp_respawn_on_death_t 1");
+    expect(resolved?.cfg).toContain("bot_difficulty 3");
     expect(resolved?.enabledPlugins).toEqual("servers-dm@1.0.0");
   });
 
