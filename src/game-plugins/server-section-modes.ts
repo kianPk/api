@@ -82,6 +82,14 @@ const INVENTORY: ServerSectionPlugin = {
   config: null,
 };
 
+// Makes every client download the announcer's workshop addon, which costs a
+// reconnect on joining: worth it on Deathmatch, not on a match.
+const MULTI_ADDON_MANAGER: ServerSectionPlugin = {
+  slug: "multiaddonmanager",
+  required: false,
+  config: null,
+};
+
 // servers-awp is a retired mode's: still installed on a panel, it must not
 // auto-load onto matches either.
 export const SERVER_SECTION_PLUGIN_SLUGS = [
@@ -90,6 +98,7 @@ export const SERVER_SECTION_PLUGIN_SLUGS = [
   "servers-bhop",
   "servers-2x2",
   "servers-awp",
+  MULTI_ADDON_MANAGER.slug,
 ];
 
 export const SERVER_SECTION_MODES: Record<
@@ -168,10 +177,11 @@ export const SERVER_SECTION_MODES: Record<
     type: "Deathmatch",
     maxPlayers: 18,
     cfg: [
-      'mp_t_default_primary ""',
-      'mp_ct_default_primary ""',
-      'mp_t_default_secondary ""',
-      'mp_ct_default_secondary ""',
+      // What bots spawn with; the plugin swaps in each player's own picks.
+      "mp_t_default_primary weapon_ak47",
+      "mp_ct_default_primary weapon_m4a1",
+      "mp_t_default_secondary weapon_deagle",
+      "mp_ct_default_secondary weapon_deagle",
       "mp_free_armor 2",
       "mp_startmoney 0",
       "mp_maxmoney 0",
@@ -204,7 +214,11 @@ export const SERVER_SECTION_MODES: Record<
       ...HAND_END_OF_MATCH_TO_PLUGIN,
     ].join("\n"),
     extraGameParams: "+map de_dust2",
-    plugins: [{ slug: "servers-dm", required: true, config: null }, INVENTORY],
+    plugins: [
+      { slug: "servers-dm", required: true, config: null },
+      MULTI_ADDON_MANAGER,
+      INVENTORY,
+    ],
     defaultMaps: [
       { id: "de_dust2", name: "Dust 2" },
       { id: "de_mirage", name: "Mirage" },
