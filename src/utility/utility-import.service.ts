@@ -44,6 +44,8 @@ type Lineup = {
   view_pitch: number;
   flight_time_ms: number | null;
   name: string;
+  description: string | null;
+  source_url: string | null;
 };
 
 // Seeds the library from a file an operator hands over.
@@ -154,18 +156,24 @@ export class UtilityImportService {
 
   // The bundled default library. Not an operator import: it carries no
   // utility_import_enabled gate and no administrator, because nobody asked for it
-  // -- it is the library an install starts with. Idempotent through the same
-  // (origin_source, external_id) upsert, so a restart re-seeds nothing.
+  // -- it is the library an install starts with. It only ever adds: a row it
+  // already wrote belongs to the operators now, and a restart must not undo
+  // their edits to it.
   public async seedLineups(
     steamId: string,
     payload: unknown,
   ): Promise<UtilityImportOutput> {
-    return await this.runImport(steamId, { payload, dry_run: false });
+    return await this.runImport(
+      steamId,
+      { payload, dry_run: false },
+      { refresh: false },
+    );
   }
 
   private async runImport(
     steamId: string,
     input: { payload: unknown; dry_run?: boolean | null },
+    options: { refresh: boolean } = { refresh: true },
   ): Promise<UtilityImportOutput> {
     const dryRun = input.dry_run === true;
     const envelope = UtilityImportService.envelope(input.payload);
@@ -217,6 +225,10 @@ export class UtilityImportService {
 
       try {
         const existing = await this.existing(lineup.external_id);
+
+        if (existing && !options.refresh) {
+          continue;
+        }
 
         if (dryRun) {
           if (existing) {
@@ -366,12 +378,14 @@ export class UtilityImportService {
           origin_x, origin_y, origin_z, eye_z, view_yaw, view_pitch,
           land_x, land_y, land_z, flight_time_ms,
           name, visibility, author_steam_id,
-          origin_source, external_id, confidence)
+          origin_source, external_id, confidence,
+          description, source_url)
        VALUES ($1, $2, $3, $4, $5, $6,
                $7, $8, $9, $10, $11, $12,
                $13, $14, $15, $16,
                $17, $18, $19::bigint,
-               $20, $21, 'low')
+               $20, $21, 'low',
+               $22, $23)
        ON CONFLICT (origin_source, external_id) WHERE external_id IS NOT NULL
        DO UPDATE SET map_name = EXCLUDED.map_name,
                      utility_type = EXCLUDED.utility_type,
@@ -389,7 +403,9 @@ export class UtilityImportService {
                      land_y = EXCLUDED.land_y,
                      land_z = EXCLUDED.land_z,
                      flight_time_ms = EXCLUDED.flight_time_ms,
-                     name = EXCLUDED.name
+                     name = EXCLUDED.name,
+                     description = EXCLUDED.description,
+                     source_url = EXCLUDED.source_url
        RETURNING (xmax = 0) AS inserted`,
       [
         lineup.map_name,
@@ -413,6 +429,8 @@ export class UtilityImportService {
         steamId,
         UtilityImportService.ORIGIN_SOURCE,
         lineup.external_id,
+        lineup.description,
+        lineup.source_url,
       ],
     );
 
@@ -551,10 +569,51 @@ export class UtilityImportService {
       view_yaw: angles.yaw,
       view_pitch: angles.pitch,
       flight_time_ms: flightTimeMs,
-      // Built out of the entry's own classification and key. A seeded row is
-      // identified by what it is and which line of the file it came from.
-      name: `${utilityType} ${mapName} (${externalId})`.slice(0, 120),
+      // Without a name of its own, a seeded row is identified by what it is
+      // and which line of the file it came from.
+      name: (
+        UtilityImportService.optionalText(entry, ["name", "title"]) ??
+        `${utilityType} ${mapName} (${externalId})`
+      ).slice(0, 120),
+      description:
+        UtilityImportService.optionalText(entry, [
+          "description",
+          "notes",
+          "instructions",
+        ])?.slice(0, 1000) ?? null,
+      source_url: UtilityImportService.sourceUrl(
+        UtilityImportService.pick(entry, ["source_url", "url"]),
+      ),
     };
+  }
+
+  private static optionalText(entry: Entry, keys: Array<string>): string | null {
+    const value = UtilityImportService.pick(entry, keys);
+
+    if (typeof value !== "string") {
+      return null;
+    }
+
+    const text = value.trim();
+
+    return text.length > 0 ? text : null;
+  }
+
+  // Rendered as a link on the lineup page, so anything but http(s) is dropped
+  // rather than trusted.
+  private static sourceUrl(value: unknown): string | null {
+    if (typeof value !== "string") {
+      return null;
+    }
+
+    try {
+      const url = new URL(value.trim());
+      return url.protocol === "https:" || url.protocol === "http:"
+        ? url.toString().slice(0, 500)
+        : null;
+    } catch {
+      return null;
+    }
   }
 
   private static angles(entry: Entry): { yaw: number; pitch: number } {

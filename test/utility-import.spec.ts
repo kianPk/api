@@ -169,6 +169,37 @@ describe("utility lineup seeding (SQL-driven)", () => {
       expect(row.name).toBe("Smoke de_mirage (a-1)");
     });
 
+    it("keeps the name, notes and source an entry brings", async () => {
+      const op = await fx.player();
+
+      await service().importLineups(admin(op), {
+        payload: [
+          entry({
+            name: "  Window Smoke  ",
+            description: "Strafe right, then jump throw",
+            source_url: "https://github.com/ReneRebsdorf/CS2-annotations",
+          }),
+          entry({ id: "a-2", name: "", source_url: "javascript:alert(1)" }),
+        ],
+      });
+
+      const [named, unnamed] = await postgres.query<
+        Array<{ name: string; description: string | null; source_url: string | null }>
+      >(
+        "SELECT name, description, source_url FROM utility_lineups ORDER BY external_id",
+      );
+      expect(named).toEqual({
+        name: "Window Smoke",
+        description: "Strafe right, then jump throw",
+        source_url: "https://github.com/ReneRebsdorf/CS2-annotations",
+      });
+      expect(unnamed).toEqual({
+        name: "Smoke de_mirage (a-2)",
+        description: null,
+        source_url: null,
+      });
+    });
+
     it("takes the visibility the operator asked for", async () => {
       const op = await fx.player();
 
@@ -251,6 +282,27 @@ describe("utility lineup seeding (SQL-driven)", () => {
       const all = await rows();
       expect(all).toHaveLength(1);
       expect(Number(all[0].land_x)).toBeCloseTo(LAND.x + 12, 5);
+    });
+
+    it("never overwrites a row on a boot seed, only adds", async () => {
+      const op = await fx.player();
+      const seeder = service();
+
+      await seeder.seedLineups(op, [entry({ name: "Seeded" })]);
+      await postgres.query(
+        "UPDATE utility_lineups SET name = 'Edited', side = 'CT'",
+      );
+
+      const again = await seeder.seedLineups(op, [
+        entry({ name: "Seeded" }),
+        entry({ id: "a-2" }),
+      ]);
+
+      expect(again).toMatchObject({ imported: 1, updated: 0, failed: 0 });
+      const [kept] = await rows();
+      expect(kept.name).toBe("Edited");
+      expect(kept.side).toBe("CT");
+      expect(await rows()).toHaveLength(2);
     });
 
     it("refuses two entries in one payload claiming the same id", async () => {
