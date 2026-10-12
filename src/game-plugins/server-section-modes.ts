@@ -19,6 +19,9 @@ export type ServerSectionPlugin = {
   slug: string;
   required: boolean;
   config: Record<string, unknown> | null;
+  // Where config is written when the catalog has no config_path for the
+  // plugin, as a plugin added from a release URL does not.
+  configPath?: string;
 };
 
 export type ServerSectionMode = {
@@ -43,14 +46,6 @@ const HAND_END_OF_MATCH_TO_PLUGIN = [
   "mp_match_end_changelevel 0",
   "mp_match_end_restart 1",
   "mp_match_restart_delay 30",
-];
-
-const TIMED_MAP = [
-  "mp_timelimit 20",
-  "mp_maxrounds 0",
-  "mp_halftime 0",
-  "mp_match_can_clinch 0",
-  "mp_warmuptime 10",
 ];
 
 // The map stays until an admin changes it from the site.
@@ -97,6 +92,32 @@ const MULTI_ADDON_MANAGER: ServerSectionPlugin = {
   slug: "multiaddonmanager",
   required: false,
   config: null,
+};
+
+// Keeps sv_cheats off and cheat commands (noclip, god, give...) blocked. A
+// section server loads nothing auto-loaded, so it is listed on each mode.
+const ANTI_NOCLIP_SLUG = "yguard-anti-noclip";
+const ANTI_NOCLIP_CONFIG_PATH =
+  "addons/counterstrikesharp/configs/plugins/YGuardAntiNoclip/YGuardAntiNoclip.json";
+
+const ANTI_NOCLIP: ServerSectionPlugin = {
+  slug: ANTI_NOCLIP_SLUG,
+  required: false,
+  config: null,
+};
+
+// BHOP's own !noclip practice has to keep working.
+const ANTI_NOCLIP_ALLOW_PLUGIN_NOCLIP: ServerSectionPlugin = {
+  slug: ANTI_NOCLIP_SLUG,
+  required: false,
+  config: {
+    ChatPrefix: "AntiNoclip",
+    AllowAdminNoclip: false,
+    AdminFlag: "@css/root",
+    SkipPractice: true,
+    AllowPluginNoclip: true,
+  },
+  configPath: ANTI_NOCLIP_CONFIG_PATH,
 };
 
 // servers-awp is a retired mode's: still installed on a panel, it must not
@@ -160,7 +181,7 @@ export const SERVER_SECTION_MODES: Record<
       "mp_force_assign_teams 1",
       "mp_friendlyfire 0",
       "mp_solid_teammates 1",
-      ...TIMED_MAP,
+      ...MAP_NEVER_ENDS,
       ...NO_BOTS,
       ...HAND_END_OF_MATCH_TO_PLUGIN,
     ].join("\n"),
@@ -168,6 +189,7 @@ export const SERVER_SECTION_MODES: Record<
     plugins: [
       { slug: "servers-duels", required: true, config: null },
       INVENTORY,
+      ANTI_NOCLIP,
     ],
     defaultMaps: [
       { id: "3626024193", name: "am_map" },
@@ -230,6 +252,7 @@ export const SERVER_SECTION_MODES: Record<
       { slug: "servers-dm", required: true, config: null },
       MULTI_ADDON_MANAGER,
       INVENTORY,
+      ANTI_NOCLIP,
     ],
     defaultMaps: [
       { id: "de_dust2", name: "Dust 2" },
@@ -247,8 +270,8 @@ export const SERVER_SECTION_MODES: Record<
   },
   // xplay's BHOP: auto-bhop with no stamina on the bhop workshop maps, everyone
   // on one side and passing through each other, and the plugin's timer on each
-  // map's own start and end zones. A run takes longer than a fight, so a map
-  // stays up longer.
+  // map's own start and end zones. The map only changes when an admin changes
+  // it.
   bhop: {
     key: "bhop",
     label: "BHOP",
@@ -279,8 +302,7 @@ export const SERVER_SECTION_MODES: Record<
       "mp_ignore_round_win_conditions 1",
       "mp_respawn_on_death_t 1",
       "mp_respawn_on_death_ct 1",
-      ...TIMED_MAP,
-      "mp_timelimit 30",
+      ...MAP_NEVER_ENDS,
       ...NO_BOTS,
       ...HAND_END_OF_MATCH_TO_PLUGIN,
     ].join("\n"),
@@ -288,6 +310,7 @@ export const SERVER_SECTION_MODES: Record<
     plugins: [
       { slug: "servers-bhop", required: true, config: null },
       INVENTORY,
+      ANTI_NOCLIP_ALLOW_PLUGIN_NOCLIP,
     ],
     defaultMaps: [
       { id: "3070665979", name: "bhop_emevaelx3" },
@@ -314,6 +337,7 @@ export const SERVER_SECTION_MODES: Record<
     plugins: [
       { slug: "servers-2x2", required: false, config: null },
       INVENTORY,
+      ANTI_NOCLIP,
     ],
     defaultMaps: [
       { id: "de_inferno", name: "Inferno" },

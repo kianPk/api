@@ -367,7 +367,8 @@ export class GameModesService {
         plugin_slug: plugin.slug,
         config: plugin.config,
         required: plugin.required,
-        config_path: bySlug.get(plugin.slug)?.config_path ?? null,
+        config_path:
+          bySlug.get(plugin.slug)?.config_path ?? plugin.configPath ?? null,
         version: bySlug.get(plugin.slug)?.version ?? null,
       })),
       runtime,

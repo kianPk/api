@@ -554,7 +554,11 @@ describe("GameModesService Servers-section modes", () => {
   it("boots a section server with its own plugin and skins, and nothing auto-loaded", async () => {
     const { service, seen } = build(
       { section_mode: "duels", game_server_node_id: "node-a" },
-      { "servers-duels": "1.0.0", "inventory-simulator": "3.1.0" },
+      {
+        "servers-duels": "1.0.0",
+        "inventory-simulator": "3.1.0",
+        "yguard-anti-noclip": "1.0.5",
+      },
     );
 
     const resolved = await service.resolveForServer("server-1");
@@ -562,14 +566,37 @@ describe("GameModesService Servers-section modes", () => {
     expect(resolved?.slug).toEqual("duels");
     // Its plugin moves it onto the workshop pool once Steam is up.
     expect(resolved?.extraGameParams).toEqual("+map de_dust2");
-    expect(resolved?.cfg).toContain("mp_timelimit 20");
+    expect(resolved?.cfg).toContain("mp_timelimit 0");
     expect(resolved?.cfg).toContain("mp_match_end_restart 1");
     expect(resolved?.enabledPlugins).toEqual(
-      "servers-duels@1.0.0,inventory-simulator@3.1.0",
+      "servers-duels@1.0.0,inventory-simulator@3.1.0,yguard-anti-noclip@1.0.5",
     );
     expect(resolved?.pluginConfigs).toBeNull();
     expect(seen.some((sql) => sql.includes("FROM game_modes"))).toBe(false);
     expect(seen.some((sql) => sql.includes("load_ranked"))).toBe(false);
+  });
+
+  it("locks cheats on BHOP but leaves its own noclip practice working", async () => {
+    const { service } = build(
+      { section_mode: "bhop", game_server_node_id: "node-a" },
+      { "servers-bhop": "1.2.0", "yguard-anti-noclip": "1.0.5" },
+    );
+
+    const resolved = await service.resolveForServer("server-1");
+
+    expect(resolved?.enabledPlugins).toEqual(
+      "servers-bhop@1.2.0,yguard-anti-noclip@1.0.5",
+    );
+    const files = JSON.parse(
+      Buffer.from(resolved!.pluginConfigs!, "base64").toString(),
+    );
+    const config = JSON.parse(
+      files[
+        "addons/counterstrikesharp/configs/plugins/YGuardAntiNoclip/YGuardAntiNoclip.json"
+      ],
+    );
+    expect(config.AllowPluginNoclip).toBe(true);
+    expect(config.AllowAdminNoclip).toBe(false);
   });
 
   it("still boots 2x2, on stock maps, when its plugin is missing", async () => {
