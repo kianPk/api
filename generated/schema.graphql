@@ -13208,6 +13208,12 @@ enum e_notification_types_enum {
   """Storage Scan"""
   StorageScan
 
+  """A store purchase was cancelled or failed"""
+  StorePurchaseCancelled
+
+  """A store purchase was paid successfully"""
+  StorePurchasePaid
+
   """You were invited to a team"""
   TeamInvite
 
