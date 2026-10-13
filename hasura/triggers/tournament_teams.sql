@@ -34,6 +34,16 @@ BEGIN
             MESSAGE = 'This tournament is invite only';
     END IF;
 
+    -- The draft fills the bracket from the pool, so a team registered beside it
+    -- takes a slot the draft counts on. Organizers keep seating teams by hand.
+    IF (_session ->> 'x-hasura-role') IS NOT NULL
+       AND tournament.registration_type = 'free_agents'
+       AND NOT NEW.is_drafted
+       AND NOT is_tournament_organizer(tournament, _session) THEN
+        RAISE EXCEPTION USING ERRCODE = '22000',
+            MESSAGE = 'This tournament only accepts free agents';
+    END IF;
+
     IF NEW.team_id IS NOT NULL THEN
        SELECT owner_steam_id, captain_steam_id
        INTO NEW.owner_steam_id, _team_captain_steam_id
@@ -58,6 +68,29 @@ BEGIN
        END IF;
     ELSIF NEW.captain_steam_id IS NULL THEN
        NEW.captain_steam_id = COALESCE(NEW.owner_steam_id, _session_steam_id);
+    END IF;
+
+    -- One team per owner per tournament, except for organizers, who add teams
+    -- by hand and own every one of them through the owner_steam_id preset.
+    -- The lock stands in for the unique constraint this replaced: without it
+    -- two concurrent registrations both pass the check.
+    IF (_session ->> 'x-hasura-role') IS NOT NULL
+       AND NEW.owner_steam_id IS NOT NULL
+       AND NOT is_tournament_organizer(tournament, _session) THEN
+        PERFORM pg_advisory_xact_lock(
+            hashtext('tournament_team_owner'),
+            hashtext(NEW.tournament_id::text || ':' || NEW.owner_steam_id::text)
+        );
+
+        IF EXISTS (
+            SELECT 1
+            FROM tournament_teams tt
+            WHERE tt.tournament_id = NEW.tournament_id
+              AND tt.owner_steam_id = NEW.owner_steam_id
+        ) THEN
+            RAISE EXCEPTION USING ERRCODE = '22000',
+                MESSAGE = 'You already have a team in this tournament';
+        END IF;
     END IF;
 
     -- Registering after the window opened counts as checked in: a team that
@@ -245,3 +278,110 @@ $$;
 
 DROP TRIGGER IF EXISTS tbu_tournament_team ON public.tournament_teams;
 CREATE TRIGGER tbu_tournament_team BEFORE UPDATE ON public.tournament_teams FOR EACH ROW EXECUTE FUNCTION public.tbu_tournament_team();
+
+-- One entry per player: owning a team is being in the tournament, so a new
+-- owner (a team ownership transfer) leaves the free-agent pool. The draft and
+-- the waitlist promotion skip owners, so a pool row left behind would wait for
+-- a place that never comes. A drafted team's owner is already drafted onto it.
+--
+-- The pool place they give up was a place to play, so they take a seat on the
+-- entry's roster instead when it has room and they could join it.
+CREATE OR REPLACE FUNCTION public.tau_tournament_team_owner() RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    _tournament public.tournaments;
+    _checked_in_at timestamptz;
+BEGIN
+    IF NEW.is_drafted THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT fa.checked_in_at INTO _checked_in_at
+    FROM tournament_free_agents fa
+    WHERE fa.tournament_id = NEW.tournament_id
+      AND fa.player_steam_id = NEW.owner_steam_id
+      AND fa.status IN ('registered', 'waitlisted');
+
+    IF FOUND THEN
+        SELECT * INTO _tournament FROM tournaments t WHERE t.id = NEW.tournament_id;
+
+        -- The room is counted under this entry's row lock, held since the
+        -- owner was written, and tbi_tournament_team_roster makes every other
+        -- roster insert wait for it.
+        IF _tournament.status NOT IN ('Finished', 'Cancelled', 'CancelledMinTeams')
+           AND player_meets_tournament_requirements(NEW.tournament_id, NEW.owner_steam_id)
+           AND (
+               SELECT COUNT(*)
+               FROM tournament_team_roster ttr
+               WHERE ttr.tournament_team_id = NEW.id
+           ) < tournament_max_players_per_lineup(_tournament) THEN
+            -- The system path the draft and the promotion mark:
+            -- tbi_tournament_team_roster would otherwise read a session that
+            -- an internal transfer may not carry. Their pool check-in carries
+            -- over, as it does for a promotion.
+            PERFORM set_config('fivestack.free_agent_draft', 'true', true);
+
+            -- Already on a roster in this tournament is the conflict, and
+            -- waiting it out here rather than checking first is what lets a
+            -- join in flight finish instead of failing this transfer.
+            INSERT INTO tournament_team_roster (tournament_team_id, player_steam_id, tournament_id, role, checked_in_at)
+            VALUES (
+                NEW.id,
+                NEW.owner_steam_id,
+                NEW.tournament_id,
+                CASE WHEN NEW.team_id IS NULL THEN 'Admin' ELSE 'Member' END,
+                _checked_in_at
+            )
+            ON CONFLICT (player_steam_id, tournament_id) DO NOTHING;
+
+            PERFORM set_config('fivestack.free_agent_draft', 'false', true);
+        END IF;
+    END IF;
+
+    -- After the roster row, never before. A player joining a roster holds its
+    -- key by the time tai_tournament_team_roster_free_agents takes this lock,
+    -- so waiting on the key with the lock held deadlocks against a new owner
+    -- who is joining one at the same moment. That is also why the pool row was
+    -- read before the lock: a sign-up still in flight then is removed here,
+    -- but not seated.
+    PERFORM pg_advisory_xact_lock(
+        hashtext('tournament_entry'),
+        hashtext(NEW.tournament_id::text || ':' || NEW.owner_steam_id::text)
+    );
+
+    DELETE FROM tournament_free_agents fa
+    WHERE fa.tournament_id = NEW.tournament_id
+      AND fa.player_steam_id = NEW.owner_steam_id
+      AND fa.status IN ('registered', 'waitlisted');
+
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS tau_tournament_team_owner ON public.tournament_teams;
+CREATE TRIGGER tau_tournament_team_owner
+    AFTER UPDATE OF owner_steam_id ON public.tournament_teams
+    FOR EACH ROW
+    WHEN (NEW.owner_steam_id IS DISTINCT FROM OLD.owner_steam_id)
+    EXECUTE FUNCTION public.tau_tournament_team_owner();
+
+CREATE OR REPLACE FUNCTION public.tau_tournament_team_captain() RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- Only a captain change made directly (depth 1) moves a lineup captain who
+    -- is still seated. The hand-over in taid_tournament_team_roster_lineups
+    -- runs from a trigger, and a hand-picked lineup captain outlasts it.
+    PERFORM refresh_unstarted_tournament_team_lineups(NEW.id, pg_trigger_depth() = 1);
+
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS tau_tournament_team_captain ON public.tournament_teams;
+CREATE TRIGGER tau_tournament_team_captain
+    AFTER UPDATE OF captain_steam_id ON public.tournament_teams
+    FOR EACH ROW
+    WHEN (NEW.captain_steam_id IS DISTINCT FROM OLD.captain_steam_id)
+    EXECUTE FUNCTION public.tau_tournament_team_captain();

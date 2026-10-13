@@ -5,6 +5,19 @@ DECLARE
     first_stage_id uuid;
     bracket_row tournament_brackets%ROWTYPE;
 BEGIN
+    -- The free agent draft runs once, so a field taking entries again starts
+    -- from an undrafted pool. Not out of CheckInReview: reopening there only
+    -- extends check-in for the field already in.
+    IF NEW.status IS DISTINCT FROM OLD.status AND (
+        NEW.status = 'Setup'
+        OR (
+            NEW.status = 'RegistrationOpen'
+            AND OLD.status IN ('RegistrationClosed', 'Cancelled', 'CancelledMinTeams')
+        )
+    ) THEN
+        PERFORM undo_tournament_free_agent_draft(NEW.id);
+    END IF;
+
     IF (
          NEW.status IS DISTINCT FROM OLD.status AND
          NEW.status IN ('RegistrationOpen')
@@ -138,6 +151,14 @@ BEGIN
             MESSAGE = 'Check-in has already started; the schedule can no longer be changed';
     END IF;
 
+    -- The bracket is seeded once registration closes, and the roster lock then keeps a team at
+    -- its minimum from swapping anyone out, so taking substitutes away would strand it.
+    IF OLD.substitutes_enabled AND NOT NEW.substitutes_enabled
+       AND OLD.status NOT IN ('Setup', 'RegistrationOpen') THEN
+        RAISE EXCEPTION USING ERRCODE = '22000',
+            MESSAGE = 'Substitutes can only be turned off before registration closes';
+    END IF;
+
     IF NEW.status IS DISTINCT FROM OLD.status THEN
         -- CheckInReview is a HOLD, not a lifecycle step: entering it is only
         -- legal out of RegistrationOpen with check-in actually in force, and
@@ -202,7 +223,13 @@ BEGIN
                     -- zero teams and cancel itself. Drafting here first makes
                     -- the count real; the draft is idempotent on is_drafted, so
                     -- the tau_tournaments call that follows is a no-op.
-                    IF NEW.registration_type IN ('free_agents', 'both') THEN
+                    --
+                    -- Only on the way out of registration, the same statuses
+                    -- tau_tournaments seeds from. Out of RegistrationClosed the
+                    -- bracket is already drawn, and a team drafted now has no
+                    -- slot in it.
+                    IF NEW.registration_type IN ('free_agents', 'both')
+                       AND OLD.status IN ('Setup', 'RegistrationOpen', 'CheckInReview') THEN
                         PERFORM draft_tournament_free_agent_teams(NEW.id);
                     END IF;
 
@@ -223,6 +250,9 @@ BEGIN
             ELSE
                 -- No action needed for other status changes
         END CASE;
+
+        -- After the CASE, which can turn a start into CancelledMinTeams.
+        NEW.finished_at := CASE WHEN NEW.status = 'Finished' THEN now() END;
     END IF;
 
     RETURN NEW;
@@ -248,8 +278,37 @@ BEGIN
             MESSAGE = 'This tournament belongs to a league; cancel or delete the league season instead';
     END IF;
 
+    PERFORM set_config('fivestack.deleting_tournament', OLD.id::text, true);
     DELETE FROM tournament_stages
         WHERE tournament_id = OLD.id;
+    PERFORM set_config('fivestack.deleting_tournament', '', true);
+
+    -- BEFORE DELETE because the invite rows are still here to say which
+    -- notifications were theirs; the FK cascade has removed them by AFTER.
+    DELETE FROM public.notifications
+     WHERE (type IN (
+                'TournamentCreated',
+                'TournamentCheckInOpen',
+                'TournamentCheckInMissed'
+            )
+            AND entity_id = OLD.id::text)
+        OR (type IN ('TournamentReminder', 'TournamentCheckInClosing')
+            AND entity_id LIKE OLD.id || ':%')
+        OR (type = 'ChatMessage'
+            AND entity_id = 'tournament:' || OLD.id)
+        OR (type = 'TournamentInvite'
+            AND entity_id IN (
+                SELECT ti.id::text
+                  FROM public.tournament_invites ti
+                 WHERE ti.tournament_id = OLD.id
+            ))
+        OR (type = 'TournamentTeamInvite'
+            AND entity_id IN (
+                SELECT tti.id::text
+                  FROM public.tournament_team_invites tti
+                  JOIN public.tournament_teams tt ON tt.id = tti.tournament_team_id
+                 WHERE tt.tournament_id = OLD.id
+            ));
 
     RETURN OLD;
 END;
@@ -265,6 +324,10 @@ CREATE OR REPLACE FUNCTION public.tbi_tournaments() RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
 BEGIN
+    IF NEW.status = 'Finished' AND NEW.finished_at IS NULL THEN
+        NEW.finished_at := now();
+    END IF;
+
     IF NEW.discord_notifications_enabled IS NULL THEN
         IF EXISTS (
             SELECT 1

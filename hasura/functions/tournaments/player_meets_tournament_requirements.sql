@@ -1,7 +1,7 @@
--- The rating this tournament's format actually rates on: 2-per-lineup → Wingman,
--- 3-per-lineup → Rush, everything else → Competitive. Season handling mirrors
--- get_player_elo so the number that gates entry is the same number the player
--- sees on their profile.
+-- The rating this tournament's format actually rates on: 2-per-lineup formats
+-- run on the Wingman ladder, 3-per-lineup on Rush, everything else on
+-- Competitive. Season handling mirrors get_player_elo so the number that gates
+-- entry is the same number the player sees on their profile.
 CREATE OR REPLACE FUNCTION public.get_tournament_player_elo(_tournament_id uuid, _player_steam_id bigint)
 RETURNS numeric
 LANGUAGE plpgsql STABLE

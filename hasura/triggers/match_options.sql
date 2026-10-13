@@ -60,6 +60,7 @@ CREATE OR REPLACE FUNCTION public.tbu_match_options() RETURNS TRIGGER
     AS $$
 DECLARE
     _match_status text;
+    _tournament_ids uuid[];
 BEGIN
     SELECT m.status INTO _match_status
         FROM matches m
@@ -114,6 +115,34 @@ BEGIN
         NEW.map_veto := false;
     END IF;
 
+    IF NEW.map_pool_id IS DISTINCT FROM OLD.map_pool_id THEN
+        SELECT array_agg(owner.id) INTO _tournament_ids
+        FROM (
+            SELECT t.id FROM tournaments t WHERE t.match_options_id = OLD.id
+            UNION ALL
+            SELECT ts.tournament_id FROM tournament_stages ts WHERE ts.match_options_id = OLD.id
+        ) owner;
+
+        -- Held until the save commits, as assert_tournament_stages_editable
+        -- does: a close of registration cannot draw round 1 from the old pool
+        -- while this save moves the tournament to another.
+        PERFORM 1 FROM tournaments WHERE id = ANY(_tournament_ids) FOR SHARE;
+
+        IF EXISTS (
+            SELECT 1 FROM unnest(_tournament_ids) AS owner(id) WHERE tournament_is_drawn(owner.id)
+        ) THEN
+            -- The web's tournament form saves a fresh Custom pool every time,
+            -- maps changed or not, so a new id alone is not a new pool.
+            IF (SELECT array_agg(map_id ORDER BY map_id) FROM _map_pool WHERE map_pool_id = NEW.map_pool_id)
+               IS DISTINCT FROM
+               (SELECT array_agg(map_id ORDER BY map_id) FROM _map_pool WHERE map_pool_id = OLD.map_pool_id) THEN
+                RAISE EXCEPTION 'Unable to change the map pool once the bracket has been drawn' USING ERRCODE = '22000';
+            END IF;
+
+            NEW.map_pool_id := OLD.map_pool_id;
+        END IF;
+    END IF;
+
     IF (NEW.game_mode_id IS DISTINCT FROM OLD.game_mode_id) THEN
         PERFORM assert_game_mode_selectable(NEW.game_mode_id);
     END IF;
@@ -155,6 +184,21 @@ BEGIN
     IF (NEW.veto_pick_timeout IS DISTINCT FROM OLD.veto_pick_timeout AND _match_status = 'Veto') THEN
         PERFORM refresh_veto_pick_expiry(_match_id);
     END IF;
+
+    -- tbi_match pins matches.region from a single-region option set, and
+    -- nothing re-reads it before Veto, so a match drawn early keeps hosting on
+    -- the region it was created with unless the pin moves with its options.
+    IF (NEW.regions IS DISTINCT FROM OLD.regions AND _match_status IN ('PickingPlayers', 'Scheduled', 'WaitingForCheckIn')) THEN
+        IF cardinality(NEW.regions) = 1 THEN
+            UPDATE matches SET region = NEW.regions[1]
+            WHERE id = _match_id AND region IS DISTINCT FROM NEW.regions[1];
+        ELSIF NEW.region_veto THEN
+            UPDATE matches SET region = NULL
+            WHERE id = _match_id AND region IS NOT NULL;
+        END IF;
+    END IF;
+
+    PERFORM sync_tournament_match_options(OLD, NEW);
 
     RETURN NEW;
 END;

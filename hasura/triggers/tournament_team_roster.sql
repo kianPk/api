@@ -4,12 +4,15 @@ CREATE OR REPLACE FUNCTION public.taiud_tournament_team_roster() RETURNS TRIGGER
 DECLARE
     _team_id uuid;
 BEGIN
+    -- Max players only on joining: a lowered cap must not block a roster shedding players.
     IF TG_OP = 'DELETE' THEN
-        PERFORM check_team_eligibility(OLD);
+        PERFORM check_team_eligibility(OLD, false);
+    ELSIF TG_OP = 'INSERT' THEN
+        PERFORM check_team_eligibility(NEW, true);
     ELSE
-        PERFORM check_team_eligibility(NEW);
+        PERFORM check_team_eligibility(NEW, NEW.tournament_team_id IS DISTINCT FROM OLD.tournament_team_id);
     END IF;
-    
+
     RETURN NEW;
 END;
 $$;
@@ -45,6 +48,20 @@ BEGIN
         RETURN OLD;
     END IF;
 
+    -- The team row serializes two removals, so neither counts the other's
+    -- player as still there. The key must stay promote_tournament_free_agent's:
+    -- a removal runs that promotion after this, and the promotion takes its lock
+    -- before the team row, so taking it here first keeps the order the same.
+    PERFORM pg_advisory_xact_lock(
+        hashtext('tournament_free_agent_promotion'),
+        hashtext(_tournament.id::text)
+    );
+
+    PERFORM 1
+        FROM tournament_teams tt
+        WHERE tt.id = OLD.tournament_team_id
+        FOR NO KEY UPDATE;
+
     _min_players := tournament_min_players_per_lineup(_tournament);
 
     SELECT COUNT(*) INTO _roster_count
@@ -72,9 +89,22 @@ CREATE OR REPLACE FUNCTION public.tbi_tournament_team_roster() RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
 DECLARE
-    _team_id uuid;
-    _owner_steam_id bigint;
+    _session json;
+    _team public.tournament_teams;
+    _tournament public.tournaments;
+    _organizer boolean;
+    _invite boolean := false;
 BEGIN
+    -- The team row before the roster key, on every path. The maximum lineup is
+    -- counted after the insert (check_team_eligibility), so two inserts that
+    -- each count without the other's row would both pass; and a transfer
+    -- seating the new owner (tau_tournament_team_owner) already holds this row
+    -- when it inserts, so taking the key first here deadlocks against it.
+    PERFORM 1
+        FROM tournament_teams tt
+        WHERE tt.id = NEW.tournament_team_id
+        FOR NO KEY UPDATE;
+
     -- draft_tournament_free_agent_teams builds pickup teams out of players who
     -- never invited each other, so the invite redirect below would turn every
     -- generated roster row into an invitation nobody sent and leave the teams
@@ -85,8 +115,17 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    IF current_setting('hasura.user')::jsonb ->> 'x-hasura-role' IN ('admin', 'administrator', 'tournament_organizer') THEN
+    _session := current_setting('hasura.user')::json;
+
+    IF _session ->> 'x-hasura-role' IN ('admin', 'administrator', 'tournament_organizer') THEN
         RETURN NEW;
+    END IF;
+
+    SELECT * INTO _team FROM tournament_teams WHERE id = NEW.tournament_team_id;
+
+    IF _team.tournament_id IS DISTINCT FROM NEW.tournament_id THEN
+        RAISE EXCEPTION USING ERRCODE = '22000',
+            MESSAGE = 'That team is not in this tournament';
     END IF;
 
     -- Gates the player being ADDED, not the session adding them: a captain
@@ -97,21 +136,52 @@ BEGIN
             MESSAGE = 'Player does not meet this tournament''s entry requirements';
     END IF;
 
-    SELECT team_id, owner_steam_id INTO _team_id, _owner_steam_id FROM tournament_teams WHERE id = NEW.tournament_team_id;
+    SELECT * INTO _tournament FROM tournaments WHERE id = NEW.tournament_id;
+    _organizer := public.is_tournament_organizer(_tournament, _session);
 
-    IF _team_id IS NULL THEN
-        IF _owner_steam_id = NEW.player_steam_id THEN 
+    IF _team.team_id IS NULL THEN
+        IF _team.owner_steam_id = NEW.player_steam_id THEN
             NEW.role = 'Admin';
             RETURN NEW;
         END IF;
 
-        INSERT INTO tournament_team_invites (tournament_team_id, steam_id, invited_by_player_steam_id)
-            VALUES (NEW.tournament_team_id, NEW.player_steam_id, (current_setting('hasura.user')::jsonb->>'x-hasura-user-id')::bigint);
+        _invite := true;
+    -- A team-backed roster takes a player with no invite at all, so somebody
+    -- from outside the team is a force-add rather than a lineup pick.
+    ELSIF NOT EXISTS (
+        SELECT 1 FROM team_roster tr
+        WHERE tr.team_id = _team.team_id AND tr.player_steam_id = NEW.player_steam_id
+    ) THEN
+        -- A free agent signed up to be drafted, not to be put on whichever team
+        -- picks them, so a captain's force-add becomes an invite they answer.
+        _invite := NOT _organizer AND EXISTS (
+            SELECT 1 FROM tournament_free_agents fa
+            WHERE fa.tournament_id = NEW.tournament_id
+              AND fa.player_steam_id = NEW.player_steam_id
+              AND fa.status IN ('registered', 'waitlisted')
+        );
 
-        RETURN NULL;
+        IF NOT _invite THEN
+            PERFORM public.assert_session_not_blocked(NEW.player_steam_id, 'tournament_organizer');
+        END IF;
     END IF;
-    
-    RETURN NEW;
+
+    IF NOT _invite THEN
+        RETURN NEW;
+    END IF;
+
+    -- Hasura checks an insert's permission against the rows it returns, and a
+    -- redirected insert returns none, so the invite repeats that check here.
+    IF _tournament.status NOT IN ('Setup', 'RegistrationOpen')
+       OR NOT (_organizer OR public.can_manage_tournament_team(_team, _session)) THEN
+        RAISE EXCEPTION USING ERRCODE = '22000',
+            MESSAGE = 'You cannot add players to this team';
+    END IF;
+
+    INSERT INTO tournament_team_invites (tournament_team_id, steam_id, invited_by_player_steam_id)
+        VALUES (NEW.tournament_team_id, NEW.player_steam_id, (_session ->> 'x-hasura-user-id')::bigint);
+
+    RETURN NULL;
 END;
 $$;
 
@@ -220,3 +290,84 @@ CREATE TRIGGER taiud_tournament_team_roster_check_in
     AFTER INSERT OR DELETE OR UPDATE OF checked_in_at ON public.tournament_team_roster
     FOR EACH ROW
     EXECUTE FUNCTION public.taiud_tournament_team_roster_check_in();
+
+CREATE OR REPLACE FUNCTION public.taid_tournament_team_roster_lineups() RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    _heir bigint;
+    _min_players int;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        -- The team's own captain and owner are its registration defaults (see
+        -- tbi_tournament_team), so they take the captaincy back first.
+        SELECT ttr.player_steam_id INTO _heir
+        FROM tournament_teams tt
+        INNER JOIN tournament_team_roster ttr ON ttr.tournament_team_id = tt.id
+        INNER JOIN players p ON p.steam_id = ttr.player_steam_id
+        LEFT JOIN teams t ON t.id = tt.team_id
+        WHERE tt.id = OLD.tournament_team_id
+          AND tt.captain_steam_id = OLD.player_steam_id
+          AND NOT is_banned(p)
+        ORDER BY COALESCE(ttr.player_steam_id = t.captain_steam_id, false) DESC,
+                 COALESCE(ttr.player_steam_id = tt.owner_steam_id, false) DESC,
+                 ttr.role = 'Admin' DESC,
+                 ttr.player_steam_id
+        LIMIT 1;
+
+        IF _heir IS NOT NULL THEN
+            UPDATE tournament_teams
+            SET captain_steam_id = _heir
+            WHERE id = OLD.tournament_team_id;
+        END IF;
+    END IF;
+
+    PERFORM refresh_unstarted_tournament_team_lineups(COALESCE(NEW.tournament_team_id, OLD.tournament_team_id), false);
+
+    IF TG_OP <> 'DELETE' THEN
+        RETURN NULL;
+    END IF;
+
+    -- The refresh leaves a lineup it cannot keep at the minimum as it is. That
+    -- takes a rostered player the lineup cannot seat -- banned, or standing in
+    -- for the other side -- since the roster lock counts them all the same. The
+    -- removed player would then keep a seat in a match they are no longer
+    -- rostered for. A banned player may always go, since that is how a full
+    -- roster makes room for a replacement.
+    SELECT match_min_players_per_lineup(m)
+      INTO _min_players
+      FROM tournament_teams tt
+      INNER JOIN tournaments t ON t.id = tt.tournament_id
+      INNER JOIN tournament_stages ts ON ts.tournament_id = t.id
+      INNER JOIN tournament_brackets tb ON tb.tournament_stage_id = ts.id
+      INNER JOIN matches m ON m.id = tb.match_id
+      INNER JOIN match_lineup_players mlp
+         ON mlp.match_lineup_id = CASE
+                WHEN tb.tournament_team_id_1 = tt.id THEN m.lineup_1_id
+                ELSE m.lineup_2_id
+            END
+      INNER JOIN players p ON p.steam_id = mlp.steam_id
+     WHERE tt.id = OLD.tournament_team_id
+       AND t.status IN ('RegistrationClosed', 'Live', 'Paused')
+       AND tt.id IN (tb.tournament_team_id_1, tb.tournament_team_id_2)
+       AND m.status IN ('Scheduled', 'WaitingForCheckIn')
+       AND mlp.steam_id = OLD.player_steam_id
+       AND NOT is_banned(p)
+     LIMIT 1;
+
+    IF FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22000',
+            MESSAGE = 'Cannot remove player: an unstarted match still needs them for its minimum lineup of ' || _min_players
+                || ' players. Add a replacement first; if the roster is full, remove a player who cannot be seated in that match (banned, or playing for the other side)';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS taid_tournament_team_roster_lineups ON public.tournament_team_roster;
+CREATE TRIGGER taid_tournament_team_roster_lineups
+    AFTER INSERT OR DELETE ON public.tournament_team_roster
+    FOR EACH ROW
+    EXECUTE FUNCTION public.taid_tournament_team_roster_lineups();

@@ -1,5 +1,6 @@
 import { Controller, Logger } from "@nestjs/common";
 import { Redis } from "ioredis";
+import { PoolClient } from "pg";
 import { HasuraAction, HasuraEvent } from "../hasura/hasura.controller";
 import { HasuraService } from "../hasura/hasura.service";
 import { HasuraEventData } from "../hasura/types/HasuraEventData";
@@ -48,18 +49,6 @@ type CheckInTeam = {
   id: string;
   can_manage: boolean;
   is_captain: boolean;
-};
-
-// One accepted member of the lobby being signed up as a free agent party, with
-// every gate the pool applies to them resolved in the same round trip.
-type LobbyPartyMember = {
-  steam_id: string;
-  name: string;
-  eligible: boolean;
-  unlocked: boolean;
-  rostered: boolean;
-  owns_team: boolean;
-  pool_status: string | null;
 };
 
 @Controller("tournaments")
@@ -133,7 +122,14 @@ export class TournamentsController {
     // Cancelling resets the bracket: drop the matches (and their demos) so
     // they can be regenerated. tournament_brackets.match_id is ON DELETE
     // SET NULL, so the brackets themselves stay in place.
-    if (status === "Cancelled" && data.old.status !== "Cancelled") {
+    //
+    // CancelledMinTeams too: it is reached at the start, and a round re-seeded
+    // while registration was open is already drawn and parked on that start.
+    // Nothing parks it once the tournament is cancelled.
+    if (
+      ["Cancelled", "CancelledMinTeams"].includes(status) &&
+      data.old.status !== status
+    ) {
       const { matchCount } = await this.deleteTournamentMatches(tournamentId);
       this.logger.log(
         `[${tournamentId}] tournament cancelled, cleaned up assets across ${matchCount} matches`,
@@ -385,6 +381,46 @@ export class TournamentsController {
     };
   }
 
+  @HasuraAction()
+  public async recreateTournamentBracketMatch(data: {
+    user: User;
+    tournament_bracket_id: string;
+  }) {
+    const { tournament_bracket_id } = data;
+
+    const [bracket] = await this.postgres.query<
+      Array<{ tournament_id: string }>
+    >(
+      `SELECT ts.tournament_id::text AS tournament_id
+         FROM tournament_brackets tb
+         JOIN tournament_stages ts ON ts.id = tb.tournament_stage_id
+        WHERE tb.id = $1::uuid`,
+      [tournament_bracket_id],
+    );
+
+    if (!bracket) {
+      throw Error("bracket not found");
+    }
+
+    const tournament = await this.getTournamentAccess(
+      bracket.tournament_id,
+      data.user,
+    );
+
+    this.requireOrganizer(tournament);
+
+    await this.postgres.query(
+      `SELECT recreate_tournament_bracket_match($1::uuid)`,
+      [tournament_bracket_id],
+    );
+
+    this.logger.log(
+      `[${bracket.tournament_id}] recreated the match of bracket ${tournament_bracket_id}`,
+    );
+
+    return { success: true };
+  }
+
   private async deleteTournamentMatches(
     tournament_id: string,
   ): Promise<{ matchCount: number }> {
@@ -566,7 +602,9 @@ export class TournamentsController {
       }
       default: {
         if (!team.can_manage && !team.is_captain) {
-          throw Error("only the team captain can check this team in");
+          throw Error(
+            "only the team captain or a team admin can check this team in",
+          );
         }
         break;
       }
@@ -853,7 +891,6 @@ export class TournamentsController {
   public async joinTournamentAsFreeAgent(data: {
     user: User;
     tournament_id: string;
-    with_party?: boolean;
   }) {
     const { tournament_id } = data;
     const tournament = await this.getTournamentAccess(tournament_id, data.user);
@@ -877,9 +914,7 @@ export class TournamentsController {
       throw Error("you do not meet this tournament's entry requirements");
     }
 
-    if (data.with_party) {
-      return await this.joinFreeAgentPoolWithLobby(tournament, data.user);
-    }
+    await this.clearWithdrawnFreeAgent(tournament_id, data.user.steam_id);
 
     await this.postgres.query(
       `INSERT INTO tournament_free_agents (tournament_id, player_steam_id)
@@ -891,190 +926,18 @@ export class TournamentsController {
     return { success: true };
   }
 
-  private static freeAgentPartyBlocker(
-    member: LobbyPartyMember,
-    requireUnlock: boolean,
-  ): string | null {
-    if (member.owns_team) {
-      return "already has a team in this tournament";
-    }
-
-    if (member.rostered) {
-      return "is already on a roster in this tournament";
-    }
-
-    if (!member.eligible) {
-      return "does not meet this tournament's entry requirements";
-    }
-
-    // The invite-only gate is per player, like the passcode and the invite it
-    // grants: the captain being unlocked says nothing about their friends.
-    if (requireUnlock && !member.unlocked) {
-      return "has not been invited to this tournament";
-    }
-
-    // Anything past 'registered' is a commitment the pool has already acted on
-    // -- a draft has placed them, passed them over, or they were removed. Folding
-    // such a row into a new party silently would build a party that the draft
-    // then treats as smaller than the lobby that formed it.
-    if (member.pool_status !== null && member.pool_status !== "registered") {
-      return "is already committed in this tournament";
-    }
-
-    return null;
-  }
-
-  // Signing the lobby up IS the party: everyone accepted into it is entered
-  // together under the lobby's id, and the draft keeps them on one team. There
-  // is no invite to accept because there is nothing new to consent to -- the
-  // captain already queues this exact roster into matchmaking, which commits
-  // them to a live match rather than a signup.
-  private async joinFreeAgentPoolWithLobby(
-    tournament: TournamentAccess,
-    user: User,
-  ) {
-    const [lobby] = await this.postgres.query<
-      Array<{ lobby_id: string; captain: boolean }>
-    >(
-      `SELECT lobby_id::text AS lobby_id, captain
-         FROM lobby_players
-        WHERE steam_id = $1::bigint AND status = 'Accepted'`,
-      [user.steam_id],
-    );
-
-    if (!lobby) {
-      throw Error("you are not in a lobby");
-    }
-
-    if (!lobby.captain) {
-      throw Error("you are not the captain of this lobby");
-    }
-
-    const members = await this.postgres.query<Array<LobbyPartyMember>>(
-      `SELECT lp.steam_id::text AS steam_id,
-              COALESCE(p.name, 'A player') AS name,
-              player_meets_tournament_requirements($1::uuid, lp.steam_id) AS eligible,
-              tournament_registration_unlocked($1::uuid, lp.steam_id) AS unlocked,
-              EXISTS (
-                  SELECT 1 FROM tournament_team_roster ttr
-                   WHERE ttr.tournament_id = $1::uuid
-                     AND ttr.player_steam_id = lp.steam_id
-              ) AS rostered,
-              EXISTS (
-                  SELECT 1 FROM tournament_teams tt
-                   WHERE tt.tournament_id = $1::uuid
-                     AND tt.owner_steam_id = lp.steam_id
-              ) AS owns_team,
-              fa.status AS pool_status
-         FROM lobby_players lp
-         JOIN players p ON p.steam_id = lp.steam_id
-    LEFT JOIN tournament_free_agents fa
-           ON fa.tournament_id = $1::uuid AND fa.player_steam_id = lp.steam_id
-        WHERE lp.lobby_id = $2::uuid AND lp.status = 'Accepted'
-        ORDER BY lp.captain DESC, lp.steam_id`,
-      [tournament.id, lobby.lobby_id],
-    );
-
-    if (members.length === 0) {
-      throw Error("you are not in a lobby");
-    }
-
-    const steamIds = members.map((member) => member.steam_id);
-
-    for (const member of members) {
-      const blocker = TournamentsController.freeAgentPartyBlocker(
-        member,
-        tournament.invite_only,
-      );
-
-      if (blocker) {
-        throw Error(`${member.name} ${blocker}`);
-      }
-    }
-
-    const [sizing] = await this.postgres.query<
-      Array<{ team_size: number | null; carried_over: string }>
-    >(
-      `SELECT COALESCE(
-                  tournament_min_players_per_lineup(t),
-                  tournament_max_players_per_lineup(t)
-              ) AS team_size,
-              (
-                  SELECT COUNT(*)
-                    FROM tournament_free_agents fa
-                   WHERE fa.tournament_id = t.id
-                     AND fa.party_id = $2::uuid
-                     AND fa.status <> 'withdrawn'
-                     AND fa.player_steam_id <> ALL($3::bigint[])
-              )::text AS carried_over
-         FROM tournaments t
-        WHERE t.id = $1::uuid`,
-      [tournament.id, lobby.lobby_id, steamIds],
-    );
-
-    // Members who signed up from this lobby and have since left it still hold
-    // the party's id, so the cap is measured on the pool rather than on the
-    // lobby: a lobby that has churned can be larger than any team it drafts on.
-    const partySize = members.length + Number(sizing?.carried_over ?? 0);
-    const teamSize = sizing?.team_size ?? null;
-
-    if (teamSize !== null && partySize > teamSize) {
-      throw Error(
-        `a party of ${partySize} cannot be drafted onto a team of ${teamSize}`,
-      );
-    }
-
+  // A withdrawn row is someone who left a drafted team, and the ON CONFLICT that
+  // keeps a repeat sign-up idempotent would otherwise answer their new sign-up
+  // with success and leave them withdrawn. Gone rather than reset, so the insert
+  // runs every rule a first sign-up does and queues them at the back.
+  private async clearWithdrawnFreeAgent(tournamentId: string, steamId: string) {
     await this.postgres.query(
-      `INSERT INTO tournament_free_agents (tournament_id, player_steam_id, party_id)
-       SELECT $1::uuid, member.steam_id, $2::uuid
-         FROM unnest($3::bigint[]) AS member(steam_id)
-       ON CONFLICT (tournament_id, player_steam_id)
-       DO UPDATE SET party_id = EXCLUDED.party_id
-                WHERE tournament_free_agents.status = 'registered'`,
-      [tournament.id, lobby.lobby_id, steamIds],
+      `DELETE FROM tournament_free_agents
+        WHERE tournament_id = $1::uuid
+          AND player_steam_id = $2::bigint
+          AND status = 'withdrawn'`,
+      [tournamentId, steamId],
     );
-
-    await this.announceFreeAgentParty(
-      tournament,
-      user,
-      steamIds.filter((steamId) => steamId !== user.steam_id),
-    );
-
-    return { success: true };
-  }
-
-  private async announceFreeAgentParty(
-    tournament: TournamentAccess,
-    captain: User,
-    steamIds: Array<string>,
-  ) {
-    if (steamIds.length === 0) {
-      return;
-    }
-
-    try {
-      await this.notifications.notifyPlayers("TournamentPartySignup", {
-        title: "Signed up with your lobby",
-        message: `<b>${NotificationsService.escapeHtml(
-          captain.name,
-        )}</b> signed your lobby up for <a href="/tournaments/${
-          tournament.id
-        }"><b>${NotificationsService.escapeHtml(
-          tournament.name,
-        )}</b></a>. You will be drafted onto the same team.`,
-        role: "user",
-        entity_id: tournament.id,
-        steamIds,
-        data: { image: tournament.banner ?? tournament.logo },
-      });
-    } catch (error) {
-      // The signup is already written; a lost notification must not surface as
-      // a failed registration to the captain who sent it.
-      this.logger.warn(
-        `[${tournament.id}] unable to announce free agent party`,
-        error,
-      );
-    }
   }
 
   @HasuraAction()
@@ -1085,20 +948,28 @@ export class TournamentsController {
     const { tournament_id } = data;
     const tournament = await this.getTournamentAccess(tournament_id, data.user);
 
-    if (!["Setup", "RegistrationOpen"].includes(tournament.status)) {
-      throw Error("the free agent pool is closed");
-    }
+    // Only a drafted player holds a slot, and giving one up is what closes with
+    // registration. Someone still waiting holds nothing: kept on the waitlist
+    // after they asked to leave, they are promoted into a team they will not
+    // show up for.
+    const slotsOpen = ["Setup", "RegistrationOpen"].includes(tournament.status);
 
     const removed = await this.postgres.query<
       Array<{ id: string; status: string }>
     >(
       `DELETE FROM tournament_free_agents
         WHERE tournament_id = $1::uuid AND player_steam_id = $2::bigint
+          AND status <> 'withdrawn'
+          AND ($3::boolean OR status <> 'drafted')
       RETURNING id::text AS id, status`,
-      [tournament_id, data.user.steam_id],
+      [tournament_id, data.user.steam_id, slotsOpen],
     );
 
     if (removed.length === 0) {
+      if (!slotsOpen) {
+        throw Error("the free agent pool is closed");
+      }
+
       throw Error("you are not in this tournament's free agent pool");
     }
 
@@ -1112,6 +983,136 @@ export class TournamentsController {
     }
 
     return { success: true };
+  }
+
+  // Wider than a player's own sign-up window: the close has not drafted the
+  // pool yet in any of these. An organizer's Draft Teams may already have, and
+  // an entry added after it is waitlisted like any late sign-up.
+  private static readonly FREE_AGENT_POOL_EDITABLE = [
+    "Setup",
+    "RegistrationOpen",
+    "CheckInReview",
+  ];
+
+  @HasuraAction()
+  public async addTournamentFreeAgent(data: {
+    user: User;
+    tournament_id: string;
+    steam_id: string;
+  }) {
+    const { tournament_id } = data;
+    const steamId = String(data.steam_id);
+    const tournament = await this.getTournamentAccess(tournament_id, data.user);
+
+    this.requireOrganizer(tournament);
+
+    // Under the organizer's own session: a session-less insert is an internal
+    // write, which the block check between them and the player skips.
+    const added = await this.postgres.transaction(async (client) => {
+      const { check_in_required } = await this.lockFreeAgentPool(
+        client,
+        tournament_id,
+      );
+
+      await client.query(
+        `DELETE FROM tournament_free_agents
+          WHERE tournament_id = $1::uuid
+            AND player_steam_id = $2::bigint
+            AND status = 'withdrawn'`,
+        [tournament_id, steamId],
+      );
+
+      // The organizer vouches for them. Unconfirmed past a review's deadline
+      // they would be drafted without ever checking in, or, behind a Draft
+      // Teams, waitlisted where promotion only takes players who checked in.
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO tournament_free_agents (tournament_id, player_steam_id, checked_in_at)
+         VALUES ($1::uuid, $2::bigint, CASE WHEN $3::boolean THEN now() END)
+         ON CONFLICT (tournament_id, player_steam_id) DO NOTHING
+         RETURNING id::text AS id`,
+        [tournament_id, steamId, check_in_required],
+      );
+
+      return rows;
+    }, this.hasuraSession(data.user));
+
+    if (added.length === 0) {
+      throw Error(
+        "that player is already in this tournament's free agent pool",
+      );
+    }
+
+    this.logger.log(
+      `[${tournament_id}] ${data.user.steam_id} added ${steamId} to the free agent pool`,
+    );
+
+    return { success: true };
+  }
+
+  @HasuraAction()
+  public async removeTournamentFreeAgent(data: {
+    user: User;
+    tournament_id: string;
+    steam_id: string;
+  }) {
+    const { tournament_id } = data;
+    const steamId = String(data.steam_id);
+    const tournament = await this.getTournamentAccess(tournament_id, data.user);
+
+    this.requireOrganizer(tournament);
+
+    // A drafted player holds a seat on a pickup team and comes off it through
+    // that team's roster, which is what refills the seat from the waitlist.
+    const removed = await this.postgres.transaction(async (client) => {
+      await this.lockFreeAgentPool(client, tournament_id);
+
+      const { rows } = await client.query<{ id: string }>(
+        `DELETE FROM tournament_free_agents
+          WHERE tournament_id = $1::uuid
+            AND player_steam_id = $2::bigint
+            AND status IN ('registered', 'waitlisted')
+        RETURNING id::text AS id`,
+        [tournament_id, steamId],
+      );
+
+      return rows;
+    });
+
+    if (removed.length === 0) {
+      throw Error(
+        "only a registered or waitlisted free agent can be removed from the pool",
+      );
+    }
+
+    this.logger.log(
+      `[${tournament_id}] ${data.user.steam_id} removed ${steamId} from the free agent pool`,
+    );
+
+    return { success: true };
+  }
+
+  // FOR SHARE holds off every draft until this write commits: the close's
+  // status UPDATE and draft_tournament_free_agent_teams both lock the row.
+  // Without it an add lands 'registered' beside teams drafted without it, and
+  // a removal is rostered by a draft that read the pool before it.
+  private async lockFreeAgentPool(client: PoolClient, tournamentId: string) {
+    const { rows } = await client.query<{
+      status: string;
+      check_in_required: boolean;
+    }>(
+      `SELECT status, check_in_required FROM tournaments WHERE id = $1::uuid FOR SHARE`,
+      [tournamentId],
+    );
+
+    if (
+      !TournamentsController.FREE_AGENT_POOL_EDITABLE.includes(rows[0]?.status)
+    ) {
+      throw Error(
+        "the free agent pool can only change before registration closes or during check-in review",
+      );
+    }
+
+    return rows[0];
   }
 
   private requireRegistrationUnlocked(tournament: TournamentAccess) {

@@ -35,7 +35,6 @@ export const PUSH_CATEGORIES: Record<string, e_notification_types_enum[]> = {
     "TournamentCheckInOpen",
     "TournamentCheckInClosing",
     "TournamentCheckInMissed",
-    "TournamentPartySignup",
   ],
   events: ["EventReminder"],
   seasons: ["SeasonEnded"],
