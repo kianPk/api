@@ -17,6 +17,7 @@ DROP FUNCTION IF EXISTS public._leaderboard_win_rate(INT, TEXT, BOOLEAN);
 DROP FUNCTION IF EXISTS public._leaderboard_hs_pct(INT, TEXT, BOOLEAN);
 DROP FUNCTION IF EXISTS public._leaderboard_hltv_metric(TEXT, INT, TEXT, BOOLEAN, TEXT);
 DROP FUNCTION IF EXISTS public._leaderboard_udr(INT, TEXT, BOOLEAN, TEXT);
+DROP FUNCTION IF EXISTS public._leaderboard_external_rank(TEXT);
 
 -- Belt-and-suspenders: sweep up any other historical get_leaderboard arity we
 -- did not enumerate above (e.g. an even older 3-arg overload).
@@ -36,7 +37,8 @@ BEGIN
         '_leaderboard_hs_pct',
         '_leaderboard_awards',
         '_leaderboard_hltv_metric',
-        '_leaderboard_udr'
+        '_leaderboard_udr',
+        '_leaderboard_external_rank'
       )
   LOOP
     EXECUTE 'DROP FUNCTION ' || r.sig;
@@ -125,8 +127,14 @@ BEGIN
   ELSIF _category = 'best_udr' THEN
     RETURN QUERY SELECT * FROM _leaderboard_udr(_window_days, _match_type, _exclude_tournaments, _role, _season_id, _source);
 
+  ELSIF _category = 'faceit_elo' THEN
+    RETURN QUERY SELECT * FROM _leaderboard_external_rank('faceit');
+
+  ELSIF _category = 'premier_rank' THEN
+    RETURN QUERY SELECT * FROM _leaderboard_external_rank('premier');
+
   ELSE
-    RAISE EXCEPTION 'Invalid category: %. Must be one of: elo, best_kdr, best_win_rate, highest_hs_pct, awards, best_rating, best_adr, best_kpr, best_kast, best_udr', _category;
+    RAISE EXCEPTION 'Invalid category: %. Must be one of: elo, best_kdr, best_win_rate, highest_hs_pct, awards, best_rating, best_adr, best_kpr, best_kast, best_udr, faceit_elo, premier_rank', _category;
   END IF;
 END;
 $$;
@@ -135,6 +143,80 @@ $$;
 -- ELO leaderboard
 -- value = current ELO, secondary = ELO change, tertiary = win streak
 -- ============================================================
+-- FACEIT rating and Premier rank.
+--
+-- These are the only categories that do not come from our own matches: they are
+-- snapshots we cache on players from FACEIT and from parsed Premier demos. They
+-- therefore take no window, season, match type or source - a player's FACEIT
+-- rating is what it is whether or not they played here this week, and filtering
+-- one by "last 7 days" would empty the board rather than narrow it.
+--
+-- They do take one filter the other categories get for free by construction:
+-- the board is OUR players. Importing a demo mints a players row for everyone
+-- in the match, so without this the board fills up with strangers who have
+-- never signed in here - a rating we scraped in passing, attached to someone
+-- who is not on the platform. Signed in at least once AND played a match here.
+CREATE OR REPLACE FUNCTION public._leaderboard_external_rank(_rating TEXT)
+RETURNS SETOF public.leaderboard_entries
+LANGUAGE plpgsql STABLE
+AS $$
+BEGIN
+  IF _rating = 'faceit' THEN
+    RETURN QUERY
+      SELECT
+        p.steam_id::text,
+        p.name,
+        p.avatar_url,
+        p.country,
+        p.faceit_elo::float,
+        p.faceit_skill_level::float,
+        NULL::float,
+        0,
+        p.custom_avatar_url
+      FROM public.players p
+      WHERE p.last_sign_in_at IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM public.match_lineup_players mlp
+          JOIN public.match_lineups ml ON ml.id = mlp.match_lineup_id
+          JOIN public.matches m ON m.id = ml.match_id
+          WHERE mlp.steam_id = p.steam_id
+            AND m.source = '5stack'
+            AND m.status = 'Finished'
+        )
+        AND p.faceit_elo IS NOT NULL
+      ORDER BY p.faceit_elo DESC, p.name ASC;
+  ELSE
+    RETURN QUERY
+      SELECT
+        p.steam_id::text,
+        p.name,
+        p.avatar_url,
+        p.country,
+        p.premier_rank::float,
+        NULL::float,
+        NULL::float,
+        0,
+        p.custom_avatar_url
+      FROM public.players p
+      WHERE p.last_sign_in_at IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM public.match_lineup_players mlp
+          JOIN public.match_lineups ml ON ml.id = mlp.match_lineup_id
+          JOIN public.matches m ON m.id = ml.match_id
+          WHERE mlp.steam_id = p.steam_id
+            AND m.source = '5stack'
+            AND m.status = 'Finished'
+        )
+        -- The demo importer writes 0 for a player who has not placed this
+        -- season; ranked as a number that sorts as the worst rating in the game.
+        AND NULLIF(p.premier_rank, 0) IS NOT NULL
+      ORDER BY p.premier_rank DESC, p.name ASC;
+  END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public._leaderboard_elo(
   _window_days INT,
   _match_type TEXT,
@@ -795,8 +877,8 @@ $$;
 -- ============================================================
 -- Awards leaderboard
 -- value = gold count, secondary = silver count, tertiary = bronze count
--- matches_played = total medals. Olympic medal-table ordering. Only tournament
--- placements count; hand-granted awards must not move rankings.
+-- matches_played = mvp count. Olympic medal-table ordering, MVP first.
+-- Hand-granted awards count the same as calculated ones.
 -- ============================================================
 CREATE OR REPLACE FUNCTION public._leaderboard_awards(
   _window_days INT,
@@ -825,23 +907,35 @@ BEGIN
   END IF;
 
   RETURN QUERY
-  WITH counts AS (
-    SELECT
+  -- A tier counts once per player per tournament, season, event or league season,
+  -- however often it was granted there. Only unscoped grants, which need the grant
+  -- role, count every row.
+  WITH medals AS (
+    SELECT DISTINCT
       ar.player_steam_id,
-      SUM(CASE WHEN ar.placement = 0 THEN 1 ELSE 0 END)::int as mvp,
-      SUM(CASE WHEN ar.placement = 1 THEN 1 ELSE 0 END)::int as gold,
-      SUM(CASE WHEN ar.placement = 2 THEN 1 ELSE 0 END)::int as silver,
-      SUM(CASE WHEN ar.placement = 3 THEN 1 ELSE 0 END)::int as bronze,
-      COUNT(*)::int as total
+      medal.tier,
+      COALESCE(ar.tournament_id, ar.season_id, ar.event_id, ar.league_season_id, ar.id) AS occasion
     FROM award_recipients ar
+    JOIN awards a ON a.id = ar.award_id
+    CROSS JOIN LATERAL (
+      SELECT COALESCE(ar.placement_tier, a.tier) AS tier
+    ) medal
     -- Season placements have no match_options, so a match-type filter has to
     -- exclude them rather than drop them for a missing join.
     LEFT JOIN tournaments t ON t.id = ar.tournament_id
     LEFT JOIN match_options mo ON mo.id = t.match_options_id
     LEFT JOIN seasons s ON s.id = ar.season_id
     WHERE ar.player_steam_id IS NOT NULL
-      AND ar.placement IS NOT NULL
-      AND (ar.tournament_id IS NOT NULL OR ar.season_id IS NOT NULL)
+      AND medal.tier IN ('mvp', 'gold', 'silver', 'bronze')
+      AND (
+        ar.tournament_id IS NOT NULL
+        OR ar.season_id IS NOT NULL
+        OR (
+          _match_type IS NULL
+          AND (_from IS NULL OR ar.created_at >= _from)
+          AND (_to IS NULL OR ar.created_at < _to)
+        )
+      )
       -- Awards hang off a tournament, so there is no matchmaking bucket: any
       -- non-Overall source keeps only tournament-backed awards of that kind,
       -- and Matchmaking correctly comes back empty.
@@ -875,7 +969,17 @@ BEGIN
           )
         )
       )
-    GROUP BY ar.player_steam_id
+  ),
+  counts AS (
+    SELECT
+      m.player_steam_id,
+      COUNT(*) FILTER (WHERE m.tier = 'mvp')::int as mvp,
+      COUNT(*) FILTER (WHERE m.tier = 'gold')::int as gold,
+      COUNT(*) FILTER (WHERE m.tier = 'silver')::int as silver,
+      COUNT(*) FILTER (WHERE m.tier = 'bronze')::int as bronze,
+      COUNT(*)::int as total
+    FROM medals m
+    GROUP BY m.player_steam_id
   )
   SELECT
     c.player_steam_id::text   as player_steam_id,
@@ -938,7 +1042,14 @@ BEGIN
     SELECT
       le.player_steam_id,
       le.value,
-      (RANK() OVER (ORDER BY le.value DESC))::int AS rank,
+      -- Must match web/pages/leaderboard.vue's order_by or jump-to-player opens the wrong page.
+      (RANK() OVER (
+        ORDER BY
+          CASE WHEN _category = 'awards' THEN le.matches_played END DESC,
+          le.value DESC,
+          CASE WHEN _category = 'awards' THEN le.secondary_value END DESC,
+          CASE WHEN _category = 'awards' THEN le.tertiary_value END DESC
+      ))::int AS rank,
       (COUNT(*) OVER ())::int AS total
     -- Pass all 7 args explicitly. A shorter call binds ambiguously if a stale
     -- overload still exists; exact arity always resolves the 7-arg one.
