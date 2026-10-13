@@ -67,6 +67,7 @@ import { YpointModule } from "./ypoint/ypoint.module";
 import { IrrModule } from "./irr/irr.module";
 import { AnticheatModule } from "./anticheat/anticheat.module";
 import { ChallengesModule } from "./challenges/challenges.module";
+import { BattlePassModule } from "./battle-pass/battle-pass.module";
 
 @Module({
   imports: [
@@ -169,6 +170,7 @@ import { ChallengesModule } from "./challenges/challenges.module";
     IrrModule,
     AnticheatModule,
     ChallengesModule,
+    BattlePassModule,
     EventsModule,
     ScrimsModule,
     LeaguesModule,

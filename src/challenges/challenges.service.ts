@@ -135,7 +135,7 @@ export class ChallengesService implements OnModuleInit {
     steamId: string;
     tier: ChallengeTier;
     duration: string;
-    orderId: string;
+    orderId: string | null;
   }): Promise<void> {
     const expiresAt = durationToExpiry(args.duration);
     const tierRank = (t: ChallengeTier) => (t === "premium_plus" ? 2 : 1);
