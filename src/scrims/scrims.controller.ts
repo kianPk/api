@@ -2,10 +2,66 @@ import { Controller } from "@nestjs/common";
 import { HasuraAction } from "../hasura/hasura.controller";
 import { User } from "../auth/types/User";
 import { ScrimsService } from "./scrims.service";
+import { DuelsService } from "./duels.service";
 
 @Controller("scrims")
 export class ScrimsController {
-  constructor(private readonly scrims: ScrimsService) {}
+  constructor(
+    private readonly scrims: ScrimsService,
+    private readonly duels: DuelsService,
+  ) {}
+
+  @HasuraAction()
+  public async sendDuelRequest(data: {
+    user: User;
+    to_steam_id: string;
+    best_of?: number;
+    map_id?: string;
+    proposed_scheduled_at?: string;
+    wager_ypoints?: number;
+  }) {
+    await this.duels.sendDuelRequest({
+      fromSteamId: data.user.steam_id,
+      toSteamId: data.to_steam_id,
+      bestOf: data.best_of,
+      mapId: data.map_id,
+      proposedScheduledAt: data.proposed_scheduled_at,
+      wagerYpoints: data.wager_ypoints,
+    });
+
+    return {
+      success: true,
+    };
+  }
+
+  @HasuraAction()
+  public async respondToDuelRequest(data: {
+    user: User;
+    request_id: string;
+    accept: boolean;
+  }) {
+    await this.duels.respondToDuelRequest({
+      requestId: data.request_id,
+      steamId: data.user.steam_id,
+      accept: data.accept,
+    });
+
+    return {
+      success: true,
+    };
+  }
+
+  @HasuraAction()
+  public async cancelDuelRequest(data: { user: User; request_id: string }) {
+    await this.duels.cancelDuelRequest({
+      requestId: data.request_id,
+      steamId: data.user.steam_id,
+    });
+
+    return {
+      success: true,
+    };
+  }
 
   @HasuraAction()
   public async sendScrimRequest(data: {

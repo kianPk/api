@@ -31,6 +31,30 @@ actions:
     permissions:
       - role: user
     comment: cancelScrimRequest
+  - name: sendDuelRequest
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+    comment: sendDuelRequest
+  - name: respondToDuelRequest
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+    comment: respondToDuelRequest
+  - name: cancelDuelRequest
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+    comment: cancelDuelRequest
   - name: teamCalendarUrl
     definition:
       kind: synchronous

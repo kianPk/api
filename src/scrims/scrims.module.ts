@@ -13,6 +13,7 @@ import { getQueuesProcessors } from "../utilities/QueueProcessors";
 import { ScrimQueues } from "./enums/ScrimQueues";
 import { ScrimsService } from "./scrims.service";
 import { ScrimWagersService } from "./scrim-wagers.service";
+import { DuelsService } from "./duels.service";
 import { ScrimsController } from "./scrims.controller";
 import { TeamCalendarController } from "./team-calendar.controller";
 import { MatchScrims } from "./jobs/MatchScrims";
@@ -36,6 +37,7 @@ import { SuggestTeams } from "./jobs/SuggestTeams";
   providers: [
     ScrimsService,
     ScrimWagersService,
+    DuelsService,
     MatchScrims,
     SuggestTeams,
     ...getQueuesProcessors("Scrims"),

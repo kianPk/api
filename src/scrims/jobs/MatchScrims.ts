@@ -6,6 +6,7 @@ import { ScrimQueues } from "../enums/ScrimQueues";
 import { PostgresService } from "../../postgres/postgres.service";
 import { ScrimsService } from "../scrims.service";
 import { ScrimWagersService } from "../scrim-wagers.service";
+import { DuelsService } from "../duels.service";
 import type {
   AvailabilityWindow,
   ScrimSettings,
@@ -27,14 +28,17 @@ export class MatchScrims extends WorkerHost {
     private readonly postgres: PostgresService,
     private readonly scrims: ScrimsService,
     private readonly wagers: ScrimWagersService,
+    private readonly duels: DuelsService,
   ) {
     super();
   }
 
   async process(_job: Job): Promise<void> {
     await this.scrims.expireStaleRequests();
+    await this.duels.expireStale();
     // Escrowed Ypoints are paid out even with the finder switched off.
     await this.wagers.settleDue();
+    await this.duels.settleDue();
 
     if (!(await this.scrims.isFinderEnabled())) {
       return;

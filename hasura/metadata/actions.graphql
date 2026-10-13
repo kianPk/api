@@ -35,6 +35,29 @@ type Mutation {
   ): SuccessOutput
 }
 
+type Mutation {
+  sendDuelRequest(
+    to_steam_id: bigint!
+    best_of: Int
+    map_id: uuid
+    proposed_scheduled_at: timestamptz
+    wager_ypoints: Int
+  ): SuccessOutput
+}
+
+type Mutation {
+  respondToDuelRequest(
+    request_id: uuid!
+    accept: Boolean!
+  ): SuccessOutput
+}
+
+type Mutation {
+  cancelDuelRequest(
+    request_id: uuid!
+  ): SuccessOutput
+}
+
 type Query {
   teamCalendarUrl(
     team_id: uuid!

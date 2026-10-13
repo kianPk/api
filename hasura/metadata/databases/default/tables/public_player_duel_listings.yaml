@@ -1,0 +1,46 @@
+table:
+  name: player_duel_listings
+  schema: public
+object_relationships:
+  - name: player
+    using:
+      foreign_key_constraint_on: steam_id
+insert_permissions:
+  - role: user
+    permission:
+      check:
+        steam_id:
+          _eq: X-Hasura-User-Id
+      set:
+        steam_id: x-hasura-User-Id
+      columns:
+        - note
+    comment: ""
+select_permissions:
+  - role: user
+    permission:
+      columns:
+        - steam_id
+        - note
+        - created_at
+      filter: {}
+    comment: ""
+update_permissions:
+  - role: user
+    permission:
+      columns:
+        - note
+      filter:
+        steam_id:
+          _eq: X-Hasura-User-Id
+      check:
+        steam_id:
+          _eq: X-Hasura-User-Id
+    comment: ""
+delete_permissions:
+  - role: user
+    permission:
+      filter:
+        steam_id:
+          _eq: X-Hasura-User-Id
+    comment: ""
