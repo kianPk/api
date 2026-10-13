@@ -11,6 +11,7 @@ type Mutation {
     proposed_scheduled_at: timestamptz!
     region: String
     best_of: Int
+    wager_ypoints: Int
   ): SuccessOutput
 }
 

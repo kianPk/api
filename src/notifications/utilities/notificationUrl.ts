@@ -27,6 +27,7 @@ const PATH_BY_TYPE: Record<string, (entityId: string) => string> = {
   ScrimMatchCanceled: () => `/scrims`,
   ScrimTimeChanged: () => `/scrims`,
   ScrimAlertMatch: () => `/scrims`,
+  ScrimWager: () => `/scrims`,
   // entity_id is the draft game itself, so this one lands on the lobby it is
   // inviting you to. The other two invites are keyed by the invite row rather
   // than the thing invited to, and both are accepted from the bell wherever

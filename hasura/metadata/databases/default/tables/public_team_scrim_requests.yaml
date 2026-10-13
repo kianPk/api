@@ -46,6 +46,11 @@ select_permissions:
         - auto_generated
         - created_at
         - responded_at
+        - wager_ypoints
+        - wager_rake_percent
+        - wager_status
+        - wager_winner_team_id
+        - wager_settled_at
       filter:
         _or:
           - from_team:

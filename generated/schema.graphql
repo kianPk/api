@@ -13202,6 +13202,9 @@ enum e_notification_types_enum {
   """A scheduled scrim time changed"""
   ScrimTimeChanged
 
+  """Ypoints you staked on a scrim were escrowed or settled"""
+  ScrimWager
+
   """A season has ended"""
   SeasonEnded
 
@@ -51931,7 +51934,7 @@ type mutation_root {
   scheduleMatch(match_id: uuid!, time: timestamptz): SuccessOutput
 
   """sendScrimRequest"""
-  sendScrimRequest(best_of: Int, from_team_id: uuid!, proposed_scheduled_at: timestamptz!, region: String, to_team_id: uuid!): SuccessOutput
+  sendScrimRequest(best_of: Int, from_team_id: uuid!, proposed_scheduled_at: timestamptz!, region: String, to_team_id: uuid!, wager_ypoints: Int): SuccessOutput
   sendUtilityDrillToServer(lineup_ids: [String!]!): UtilityDrillLoadOutput
   sendUtilityLineupToServer(lineup_id: uuid!): UtilityLoadOutput
   sendUtilityScratchToServer(lineup: UtilityScratchLineupInput!): UtilityLoadOutput
@@ -111037,6 +111040,7 @@ type team_scrim_requests {
   Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC.
   """
   match_outcome: String
+  match_winner_team_id: uuid
 
   """An array relationship"""
   proposals(
@@ -111086,6 +111090,12 @@ type team_scrim_requests {
   to_team: teams!
   to_team_checked_in: Boolean
   to_team_id: uuid!
+  wager_cancel_seen_at: timestamptz
+  wager_rake_percent: Int
+  wager_settled_at: timestamptz
+  wager_status: String
+  wager_winner_team_id: uuid
+  wager_ypoints: Int!
 }
 
 """
@@ -111170,6 +111180,8 @@ input team_scrim_requests_arr_rel_insert_input {
 """aggregate avg on columns"""
 type team_scrim_requests_avg_fields {
   requested_by_steam_id: Float
+  wager_rake_percent: Float
+  wager_ypoints: Float
 }
 
 """
@@ -111177,6 +111189,8 @@ order by avg() on columns of table "team_scrim_requests"
 """
 input team_scrim_requests_avg_order_by {
   requested_by_steam_id: order_by
+  wager_rake_percent: order_by
+  wager_ypoints: order_by
 }
 
 """
@@ -111202,6 +111216,7 @@ input team_scrim_requests_bool_exp {
   match_options: match_options_bool_exp
   match_options_id: uuid_comparison_exp
   match_outcome: String_comparison_exp
+  match_winner_team_id: uuid_comparison_exp
   proposals: team_scrim_request_proposals_bool_exp
   proposals_aggregate: team_scrim_request_proposals_aggregate_bool_exp
   proposed_scheduled_at: timestamptz_comparison_exp
@@ -111213,6 +111228,12 @@ input team_scrim_requests_bool_exp {
   to_team: teams_bool_exp
   to_team_checked_in: Boolean_comparison_exp
   to_team_id: uuid_comparison_exp
+  wager_cancel_seen_at: timestamptz_comparison_exp
+  wager_rake_percent: Int_comparison_exp
+  wager_settled_at: timestamptz_comparison_exp
+  wager_status: String_comparison_exp
+  wager_winner_team_id: uuid_comparison_exp
+  wager_ypoints: Int_comparison_exp
 }
 
 """
@@ -111233,6 +111254,8 @@ input type for incrementing numeric columns in table "team_scrim_requests"
 """
 input team_scrim_requests_inc_input {
   requested_by_steam_id: bigint
+  wager_rake_percent: Int
+  wager_ypoints: Int
 }
 
 """
@@ -111259,6 +111282,7 @@ input team_scrim_requests_insert_input {
   Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC.
   """
   match_outcome: String
+  match_winner_team_id: uuid
   proposals: team_scrim_request_proposals_arr_rel_insert_input
   proposed_scheduled_at: timestamptz
   region: String
@@ -111269,6 +111293,12 @@ input team_scrim_requests_insert_input {
   to_team: teams_obj_rel_insert_input
   to_team_checked_in: Boolean
   to_team_id: uuid
+  wager_cancel_seen_at: timestamptz
+  wager_rake_percent: Int
+  wager_settled_at: timestamptz
+  wager_status: String
+  wager_winner_team_id: uuid
+  wager_ypoints: Int
 }
 
 """aggregate max on columns"""
@@ -111286,11 +111316,18 @@ type team_scrim_requests_max_fields {
   Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC.
   """
   match_outcome: String
+  match_winner_team_id: uuid
   proposed_scheduled_at: timestamptz
   region: String
   requested_by_steam_id: bigint
   responded_at: timestamptz
   to_team_id: uuid
+  wager_cancel_seen_at: timestamptz
+  wager_rake_percent: Int
+  wager_settled_at: timestamptz
+  wager_status: String
+  wager_winner_team_id: uuid
+  wager_ypoints: Int
 }
 
 """
@@ -111310,11 +111347,18 @@ input team_scrim_requests_max_order_by {
   Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC.
   """
   match_outcome: order_by
+  match_winner_team_id: order_by
   proposed_scheduled_at: order_by
   region: order_by
   requested_by_steam_id: order_by
   responded_at: order_by
   to_team_id: order_by
+  wager_cancel_seen_at: order_by
+  wager_rake_percent: order_by
+  wager_settled_at: order_by
+  wager_status: order_by
+  wager_winner_team_id: order_by
+  wager_ypoints: order_by
 }
 
 """aggregate min on columns"""
@@ -111332,11 +111376,18 @@ type team_scrim_requests_min_fields {
   Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC.
   """
   match_outcome: String
+  match_winner_team_id: uuid
   proposed_scheduled_at: timestamptz
   region: String
   requested_by_steam_id: bigint
   responded_at: timestamptz
   to_team_id: uuid
+  wager_cancel_seen_at: timestamptz
+  wager_rake_percent: Int
+  wager_settled_at: timestamptz
+  wager_status: String
+  wager_winner_team_id: uuid
+  wager_ypoints: Int
 }
 
 """
@@ -111356,11 +111407,18 @@ input team_scrim_requests_min_order_by {
   Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC.
   """
   match_outcome: order_by
+  match_winner_team_id: order_by
   proposed_scheduled_at: order_by
   region: order_by
   requested_by_steam_id: order_by
   responded_at: order_by
   to_team_id: order_by
+  wager_cancel_seen_at: order_by
+  wager_rake_percent: order_by
+  wager_settled_at: order_by
+  wager_status: order_by
+  wager_winner_team_id: order_by
+  wager_ypoints: order_by
 }
 
 """
@@ -111411,6 +111469,7 @@ input team_scrim_requests_order_by {
   match_options: match_options_order_by
   match_options_id: order_by
   match_outcome: order_by
+  match_winner_team_id: order_by
   proposals_aggregate: team_scrim_request_proposals_aggregate_order_by
   proposed_scheduled_at: order_by
   region: order_by
@@ -111421,6 +111480,12 @@ input team_scrim_requests_order_by {
   to_team: teams_order_by
   to_team_checked_in: order_by
   to_team_id: order_by
+  wager_cancel_seen_at: order_by
+  wager_rake_percent: order_by
+  wager_settled_at: order_by
+  wager_status: order_by
+  wager_winner_team_id: order_by
+  wager_ypoints: order_by
 }
 
 """primary key columns input for table: team_scrim_requests"""
@@ -111469,6 +111534,9 @@ enum team_scrim_requests_select_column {
   match_outcome
 
   """column name"""
+  match_winner_team_id
+
+  """column name"""
   proposed_scheduled_at
 
   """column name"""
@@ -111488,6 +111556,24 @@ enum team_scrim_requests_select_column {
 
   """column name"""
   to_team_id
+
+  """column name"""
+  wager_cancel_seen_at
+
+  """column name"""
+  wager_rake_percent
+
+  """column name"""
+  wager_settled_at
+
+  """column name"""
+  wager_status
+
+  """column name"""
+  wager_winner_team_id
+
+  """column name"""
+  wager_ypoints
 }
 
 """
@@ -111544,6 +111630,7 @@ input team_scrim_requests_set_input {
   Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC.
   """
   match_outcome: String
+  match_winner_team_id: uuid
   proposed_scheduled_at: timestamptz
   region: String
   requested_by_steam_id: bigint
@@ -111551,11 +111638,19 @@ input team_scrim_requests_set_input {
   status: e_scrim_request_statuses_enum
   to_team_checked_in: Boolean
   to_team_id: uuid
+  wager_cancel_seen_at: timestamptz
+  wager_rake_percent: Int
+  wager_settled_at: timestamptz
+  wager_status: String
+  wager_winner_team_id: uuid
+  wager_ypoints: Int
 }
 
 """aggregate stddev on columns"""
 type team_scrim_requests_stddev_fields {
   requested_by_steam_id: Float
+  wager_rake_percent: Float
+  wager_ypoints: Float
 }
 
 """
@@ -111563,11 +111658,15 @@ order by stddev() on columns of table "team_scrim_requests"
 """
 input team_scrim_requests_stddev_order_by {
   requested_by_steam_id: order_by
+  wager_rake_percent: order_by
+  wager_ypoints: order_by
 }
 
 """aggregate stddev_pop on columns"""
 type team_scrim_requests_stddev_pop_fields {
   requested_by_steam_id: Float
+  wager_rake_percent: Float
+  wager_ypoints: Float
 }
 
 """
@@ -111575,11 +111674,15 @@ order by stddev_pop() on columns of table "team_scrim_requests"
 """
 input team_scrim_requests_stddev_pop_order_by {
   requested_by_steam_id: order_by
+  wager_rake_percent: order_by
+  wager_ypoints: order_by
 }
 
 """aggregate stddev_samp on columns"""
 type team_scrim_requests_stddev_samp_fields {
   requested_by_steam_id: Float
+  wager_rake_percent: Float
+  wager_ypoints: Float
 }
 
 """
@@ -111587,6 +111690,8 @@ order by stddev_samp() on columns of table "team_scrim_requests"
 """
 input team_scrim_requests_stddev_samp_order_by {
   requested_by_steam_id: order_by
+  wager_rake_percent: order_by
+  wager_ypoints: order_by
 }
 
 """
@@ -111618,6 +111723,7 @@ input team_scrim_requests_stream_cursor_value_input {
   Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC.
   """
   match_outcome: String
+  match_winner_team_id: uuid
   proposed_scheduled_at: timestamptz
   region: String
   requested_by_steam_id: bigint
@@ -111625,11 +111731,19 @@ input team_scrim_requests_stream_cursor_value_input {
   status: e_scrim_request_statuses_enum
   to_team_checked_in: Boolean
   to_team_id: uuid
+  wager_cancel_seen_at: timestamptz
+  wager_rake_percent: Int
+  wager_settled_at: timestamptz
+  wager_status: String
+  wager_winner_team_id: uuid
+  wager_ypoints: Int
 }
 
 """aggregate sum on columns"""
 type team_scrim_requests_sum_fields {
   requested_by_steam_id: bigint
+  wager_rake_percent: Int
+  wager_ypoints: Int
 }
 
 """
@@ -111637,6 +111751,8 @@ order by sum() on columns of table "team_scrim_requests"
 """
 input team_scrim_requests_sum_order_by {
   requested_by_steam_id: order_by
+  wager_rake_percent: order_by
+  wager_ypoints: order_by
 }
 
 """
@@ -111680,6 +111796,9 @@ enum team_scrim_requests_update_column {
   match_outcome
 
   """column name"""
+  match_winner_team_id
+
+  """column name"""
   proposed_scheduled_at
 
   """column name"""
@@ -111699,6 +111818,24 @@ enum team_scrim_requests_update_column {
 
   """column name"""
   to_team_id
+
+  """column name"""
+  wager_cancel_seen_at
+
+  """column name"""
+  wager_rake_percent
+
+  """column name"""
+  wager_settled_at
+
+  """column name"""
+  wager_status
+
+  """column name"""
+  wager_winner_team_id
+
+  """column name"""
+  wager_ypoints
 }
 
 input team_scrim_requests_updates {
@@ -111715,6 +111852,8 @@ input team_scrim_requests_updates {
 """aggregate var_pop on columns"""
 type team_scrim_requests_var_pop_fields {
   requested_by_steam_id: Float
+  wager_rake_percent: Float
+  wager_ypoints: Float
 }
 
 """
@@ -111722,11 +111861,15 @@ order by var_pop() on columns of table "team_scrim_requests"
 """
 input team_scrim_requests_var_pop_order_by {
   requested_by_steam_id: order_by
+  wager_rake_percent: order_by
+  wager_ypoints: order_by
 }
 
 """aggregate var_samp on columns"""
 type team_scrim_requests_var_samp_fields {
   requested_by_steam_id: Float
+  wager_rake_percent: Float
+  wager_ypoints: Float
 }
 
 """
@@ -111734,11 +111877,15 @@ order by var_samp() on columns of table "team_scrim_requests"
 """
 input team_scrim_requests_var_samp_order_by {
   requested_by_steam_id: order_by
+  wager_rake_percent: order_by
+  wager_ypoints: order_by
 }
 
 """aggregate variance on columns"""
 type team_scrim_requests_variance_fields {
   requested_by_steam_id: Float
+  wager_rake_percent: Float
+  wager_ypoints: Float
 }
 
 """
@@ -111746,6 +111893,8 @@ order by variance() on columns of table "team_scrim_requests"
 """
 input team_scrim_requests_variance_order_by {
   requested_by_steam_id: order_by
+  wager_rake_percent: order_by
+  wager_ypoints: order_by
 }
 
 """

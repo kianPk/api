@@ -2005,6 +2005,8 @@ export class MatchesController {
       );
     }
 
+    await this.assertNoOpenScrimWager(match_id, user);
+
     await this.matchAssistant.updateMatchStatus(match_id, "Canceled");
 
     return {
@@ -2029,6 +2031,8 @@ export class MatchesController {
     ) {
       throw Error("you are not a match organizer");
     }
+
+    await this.assertNoOpenScrimWager(match_id, user);
 
     const { matches_by_pk: current } = await this.hasura.query({
       matches_by_pk: {
@@ -2089,6 +2093,8 @@ export class MatchesController {
     ) {
       throw Error("you are not a match organizer");
     }
+
+    await this.assertNoOpenScrimWager(match_id, user);
 
     const { match_maps_by_pk: targetMap } = await this.hasura.query({
       match_maps_by_pk: {
@@ -2285,6 +2291,8 @@ export class MatchesController {
     if (!(await this.matchAssistant.isOrganizer(match_id, user))) {
       throw Error("you are not a match organizer");
     }
+
+    await this.assertNoOpenScrimWager(match_id, user);
 
     const { matches_by_pk: matchToForfeit } = await this.hasura.query({
       matches_by_pk: {
@@ -2843,6 +2851,29 @@ export class MatchesController {
     return {
       success: true,
     };
+  }
+
+  // The organizer of a scrim match is the team that sent the request, so its
+  // powers would let one side of a Ypoint wager decide the result. Bailing goes
+  // through cancelScrimRequest instead, which forfeits the stake.
+  private async assertNoOpenScrimWager(matchId: string, user: User) {
+    if (isRoleAbove(user.role, "administrator")) {
+      return;
+    }
+    const rows = await this.postgres.query<Array<{ exists: boolean }>>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM team_scrim_requests r
+           JOIN team_scrim_wager_stakes s ON s.request_id = r.id
+          WHERE r.match_id = $1 AND s.settled_at IS NULL
+       ) AS exists`,
+      [matchId],
+    );
+    if (rows.at(0)?.exists) {
+      throw Error(
+        "this scrim has a Ypoint wager on it: cancel the scrim instead, or ask an administrator",
+      );
+    }
   }
 
   private async cancelScrimForDeletedMatch(matchId: string, steamId?: string) {

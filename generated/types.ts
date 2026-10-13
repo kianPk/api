@@ -112791,6 +112791,9 @@ export default {
             "match_outcome": [
                 1
             ],
+            "match_winner_team_id": [
+                6672
+            ],
             "proposals": [
                 5052,
                 {
@@ -112861,6 +112864,24 @@ export default {
             ],
             "to_team_id": [
                 6672
+            ],
+            "wager_cancel_seen_at": [
+                5243
+            ],
+            "wager_rake_percent": [
+                2
+            ],
+            "wager_settled_at": [
+                5243
+            ],
+            "wager_status": [
+                1
+            ],
+            "wager_winner_team_id": [
+                6672
+            ],
+            "wager_ypoints": [
+                2
             ],
             "__typename": [
                 1
@@ -113042,12 +113063,24 @@ export default {
             "requested_by_steam_id": [
                 4
             ],
+            "wager_rake_percent": [
+                4
+            ],
+            "wager_ypoints": [
+                4
+            ],
             "__typename": [
                 1
             ]
         },
         "team_scrim_requests_avg_order_by": {
             "requested_by_steam_id": [
+                3648
+            ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_ypoints": [
                 3648
             ],
             "__typename": [
@@ -113112,6 +113145,9 @@ export default {
             "match_outcome": [
                 87
             ],
+            "match_winner_team_id": [
+                6674
+            ],
             "proposals": [
                 5061
             ],
@@ -113145,6 +113181,24 @@ export default {
             "to_team_id": [
                 6674
             ],
+            "wager_cancel_seen_at": [
+                5244
+            ],
+            "wager_rake_percent": [
+                43
+            ],
+            "wager_settled_at": [
+                5244
+            ],
+            "wager_status": [
+                87
+            ],
+            "wager_winner_team_id": [
+                6674
+            ],
+            "wager_ypoints": [
+                43
+            ],
             "__typename": [
                 1
             ]
@@ -113153,6 +113207,12 @@ export default {
         "team_scrim_requests_inc_input": {
             "requested_by_steam_id": [
                 312
+            ],
+            "wager_rake_percent": [
+                2
+            ],
+            "wager_ypoints": [
+                2
             ],
             "__typename": [
                 1
@@ -113207,6 +113267,9 @@ export default {
             "match_outcome": [
                 1
             ],
+            "match_winner_team_id": [
+                6672
+            ],
             "proposals": [
                 5058
             ],
@@ -113236,6 +113299,24 @@ export default {
             ],
             "to_team_id": [
                 6672
+            ],
+            "wager_cancel_seen_at": [
+                5243
+            ],
+            "wager_rake_percent": [
+                2
+            ],
+            "wager_settled_at": [
+                5243
+            ],
+            "wager_status": [
+                1
+            ],
+            "wager_winner_team_id": [
+                6672
+            ],
+            "wager_ypoints": [
+                2
             ],
             "__typename": [
                 1
@@ -113269,6 +113350,9 @@ export default {
             "match_outcome": [
                 1
             ],
+            "match_winner_team_id": [
+                6672
+            ],
             "proposed_scheduled_at": [
                 5243
             ],
@@ -113283,6 +113367,24 @@ export default {
             ],
             "to_team_id": [
                 6672
+            ],
+            "wager_cancel_seen_at": [
+                5243
+            ],
+            "wager_rake_percent": [
+                2
+            ],
+            "wager_settled_at": [
+                5243
+            ],
+            "wager_status": [
+                1
+            ],
+            "wager_winner_team_id": [
+                6672
+            ],
+            "wager_ypoints": [
+                2
             ],
             "__typename": [
                 1
@@ -113316,6 +113418,9 @@ export default {
             "match_outcome": [
                 3648
             ],
+            "match_winner_team_id": [
+                3648
+            ],
             "proposed_scheduled_at": [
                 3648
             ],
@@ -113329,6 +113434,24 @@ export default {
                 3648
             ],
             "to_team_id": [
+                3648
+            ],
+            "wager_cancel_seen_at": [
+                3648
+            ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_settled_at": [
+                3648
+            ],
+            "wager_status": [
+                3648
+            ],
+            "wager_winner_team_id": [
+                3648
+            ],
+            "wager_ypoints": [
                 3648
             ],
             "__typename": [
@@ -113363,6 +113486,9 @@ export default {
             "match_outcome": [
                 1
             ],
+            "match_winner_team_id": [
+                6672
+            ],
             "proposed_scheduled_at": [
                 5243
             ],
@@ -113377,6 +113503,24 @@ export default {
             ],
             "to_team_id": [
                 6672
+            ],
+            "wager_cancel_seen_at": [
+                5243
+            ],
+            "wager_rake_percent": [
+                2
+            ],
+            "wager_settled_at": [
+                5243
+            ],
+            "wager_status": [
+                1
+            ],
+            "wager_winner_team_id": [
+                6672
+            ],
+            "wager_ypoints": [
+                2
             ],
             "__typename": [
                 1
@@ -113410,6 +113554,9 @@ export default {
             "match_outcome": [
                 3648
             ],
+            "match_winner_team_id": [
+                3648
+            ],
             "proposed_scheduled_at": [
                 3648
             ],
@@ -113423,6 +113570,24 @@ export default {
                 3648
             ],
             "to_team_id": [
+                3648
+            ],
+            "wager_cancel_seen_at": [
+                3648
+            ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_settled_at": [
+                3648
+            ],
+            "wager_status": [
+                3648
+            ],
+            "wager_winner_team_id": [
+                3648
+            ],
+            "wager_ypoints": [
                 3648
             ],
             "__typename": [
@@ -113514,6 +113679,9 @@ export default {
             "match_outcome": [
                 3648
             ],
+            "match_winner_team_id": [
+                3648
+            ],
             "proposals_aggregate": [
                 5057
             ],
@@ -113542,6 +113710,24 @@ export default {
                 3648
             ],
             "to_team_id": [
+                3648
+            ],
+            "wager_cancel_seen_at": [
+                3648
+            ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_settled_at": [
+                3648
+            ],
+            "wager_status": [
+                3648
+            ],
+            "wager_winner_team_id": [
+                3648
+            ],
+            "wager_ypoints": [
                 3648
             ],
             "__typename": [
@@ -113596,6 +113782,9 @@ export default {
             "match_outcome": [
                 1
             ],
+            "match_winner_team_id": [
+                6672
+            ],
             "proposed_scheduled_at": [
                 5243
             ],
@@ -113617,12 +113806,36 @@ export default {
             "to_team_id": [
                 6672
             ],
+            "wager_cancel_seen_at": [
+                5243
+            ],
+            "wager_rake_percent": [
+                2
+            ],
+            "wager_settled_at": [
+                5243
+            ],
+            "wager_status": [
+                1
+            ],
+            "wager_winner_team_id": [
+                6672
+            ],
+            "wager_ypoints": [
+                2
+            ],
             "__typename": [
                 1
             ]
         },
         "team_scrim_requests_stddev_fields": {
             "requested_by_steam_id": [
+                4
+            ],
+            "wager_rake_percent": [
+                4
+            ],
+            "wager_ypoints": [
                 4
             ],
             "__typename": [
@@ -113633,12 +113846,24 @@ export default {
             "requested_by_steam_id": [
                 3648
             ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_ypoints": [
+                3648
+            ],
             "__typename": [
                 1
             ]
         },
         "team_scrim_requests_stddev_pop_fields": {
             "requested_by_steam_id": [
+                4
+            ],
+            "wager_rake_percent": [
+                4
+            ],
+            "wager_ypoints": [
                 4
             ],
             "__typename": [
@@ -113649,6 +113874,12 @@ export default {
             "requested_by_steam_id": [
                 3648
             ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_ypoints": [
+                3648
+            ],
             "__typename": [
                 1
             ]
@@ -113657,12 +113888,24 @@ export default {
             "requested_by_steam_id": [
                 4
             ],
+            "wager_rake_percent": [
+                4
+            ],
+            "wager_ypoints": [
+                4
+            ],
             "__typename": [
                 1
             ]
         },
         "team_scrim_requests_stddev_samp_order_by": {
             "requested_by_steam_id": [
+                3648
+            ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_ypoints": [
                 3648
             ],
             "__typename": [
@@ -113717,6 +113960,9 @@ export default {
             "match_outcome": [
                 1
             ],
+            "match_winner_team_id": [
+                6672
+            ],
             "proposed_scheduled_at": [
                 5243
             ],
@@ -113738,6 +113984,24 @@ export default {
             "to_team_id": [
                 6672
             ],
+            "wager_cancel_seen_at": [
+                5243
+            ],
+            "wager_rake_percent": [
+                2
+            ],
+            "wager_settled_at": [
+                5243
+            ],
+            "wager_status": [
+                1
+            ],
+            "wager_winner_team_id": [
+                6672
+            ],
+            "wager_ypoints": [
+                2
+            ],
             "__typename": [
                 1
             ]
@@ -113746,12 +114010,24 @@ export default {
             "requested_by_steam_id": [
                 312
             ],
+            "wager_rake_percent": [
+                2
+            ],
+            "wager_ypoints": [
+                2
+            ],
             "__typename": [
                 1
             ]
         },
         "team_scrim_requests_sum_order_by": {
             "requested_by_steam_id": [
+                3648
+            ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_ypoints": [
                 3648
             ],
             "__typename": [
@@ -113777,12 +114053,24 @@ export default {
             "requested_by_steam_id": [
                 4
             ],
+            "wager_rake_percent": [
+                4
+            ],
+            "wager_ypoints": [
+                4
+            ],
             "__typename": [
                 1
             ]
         },
         "team_scrim_requests_var_pop_order_by": {
             "requested_by_steam_id": [
+                3648
+            ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_ypoints": [
                 3648
             ],
             "__typename": [
@@ -113793,12 +114081,24 @@ export default {
             "requested_by_steam_id": [
                 4
             ],
+            "wager_rake_percent": [
+                4
+            ],
+            "wager_ypoints": [
+                4
+            ],
             "__typename": [
                 1
             ]
         },
         "team_scrim_requests_var_samp_order_by": {
             "requested_by_steam_id": [
+                3648
+            ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_ypoints": [
                 3648
             ],
             "__typename": [
@@ -113809,12 +114109,24 @@ export default {
             "requested_by_steam_id": [
                 4
             ],
+            "wager_rake_percent": [
+                4
+            ],
+            "wager_ypoints": [
+                4
+            ],
             "__typename": [
                 1
             ]
         },
         "team_scrim_requests_variance_order_by": {
             "requested_by_steam_id": [
+                3648
+            ],
+            "wager_rake_percent": [
+                3648
+            ],
+            "wager_ypoints": [
                 3648
             ],
             "__typename": [
@@ -196340,6 +196652,9 @@ export default {
                     "to_team_id": [
                         6672,
                         "uuid!"
+                    ],
+                    "wager_ypoints": [
+                        2
                     ]
                 }
             ],

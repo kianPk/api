@@ -30,6 +30,9 @@ export enum SystemSettingName {
   YpointFreeDuel = "public.ypoint_free_duel",
   YpointFreeWingman = "public.ypoint_free_wingman",
   YpointFreeRush = "public.ypoint_free_rush",
+  // On unless set to "false". The rake is a whole percent of the pot.
+  ScrimWagerEnabled = "public.scrim_wager_enabled",
+  ScrimWagerRakePercent = "public.scrim_wager_rake_percent",
   // Client anti-cheat launcher (hardware checks before ranked queue).
   AcLauncherRequired = "public.ac_launcher_required",
   AcAttestationTtlMinutes = "public.ac_attestation_ttl_minutes",

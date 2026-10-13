@@ -5474,7 +5474,7 @@ export interface e_notification_types_aggregate_fields {
 /** unique or primary key constraints on table "e_notification_types" */
 export type e_notification_types_constraint = 'e_notification_types_pkey'
 
-export type e_notification_types_enum = 'AwardGranted' | 'ChatMessage' | 'ClipReady' | 'DedicatedServerRconStatus' | 'DedicatedServerStatus' | 'DraftInvite' | 'EloRecompute' | 'EventReminder' | 'FormTeamSuggestion' | 'GameNodeStatus' | 'GameUpdate' | 'LeagueMatchUnscheduled' | 'LeagueProposalAccepted' | 'LeagueProposalDeclined' | 'LeagueProposalReceived' | 'LeagueRegistrationDecision' | 'LeagueRosterUndersized' | 'MatchAbandoned' | 'MatchChatMessage' | 'MatchImported' | 'MatchStatsReady' | 'MatchStatusChange' | 'MatchSupport' | 'NadeDriftScanFinished' | 'NadePracticeInvite' | 'NadePracticeReady' | 'NameChangeApproved' | 'NameChangeDenied' | 'NameChangeRequest' | 'NewsPublished' | 'PlayerReindex' | 'PlayerSanctioned' | 'ScrimAlertMatch' | 'ScrimMatchCanceled' | 'ScrimMatchScheduled' | 'ScrimRequestAccepted' | 'ScrimRequestCountered' | 'ScrimRequestDeclined' | 'ScrimRequestExpired' | 'ScrimRequestReceived' | 'ScrimTimeChanged' | 'SeasonEnded' | 'StorageScan' | 'StorePurchaseCancelled' | 'StorePurchasePaid' | 'TeamInvite' | 'TournamentCheckInClosing' | 'TournamentCheckInMissed' | 'TournamentCheckInOpen' | 'TournamentCreated' | 'TournamentInvite' | 'TournamentReminder' | 'TournamentTeamInvite' | 'UtilityDriftScanFinished' | 'UtilityPracticeInvite' | 'UtilityPracticeReady'
+export type e_notification_types_enum = 'AwardGranted' | 'ChatMessage' | 'ClipReady' | 'DedicatedServerRconStatus' | 'DedicatedServerStatus' | 'DraftInvite' | 'EloRecompute' | 'EventReminder' | 'FormTeamSuggestion' | 'GameNodeStatus' | 'GameUpdate' | 'LeagueMatchUnscheduled' | 'LeagueProposalAccepted' | 'LeagueProposalDeclined' | 'LeagueProposalReceived' | 'LeagueRegistrationDecision' | 'LeagueRosterUndersized' | 'MatchAbandoned' | 'MatchChatMessage' | 'MatchImported' | 'MatchStatsReady' | 'MatchStatusChange' | 'MatchSupport' | 'NadeDriftScanFinished' | 'NadePracticeInvite' | 'NadePracticeReady' | 'NameChangeApproved' | 'NameChangeDenied' | 'NameChangeRequest' | 'NewsPublished' | 'PlayerReindex' | 'PlayerSanctioned' | 'ScrimAlertMatch' | 'ScrimMatchCanceled' | 'ScrimMatchScheduled' | 'ScrimRequestAccepted' | 'ScrimRequestCountered' | 'ScrimRequestDeclined' | 'ScrimRequestExpired' | 'ScrimRequestReceived' | 'ScrimTimeChanged' | 'ScrimWager' | 'SeasonEnded' | 'StorageScan' | 'StorePurchaseCancelled' | 'StorePurchasePaid' | 'TeamInvite' | 'TournamentCheckInClosing' | 'TournamentCheckInMissed' | 'TournamentCheckInOpen' | 'TournamentCreated' | 'TournamentInvite' | 'TournamentReminder' | 'TournamentTeamInvite' | 'UtilityDriftScanFinished' | 'UtilityPracticeInvite' | 'UtilityPracticeReady'
 
 
 /** aggregate max on columns */
@@ -31692,6 +31692,7 @@ export interface team_scrim_requests {
     match_options_id: (Scalars['uuid'] | null)
     /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
     match_outcome: (Scalars['String'] | null)
+    match_winner_team_id: (Scalars['uuid'] | null)
     /** An array relationship */
     proposals: team_scrim_request_proposals[]
     /** An aggregate relationship */
@@ -31707,6 +31708,12 @@ export interface team_scrim_requests {
     to_team: teams
     to_team_checked_in: (Scalars['Boolean'] | null)
     to_team_id: Scalars['uuid']
+    wager_cancel_seen_at: (Scalars['timestamptz'] | null)
+    wager_rake_percent: (Scalars['Int'] | null)
+    wager_settled_at: (Scalars['timestamptz'] | null)
+    wager_status: (Scalars['String'] | null)
+    wager_winner_team_id: (Scalars['uuid'] | null)
+    wager_ypoints: Scalars['Int']
     __typename: 'team_scrim_requests'
 }
 
@@ -31739,6 +31746,8 @@ export interface team_scrim_requests_aggregate_fields {
 /** aggregate avg on columns */
 export interface team_scrim_requests_avg_fields {
     requested_by_steam_id: (Scalars['Float'] | null)
+    wager_rake_percent: (Scalars['Float'] | null)
+    wager_ypoints: (Scalars['Float'] | null)
     __typename: 'team_scrim_requests_avg_fields'
 }
 
@@ -31759,11 +31768,18 @@ export interface team_scrim_requests_max_fields {
     match_options_id: (Scalars['uuid'] | null)
     /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
     match_outcome: (Scalars['String'] | null)
+    match_winner_team_id: (Scalars['uuid'] | null)
     proposed_scheduled_at: (Scalars['timestamptz'] | null)
     region: (Scalars['String'] | null)
     requested_by_steam_id: (Scalars['bigint'] | null)
     responded_at: (Scalars['timestamptz'] | null)
     to_team_id: (Scalars['uuid'] | null)
+    wager_cancel_seen_at: (Scalars['timestamptz'] | null)
+    wager_rake_percent: (Scalars['Int'] | null)
+    wager_settled_at: (Scalars['timestamptz'] | null)
+    wager_status: (Scalars['String'] | null)
+    wager_winner_team_id: (Scalars['uuid'] | null)
+    wager_ypoints: (Scalars['Int'] | null)
     __typename: 'team_scrim_requests_max_fields'
 }
 
@@ -31780,11 +31796,18 @@ export interface team_scrim_requests_min_fields {
     match_options_id: (Scalars['uuid'] | null)
     /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
     match_outcome: (Scalars['String'] | null)
+    match_winner_team_id: (Scalars['uuid'] | null)
     proposed_scheduled_at: (Scalars['timestamptz'] | null)
     region: (Scalars['String'] | null)
     requested_by_steam_id: (Scalars['bigint'] | null)
     responded_at: (Scalars['timestamptz'] | null)
     to_team_id: (Scalars['uuid'] | null)
+    wager_cancel_seen_at: (Scalars['timestamptz'] | null)
+    wager_rake_percent: (Scalars['Int'] | null)
+    wager_settled_at: (Scalars['timestamptz'] | null)
+    wager_status: (Scalars['String'] | null)
+    wager_winner_team_id: (Scalars['uuid'] | null)
+    wager_ypoints: (Scalars['Int'] | null)
     __typename: 'team_scrim_requests_min_fields'
 }
 
@@ -31800,7 +31823,7 @@ export interface team_scrim_requests_mutation_response {
 
 
 /** select columns of table "team_scrim_requests" */
-export type team_scrim_requests_select_column = 'auto_generated' | 'awaiting_team_id' | 'canceled_by_team_id' | 'canceled_late' | 'created_at' | 'expires_at' | 'from_team_checked_in' | 'from_team_id' | 'id' | 'match_id' | 'match_options_id' | 'match_outcome' | 'proposed_scheduled_at' | 'region' | 'requested_by_steam_id' | 'responded_at' | 'status' | 'to_team_checked_in' | 'to_team_id'
+export type team_scrim_requests_select_column = 'auto_generated' | 'awaiting_team_id' | 'canceled_by_team_id' | 'canceled_late' | 'created_at' | 'expires_at' | 'from_team_checked_in' | 'from_team_id' | 'id' | 'match_id' | 'match_options_id' | 'match_outcome' | 'match_winner_team_id' | 'proposed_scheduled_at' | 'region' | 'requested_by_steam_id' | 'responded_at' | 'status' | 'to_team_checked_in' | 'to_team_id' | 'wager_cancel_seen_at' | 'wager_rake_percent' | 'wager_settled_at' | 'wager_status' | 'wager_winner_team_id' | 'wager_ypoints'
 
 
 /** select "team_scrim_requests_aggregate_bool_exp_bool_and_arguments_columns" columns of table "team_scrim_requests" */
@@ -31814,6 +31837,8 @@ export type team_scrim_requests_select_column_team_scrim_requests_aggregate_bool
 /** aggregate stddev on columns */
 export interface team_scrim_requests_stddev_fields {
     requested_by_steam_id: (Scalars['Float'] | null)
+    wager_rake_percent: (Scalars['Float'] | null)
+    wager_ypoints: (Scalars['Float'] | null)
     __typename: 'team_scrim_requests_stddev_fields'
 }
 
@@ -31821,6 +31846,8 @@ export interface team_scrim_requests_stddev_fields {
 /** aggregate stddev_pop on columns */
 export interface team_scrim_requests_stddev_pop_fields {
     requested_by_steam_id: (Scalars['Float'] | null)
+    wager_rake_percent: (Scalars['Float'] | null)
+    wager_ypoints: (Scalars['Float'] | null)
     __typename: 'team_scrim_requests_stddev_pop_fields'
 }
 
@@ -31828,6 +31855,8 @@ export interface team_scrim_requests_stddev_pop_fields {
 /** aggregate stddev_samp on columns */
 export interface team_scrim_requests_stddev_samp_fields {
     requested_by_steam_id: (Scalars['Float'] | null)
+    wager_rake_percent: (Scalars['Float'] | null)
+    wager_ypoints: (Scalars['Float'] | null)
     __typename: 'team_scrim_requests_stddev_samp_fields'
 }
 
@@ -31835,17 +31864,21 @@ export interface team_scrim_requests_stddev_samp_fields {
 /** aggregate sum on columns */
 export interface team_scrim_requests_sum_fields {
     requested_by_steam_id: (Scalars['bigint'] | null)
+    wager_rake_percent: (Scalars['Int'] | null)
+    wager_ypoints: (Scalars['Int'] | null)
     __typename: 'team_scrim_requests_sum_fields'
 }
 
 
 /** update columns of table "team_scrim_requests" */
-export type team_scrim_requests_update_column = 'auto_generated' | 'awaiting_team_id' | 'canceled_by_team_id' | 'canceled_late' | 'created_at' | 'expires_at' | 'from_team_checked_in' | 'from_team_id' | 'id' | 'match_id' | 'match_options_id' | 'match_outcome' | 'proposed_scheduled_at' | 'region' | 'requested_by_steam_id' | 'responded_at' | 'status' | 'to_team_checked_in' | 'to_team_id'
+export type team_scrim_requests_update_column = 'auto_generated' | 'awaiting_team_id' | 'canceled_by_team_id' | 'canceled_late' | 'created_at' | 'expires_at' | 'from_team_checked_in' | 'from_team_id' | 'id' | 'match_id' | 'match_options_id' | 'match_outcome' | 'match_winner_team_id' | 'proposed_scheduled_at' | 'region' | 'requested_by_steam_id' | 'responded_at' | 'status' | 'to_team_checked_in' | 'to_team_id' | 'wager_cancel_seen_at' | 'wager_rake_percent' | 'wager_settled_at' | 'wager_status' | 'wager_winner_team_id' | 'wager_ypoints'
 
 
 /** aggregate var_pop on columns */
 export interface team_scrim_requests_var_pop_fields {
     requested_by_steam_id: (Scalars['Float'] | null)
+    wager_rake_percent: (Scalars['Float'] | null)
+    wager_ypoints: (Scalars['Float'] | null)
     __typename: 'team_scrim_requests_var_pop_fields'
 }
 
@@ -31853,6 +31886,8 @@ export interface team_scrim_requests_var_pop_fields {
 /** aggregate var_samp on columns */
 export interface team_scrim_requests_var_samp_fields {
     requested_by_steam_id: (Scalars['Float'] | null)
+    wager_rake_percent: (Scalars['Float'] | null)
+    wager_ypoints: (Scalars['Float'] | null)
     __typename: 'team_scrim_requests_var_samp_fields'
 }
 
@@ -31860,6 +31895,8 @@ export interface team_scrim_requests_var_samp_fields {
 /** aggregate variance on columns */
 export interface team_scrim_requests_variance_fields {
     requested_by_steam_id: (Scalars['Float'] | null)
+    wager_rake_percent: (Scalars['Float'] | null)
+    wager_ypoints: (Scalars['Float'] | null)
     __typename: 'team_scrim_requests_variance_fields'
 }
 
@@ -74230,7 +74267,7 @@ export interface mutation_rootGenqlSelection{
     /** scheduleMatch */
     scheduleMatch?: (SuccessOutputGenqlSelection & { __args: {match_id: Scalars['uuid'], time?: (Scalars['timestamptz'] | null)} })
     /** sendScrimRequest */
-    sendScrimRequest?: (SuccessOutputGenqlSelection & { __args: {best_of?: (Scalars['Int'] | null), from_team_id: Scalars['uuid'], proposed_scheduled_at: Scalars['timestamptz'], region?: (Scalars['String'] | null), to_team_id: Scalars['uuid']} })
+    sendScrimRequest?: (SuccessOutputGenqlSelection & { __args: {best_of?: (Scalars['Int'] | null), from_team_id: Scalars['uuid'], proposed_scheduled_at: Scalars['timestamptz'], region?: (Scalars['String'] | null), to_team_id: Scalars['uuid'], wager_ypoints?: (Scalars['Int'] | null)} })
     sendUtilityDrillToServer?: (UtilityDrillLoadOutputGenqlSelection & { __args: {lineup_ids: Scalars['String'][]} })
     sendUtilityLineupToServer?: (UtilityLoadOutputGenqlSelection & { __args: {lineup_id: Scalars['uuid']} })
     sendUtilityScratchToServer?: (UtilityLoadOutputGenqlSelection & { __args: {lineup: UtilityScratchLineupInput} })
@@ -107355,6 +107392,7 @@ export interface team_scrim_requestsGenqlSelection{
     match_options_id?: boolean | number
     /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
     match_outcome?: boolean | number
+    match_winner_team_id?: boolean | number
     /** An array relationship */
     proposals?: (team_scrim_request_proposalsGenqlSelection & { __args?: {
     /** distinct select on columns */
@@ -107390,6 +107428,12 @@ export interface team_scrim_requestsGenqlSelection{
     to_team?: teamsGenqlSelection
     to_team_checked_in?: boolean | number
     to_team_id?: boolean | number
+    wager_cancel_seen_at?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_settled_at?: boolean | number
+    wager_status?: boolean | number
+    wager_winner_team_id?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -107443,27 +107487,29 @@ on_conflict?: (team_scrim_requests_on_conflict | null)}
 /** aggregate avg on columns */
 export interface team_scrim_requests_avg_fieldsGenqlSelection{
     requested_by_steam_id?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
 
 
 /** order by avg() on columns of table "team_scrim_requests" */
-export interface team_scrim_requests_avg_order_by {requested_by_steam_id?: (order_by | null)}
+export interface team_scrim_requests_avg_order_by {requested_by_steam_id?: (order_by | null),wager_rake_percent?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** Boolean expression to filter rows from the table "team_scrim_requests". All fields are combined with a logical 'AND'. */
-export interface team_scrim_requests_bool_exp {_and?: (team_scrim_requests_bool_exp[] | null),_not?: (team_scrim_requests_bool_exp | null),_or?: (team_scrim_requests_bool_exp[] | null),auto_generated?: (Boolean_comparison_exp | null),awaiting_team?: (teams_bool_exp | null),awaiting_team_id?: (uuid_comparison_exp | null),canceled_by_team_id?: (uuid_comparison_exp | null),canceled_late?: (Boolean_comparison_exp | null),created_at?: (timestamptz_comparison_exp | null),expires_at?: (timestamptz_comparison_exp | null),from_team?: (teams_bool_exp | null),from_team_checked_in?: (Boolean_comparison_exp | null),from_team_id?: (uuid_comparison_exp | null),id?: (uuid_comparison_exp | null),match?: (matches_bool_exp | null),match_id?: (uuid_comparison_exp | null),match_options?: (match_options_bool_exp | null),match_options_id?: (uuid_comparison_exp | null),match_outcome?: (String_comparison_exp | null),proposals?: (team_scrim_request_proposals_bool_exp | null),proposals_aggregate?: (team_scrim_request_proposals_aggregate_bool_exp | null),proposed_scheduled_at?: (timestamptz_comparison_exp | null),region?: (String_comparison_exp | null),requested_by?: (players_bool_exp | null),requested_by_steam_id?: (bigint_comparison_exp | null),responded_at?: (timestamptz_comparison_exp | null),status?: (e_scrim_request_statuses_enum_comparison_exp | null),to_team?: (teams_bool_exp | null),to_team_checked_in?: (Boolean_comparison_exp | null),to_team_id?: (uuid_comparison_exp | null)}
+export interface team_scrim_requests_bool_exp {_and?: (team_scrim_requests_bool_exp[] | null),_not?: (team_scrim_requests_bool_exp | null),_or?: (team_scrim_requests_bool_exp[] | null),auto_generated?: (Boolean_comparison_exp | null),awaiting_team?: (teams_bool_exp | null),awaiting_team_id?: (uuid_comparison_exp | null),canceled_by_team_id?: (uuid_comparison_exp | null),canceled_late?: (Boolean_comparison_exp | null),created_at?: (timestamptz_comparison_exp | null),expires_at?: (timestamptz_comparison_exp | null),from_team?: (teams_bool_exp | null),from_team_checked_in?: (Boolean_comparison_exp | null),from_team_id?: (uuid_comparison_exp | null),id?: (uuid_comparison_exp | null),match?: (matches_bool_exp | null),match_id?: (uuid_comparison_exp | null),match_options?: (match_options_bool_exp | null),match_options_id?: (uuid_comparison_exp | null),match_outcome?: (String_comparison_exp | null),match_winner_team_id?: (uuid_comparison_exp | null),proposals?: (team_scrim_request_proposals_bool_exp | null),proposals_aggregate?: (team_scrim_request_proposals_aggregate_bool_exp | null),proposed_scheduled_at?: (timestamptz_comparison_exp | null),region?: (String_comparison_exp | null),requested_by?: (players_bool_exp | null),requested_by_steam_id?: (bigint_comparison_exp | null),responded_at?: (timestamptz_comparison_exp | null),status?: (e_scrim_request_statuses_enum_comparison_exp | null),to_team?: (teams_bool_exp | null),to_team_checked_in?: (Boolean_comparison_exp | null),to_team_id?: (uuid_comparison_exp | null),wager_cancel_seen_at?: (timestamptz_comparison_exp | null),wager_rake_percent?: (Int_comparison_exp | null),wager_settled_at?: (timestamptz_comparison_exp | null),wager_status?: (String_comparison_exp | null),wager_winner_team_id?: (uuid_comparison_exp | null),wager_ypoints?: (Int_comparison_exp | null)}
 
 
 /** input type for incrementing numeric columns in table "team_scrim_requests" */
-export interface team_scrim_requests_inc_input {requested_by_steam_id?: (Scalars['bigint'] | null)}
+export interface team_scrim_requests_inc_input {requested_by_steam_id?: (Scalars['bigint'] | null),wager_rake_percent?: (Scalars['Int'] | null),wager_ypoints?: (Scalars['Int'] | null)}
 
 
 /** input type for inserting data into table "team_scrim_requests" */
 export interface team_scrim_requests_insert_input {auto_generated?: (Scalars['Boolean'] | null),awaiting_team?: (teams_obj_rel_insert_input | null),awaiting_team_id?: (Scalars['uuid'] | null),canceled_by_team_id?: (Scalars['uuid'] | null),canceled_late?: (Scalars['Boolean'] | null),created_at?: (Scalars['timestamptz'] | null),expires_at?: (Scalars['timestamptz'] | null),from_team?: (teams_obj_rel_insert_input | null),from_team_checked_in?: (Scalars['Boolean'] | null),from_team_id?: (Scalars['uuid'] | null),id?: (Scalars['uuid'] | null),match?: (matches_obj_rel_insert_input | null),match_id?: (Scalars['uuid'] | null),match_options?: (match_options_obj_rel_insert_input | null),match_options_id?: (Scalars['uuid'] | null),
 /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
-match_outcome?: (Scalars['String'] | null),proposals?: (team_scrim_request_proposals_arr_rel_insert_input | null),proposed_scheduled_at?: (Scalars['timestamptz'] | null),region?: (Scalars['String'] | null),requested_by?: (players_obj_rel_insert_input | null),requested_by_steam_id?: (Scalars['bigint'] | null),responded_at?: (Scalars['timestamptz'] | null),status?: (e_scrim_request_statuses_enum | null),to_team?: (teams_obj_rel_insert_input | null),to_team_checked_in?: (Scalars['Boolean'] | null),to_team_id?: (Scalars['uuid'] | null)}
+match_outcome?: (Scalars['String'] | null),match_winner_team_id?: (Scalars['uuid'] | null),proposals?: (team_scrim_request_proposals_arr_rel_insert_input | null),proposed_scheduled_at?: (Scalars['timestamptz'] | null),region?: (Scalars['String'] | null),requested_by?: (players_obj_rel_insert_input | null),requested_by_steam_id?: (Scalars['bigint'] | null),responded_at?: (Scalars['timestamptz'] | null),status?: (e_scrim_request_statuses_enum | null),to_team?: (teams_obj_rel_insert_input | null),to_team_checked_in?: (Scalars['Boolean'] | null),to_team_id?: (Scalars['uuid'] | null),wager_cancel_seen_at?: (Scalars['timestamptz'] | null),wager_rake_percent?: (Scalars['Int'] | null),wager_settled_at?: (Scalars['timestamptz'] | null),wager_status?: (Scalars['String'] | null),wager_winner_team_id?: (Scalars['uuid'] | null),wager_ypoints?: (Scalars['Int'] | null)}
 
 
 /** aggregate max on columns */
@@ -107478,11 +107524,18 @@ export interface team_scrim_requests_max_fieldsGenqlSelection{
     match_options_id?: boolean | number
     /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
     match_outcome?: boolean | number
+    match_winner_team_id?: boolean | number
     proposed_scheduled_at?: boolean | number
     region?: boolean | number
     requested_by_steam_id?: boolean | number
     responded_at?: boolean | number
     to_team_id?: boolean | number
+    wager_cancel_seen_at?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_settled_at?: boolean | number
+    wager_status?: boolean | number
+    wager_winner_team_id?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -107491,7 +107544,7 @@ export interface team_scrim_requests_max_fieldsGenqlSelection{
 /** order by max() on columns of table "team_scrim_requests" */
 export interface team_scrim_requests_max_order_by {awaiting_team_id?: (order_by | null),canceled_by_team_id?: (order_by | null),created_at?: (order_by | null),expires_at?: (order_by | null),from_team_id?: (order_by | null),id?: (order_by | null),match_id?: (order_by | null),match_options_id?: (order_by | null),
 /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
-match_outcome?: (order_by | null),proposed_scheduled_at?: (order_by | null),region?: (order_by | null),requested_by_steam_id?: (order_by | null),responded_at?: (order_by | null),to_team_id?: (order_by | null)}
+match_outcome?: (order_by | null),match_winner_team_id?: (order_by | null),proposed_scheduled_at?: (order_by | null),region?: (order_by | null),requested_by_steam_id?: (order_by | null),responded_at?: (order_by | null),to_team_id?: (order_by | null),wager_cancel_seen_at?: (order_by | null),wager_rake_percent?: (order_by | null),wager_settled_at?: (order_by | null),wager_status?: (order_by | null),wager_winner_team_id?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** aggregate min on columns */
@@ -107506,11 +107559,18 @@ export interface team_scrim_requests_min_fieldsGenqlSelection{
     match_options_id?: boolean | number
     /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
     match_outcome?: boolean | number
+    match_winner_team_id?: boolean | number
     proposed_scheduled_at?: boolean | number
     region?: boolean | number
     requested_by_steam_id?: boolean | number
     responded_at?: boolean | number
     to_team_id?: boolean | number
+    wager_cancel_seen_at?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_settled_at?: boolean | number
+    wager_status?: boolean | number
+    wager_winner_team_id?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -107519,7 +107579,7 @@ export interface team_scrim_requests_min_fieldsGenqlSelection{
 /** order by min() on columns of table "team_scrim_requests" */
 export interface team_scrim_requests_min_order_by {awaiting_team_id?: (order_by | null),canceled_by_team_id?: (order_by | null),created_at?: (order_by | null),expires_at?: (order_by | null),from_team_id?: (order_by | null),id?: (order_by | null),match_id?: (order_by | null),match_options_id?: (order_by | null),
 /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
-match_outcome?: (order_by | null),proposed_scheduled_at?: (order_by | null),region?: (order_by | null),requested_by_steam_id?: (order_by | null),responded_at?: (order_by | null),to_team_id?: (order_by | null)}
+match_outcome?: (order_by | null),match_winner_team_id?: (order_by | null),proposed_scheduled_at?: (order_by | null),region?: (order_by | null),requested_by_steam_id?: (order_by | null),responded_at?: (order_by | null),to_team_id?: (order_by | null),wager_cancel_seen_at?: (order_by | null),wager_rake_percent?: (order_by | null),wager_settled_at?: (order_by | null),wager_status?: (order_by | null),wager_winner_team_id?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** response of any mutation on the table "team_scrim_requests" */
@@ -107544,7 +107604,7 @@ export interface team_scrim_requests_on_conflict {constraint: team_scrim_request
 
 
 /** Ordering options when selecting data from "team_scrim_requests". */
-export interface team_scrim_requests_order_by {auto_generated?: (order_by | null),awaiting_team?: (teams_order_by | null),awaiting_team_id?: (order_by | null),canceled_by_team_id?: (order_by | null),canceled_late?: (order_by | null),created_at?: (order_by | null),expires_at?: (order_by | null),from_team?: (teams_order_by | null),from_team_checked_in?: (order_by | null),from_team_id?: (order_by | null),id?: (order_by | null),match?: (matches_order_by | null),match_id?: (order_by | null),match_options?: (match_options_order_by | null),match_options_id?: (order_by | null),match_outcome?: (order_by | null),proposals_aggregate?: (team_scrim_request_proposals_aggregate_order_by | null),proposed_scheduled_at?: (order_by | null),region?: (order_by | null),requested_by?: (players_order_by | null),requested_by_steam_id?: (order_by | null),responded_at?: (order_by | null),status?: (order_by | null),to_team?: (teams_order_by | null),to_team_checked_in?: (order_by | null),to_team_id?: (order_by | null)}
+export interface team_scrim_requests_order_by {auto_generated?: (order_by | null),awaiting_team?: (teams_order_by | null),awaiting_team_id?: (order_by | null),canceled_by_team_id?: (order_by | null),canceled_late?: (order_by | null),created_at?: (order_by | null),expires_at?: (order_by | null),from_team?: (teams_order_by | null),from_team_checked_in?: (order_by | null),from_team_id?: (order_by | null),id?: (order_by | null),match?: (matches_order_by | null),match_id?: (order_by | null),match_options?: (match_options_order_by | null),match_options_id?: (order_by | null),match_outcome?: (order_by | null),match_winner_team_id?: (order_by | null),proposals_aggregate?: (team_scrim_request_proposals_aggregate_order_by | null),proposed_scheduled_at?: (order_by | null),region?: (order_by | null),requested_by?: (players_order_by | null),requested_by_steam_id?: (order_by | null),responded_at?: (order_by | null),status?: (order_by | null),to_team?: (teams_order_by | null),to_team_checked_in?: (order_by | null),to_team_id?: (order_by | null),wager_cancel_seen_at?: (order_by | null),wager_rake_percent?: (order_by | null),wager_settled_at?: (order_by | null),wager_status?: (order_by | null),wager_winner_team_id?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** primary key columns input for table: team_scrim_requests */
@@ -107554,43 +107614,49 @@ export interface team_scrim_requests_pk_columns_input {id: Scalars['uuid']}
 /** input type for updating data in table "team_scrim_requests" */
 export interface team_scrim_requests_set_input {auto_generated?: (Scalars['Boolean'] | null),awaiting_team_id?: (Scalars['uuid'] | null),canceled_by_team_id?: (Scalars['uuid'] | null),canceled_late?: (Scalars['Boolean'] | null),created_at?: (Scalars['timestamptz'] | null),expires_at?: (Scalars['timestamptz'] | null),from_team_checked_in?: (Scalars['Boolean'] | null),from_team_id?: (Scalars['uuid'] | null),id?: (Scalars['uuid'] | null),match_id?: (Scalars['uuid'] | null),match_options_id?: (Scalars['uuid'] | null),
 /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
-match_outcome?: (Scalars['String'] | null),proposed_scheduled_at?: (Scalars['timestamptz'] | null),region?: (Scalars['String'] | null),requested_by_steam_id?: (Scalars['bigint'] | null),responded_at?: (Scalars['timestamptz'] | null),status?: (e_scrim_request_statuses_enum | null),to_team_checked_in?: (Scalars['Boolean'] | null),to_team_id?: (Scalars['uuid'] | null)}
+match_outcome?: (Scalars['String'] | null),match_winner_team_id?: (Scalars['uuid'] | null),proposed_scheduled_at?: (Scalars['timestamptz'] | null),region?: (Scalars['String'] | null),requested_by_steam_id?: (Scalars['bigint'] | null),responded_at?: (Scalars['timestamptz'] | null),status?: (e_scrim_request_statuses_enum | null),to_team_checked_in?: (Scalars['Boolean'] | null),to_team_id?: (Scalars['uuid'] | null),wager_cancel_seen_at?: (Scalars['timestamptz'] | null),wager_rake_percent?: (Scalars['Int'] | null),wager_settled_at?: (Scalars['timestamptz'] | null),wager_status?: (Scalars['String'] | null),wager_winner_team_id?: (Scalars['uuid'] | null),wager_ypoints?: (Scalars['Int'] | null)}
 
 
 /** aggregate stddev on columns */
 export interface team_scrim_requests_stddev_fieldsGenqlSelection{
     requested_by_steam_id?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
 
 
 /** order by stddev() on columns of table "team_scrim_requests" */
-export interface team_scrim_requests_stddev_order_by {requested_by_steam_id?: (order_by | null)}
+export interface team_scrim_requests_stddev_order_by {requested_by_steam_id?: (order_by | null),wager_rake_percent?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** aggregate stddev_pop on columns */
 export interface team_scrim_requests_stddev_pop_fieldsGenqlSelection{
     requested_by_steam_id?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
 
 
 /** order by stddev_pop() on columns of table "team_scrim_requests" */
-export interface team_scrim_requests_stddev_pop_order_by {requested_by_steam_id?: (order_by | null)}
+export interface team_scrim_requests_stddev_pop_order_by {requested_by_steam_id?: (order_by | null),wager_rake_percent?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** aggregate stddev_samp on columns */
 export interface team_scrim_requests_stddev_samp_fieldsGenqlSelection{
     requested_by_steam_id?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
 
 
 /** order by stddev_samp() on columns of table "team_scrim_requests" */
-export interface team_scrim_requests_stddev_samp_order_by {requested_by_steam_id?: (order_by | null)}
+export interface team_scrim_requests_stddev_samp_order_by {requested_by_steam_id?: (order_by | null),wager_rake_percent?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** Streaming cursor of the table "team_scrim_requests" */
@@ -107604,19 +107670,21 @@ ordering?: (cursor_ordering | null)}
 /** Initial value of the column from where the streaming should start */
 export interface team_scrim_requests_stream_cursor_value_input {auto_generated?: (Scalars['Boolean'] | null),awaiting_team_id?: (Scalars['uuid'] | null),canceled_by_team_id?: (Scalars['uuid'] | null),canceled_late?: (Scalars['Boolean'] | null),created_at?: (Scalars['timestamptz'] | null),expires_at?: (Scalars['timestamptz'] | null),from_team_checked_in?: (Scalars['Boolean'] | null),from_team_id?: (Scalars['uuid'] | null),id?: (Scalars['uuid'] | null),match_id?: (Scalars['uuid'] | null),match_options_id?: (Scalars['uuid'] | null),
 /** Terminal match status captured by tbd_match_cancel_scrim before the match row is deleted, so v_team_reputation survives canceled-match GC. */
-match_outcome?: (Scalars['String'] | null),proposed_scheduled_at?: (Scalars['timestamptz'] | null),region?: (Scalars['String'] | null),requested_by_steam_id?: (Scalars['bigint'] | null),responded_at?: (Scalars['timestamptz'] | null),status?: (e_scrim_request_statuses_enum | null),to_team_checked_in?: (Scalars['Boolean'] | null),to_team_id?: (Scalars['uuid'] | null)}
+match_outcome?: (Scalars['String'] | null),match_winner_team_id?: (Scalars['uuid'] | null),proposed_scheduled_at?: (Scalars['timestamptz'] | null),region?: (Scalars['String'] | null),requested_by_steam_id?: (Scalars['bigint'] | null),responded_at?: (Scalars['timestamptz'] | null),status?: (e_scrim_request_statuses_enum | null),to_team_checked_in?: (Scalars['Boolean'] | null),to_team_id?: (Scalars['uuid'] | null),wager_cancel_seen_at?: (Scalars['timestamptz'] | null),wager_rake_percent?: (Scalars['Int'] | null),wager_settled_at?: (Scalars['timestamptz'] | null),wager_status?: (Scalars['String'] | null),wager_winner_team_id?: (Scalars['uuid'] | null),wager_ypoints?: (Scalars['Int'] | null)}
 
 
 /** aggregate sum on columns */
 export interface team_scrim_requests_sum_fieldsGenqlSelection{
     requested_by_steam_id?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
 
 
 /** order by sum() on columns of table "team_scrim_requests" */
-export interface team_scrim_requests_sum_order_by {requested_by_steam_id?: (order_by | null)}
+export interface team_scrim_requests_sum_order_by {requested_by_steam_id?: (order_by | null),wager_rake_percent?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 export interface team_scrim_requests_updates {
 /** increments the numeric columns with given value of the filtered values */
@@ -107630,37 +107698,43 @@ where: team_scrim_requests_bool_exp}
 /** aggregate var_pop on columns */
 export interface team_scrim_requests_var_pop_fieldsGenqlSelection{
     requested_by_steam_id?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
 
 
 /** order by var_pop() on columns of table "team_scrim_requests" */
-export interface team_scrim_requests_var_pop_order_by {requested_by_steam_id?: (order_by | null)}
+export interface team_scrim_requests_var_pop_order_by {requested_by_steam_id?: (order_by | null),wager_rake_percent?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** aggregate var_samp on columns */
 export interface team_scrim_requests_var_samp_fieldsGenqlSelection{
     requested_by_steam_id?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
 
 
 /** order by var_samp() on columns of table "team_scrim_requests" */
-export interface team_scrim_requests_var_samp_order_by {requested_by_steam_id?: (order_by | null)}
+export interface team_scrim_requests_var_samp_order_by {requested_by_steam_id?: (order_by | null),wager_rake_percent?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** aggregate variance on columns */
 export interface team_scrim_requests_variance_fieldsGenqlSelection{
     requested_by_steam_id?: boolean | number
+    wager_rake_percent?: boolean | number
+    wager_ypoints?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
 
 
 /** order by variance() on columns of table "team_scrim_requests" */
-export interface team_scrim_requests_variance_order_by {requested_by_steam_id?: (order_by | null)}
+export interface team_scrim_requests_variance_order_by {requested_by_steam_id?: (order_by | null),wager_rake_percent?: (order_by | null),wager_ypoints?: (order_by | null)}
 
 
 /** columns and relationships of "team_scrim_settings" */
@@ -150818,6 +150892,7 @@ export const enumENotificationTypesEnum = {
    ScrimRequestExpired: 'ScrimRequestExpired' as const,
    ScrimRequestReceived: 'ScrimRequestReceived' as const,
    ScrimTimeChanged: 'ScrimTimeChanged' as const,
+   ScrimWager: 'ScrimWager' as const,
    SeasonEnded: 'SeasonEnded' as const,
    StorageScan: 'StorageScan' as const,
    StorePurchaseCancelled: 'StorePurchaseCancelled' as const,
@@ -154717,13 +154792,20 @@ export const enumTeamScrimRequestsSelectColumn = {
    match_id: 'match_id' as const,
    match_options_id: 'match_options_id' as const,
    match_outcome: 'match_outcome' as const,
+   match_winner_team_id: 'match_winner_team_id' as const,
    proposed_scheduled_at: 'proposed_scheduled_at' as const,
    region: 'region' as const,
    requested_by_steam_id: 'requested_by_steam_id' as const,
    responded_at: 'responded_at' as const,
    status: 'status' as const,
    to_team_checked_in: 'to_team_checked_in' as const,
-   to_team_id: 'to_team_id' as const
+   to_team_id: 'to_team_id' as const,
+   wager_cancel_seen_at: 'wager_cancel_seen_at' as const,
+   wager_rake_percent: 'wager_rake_percent' as const,
+   wager_settled_at: 'wager_settled_at' as const,
+   wager_status: 'wager_status' as const,
+   wager_winner_team_id: 'wager_winner_team_id' as const,
+   wager_ypoints: 'wager_ypoints' as const
 }
 
 export const enumTeamScrimRequestsSelectColumnTeamScrimRequestsAggregateBoolExpBoolAndArgumentsColumns = {
@@ -154753,13 +154835,20 @@ export const enumTeamScrimRequestsUpdateColumn = {
    match_id: 'match_id' as const,
    match_options_id: 'match_options_id' as const,
    match_outcome: 'match_outcome' as const,
+   match_winner_team_id: 'match_winner_team_id' as const,
    proposed_scheduled_at: 'proposed_scheduled_at' as const,
    region: 'region' as const,
    requested_by_steam_id: 'requested_by_steam_id' as const,
    responded_at: 'responded_at' as const,
    status: 'status' as const,
    to_team_checked_in: 'to_team_checked_in' as const,
-   to_team_id: 'to_team_id' as const
+   to_team_id: 'to_team_id' as const,
+   wager_cancel_seen_at: 'wager_cancel_seen_at' as const,
+   wager_rake_percent: 'wager_rake_percent' as const,
+   wager_settled_at: 'wager_settled_at' as const,
+   wager_status: 'wager_status' as const,
+   wager_winner_team_id: 'wager_winner_team_id' as const,
+   wager_ypoints: 'wager_ypoints' as const
 }
 
 export const enumTeamScrimSettingsConstraint = {
