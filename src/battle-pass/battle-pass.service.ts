@@ -133,7 +133,7 @@ export class BattlePassService {
   public async getMe(steamId: string) {
     const season = await this.currentSeason();
     if (!season) {
-      return { season: null };
+      return { season: null as Season | null };
     }
 
     let subscriber: Awaited<
@@ -373,7 +373,7 @@ export class BattlePassService {
       ],
     );
 
-    const existing = await this.postgres.query(
+    const existing = await this.postgres.query<unknown[]>(
       `SELECT 1 FROM public.award_recipients
         WHERE award_id = $1::uuid AND player_steam_id = $2::bigint
         LIMIT 1`,
