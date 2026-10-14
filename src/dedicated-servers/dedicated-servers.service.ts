@@ -959,6 +959,54 @@ export class DedicatedServersService {
     await this.RconService.disconnect(serverId);
   }
 
+  // A section server is deployed once, by the servers event when its row is
+  // created. A deploy refused then (the mode's required plugin was not
+  // installed yet) is never retried by that event, so the ping deploys any
+  // section server still without a Deployment. It waits until the server has
+  // been seen without one for a while, so it never races the event's own
+  // deploy: setupDedicatedServer tears down what it fails to create.
+  public async deployMissingSectionServers(): Promise<void> {
+    const servers = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT s.id
+         FROM servers s
+         JOIN game_server_nodes n ON n.id = s.game_server_node_id
+        WHERE s.section_mode IS NOT NULL
+          AND s.enabled = true
+          AND n.enabled = true
+          AND n.status = 'Online'`,
+    );
+
+    for (const { id } of servers) {
+      const key = `servers-section:undeployed:${id}`;
+
+      try {
+        await this.apps.readNamespacedDeployment({
+          name: this.getDedicatedServerDeploymentName(id),
+          namespace: this.namespace,
+        });
+        await this.redis.del(key);
+        continue;
+      } catch (error) {
+        if (error?.code?.toString() !== "404") {
+          continue;
+        }
+      }
+
+      const firstSeen = Number(await this.redis.get(key));
+      if (!firstSeen) {
+        await this.redis.set(key, Date.now().toString(), "EX", 60 * 60);
+        continue;
+      }
+      if (Date.now() - firstSeen < 3 * 60 * 1000) {
+        continue;
+      }
+
+      await this.redis.del(key);
+      this.logger.log(`[${id}] section server has no deployment, deploying`);
+      await this.setupDedicatedServer(id);
+    }
+  }
+
   public async restartDedicatedServer(serverId: string): Promise<void> {
     // Recreate rather than flip the existing Deployment: ENABLED_PLUGINS is
     // baked into the pod env at setup time. A plain rollout restart kept the

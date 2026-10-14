@@ -17,6 +17,9 @@ export class PingDedicatedServers extends WorkerHost {
   async process(): Promise<void> {
     // reconcile logs its own failures; the fleet still gets its status ping.
     await this.serversSection.reconcile().catch((): void => undefined);
+    await this.dedicatedServersService
+      .deployMissingSectionServers()
+      .catch((): void => undefined);
 
     const { servers } = await this.hasura.query({
       servers: {
