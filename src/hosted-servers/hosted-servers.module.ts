@@ -16,6 +16,7 @@ import { HostedServersService } from "./hosted-servers.service";
 import { HostedServersController } from "./hosted-servers.controller";
 import { PublicRanksService } from "./public-ranks.service";
 import { PublicRanksController } from "./public-ranks.controller";
+import { SectionRatingsService } from "./section-ratings.service";
 import { PublicServerDetailsService } from "./public-server-details.service";
 import { PublicServerDetailsController } from "./public-server-details.controller";
 
@@ -42,6 +43,7 @@ import { PublicServerDetailsController } from "./public-server-details.controlle
   providers: [
     HostedServersService,
     PublicRanksService,
+    SectionRatingsService,
     PublicServerDetailsService,
     ProcessHostedServers,
     ...getQueuesProcessors("HostedServers"),
@@ -50,6 +52,7 @@ import { PublicServerDetailsController } from "./public-server-details.controlle
   exports: [
     HostedServersService,
     PublicRanksService,
+    SectionRatingsService,
     PublicServerDetailsService,
   ],
 })

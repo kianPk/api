@@ -4,15 +4,20 @@ import {
   Controller,
   Get,
   Headers,
+  Param,
   Post,
   Query,
 } from "@nestjs/common";
 import { PublicRanksService } from "./public-ranks.service";
+import { SectionRatingsService } from "./section-ratings.service";
 
 // Under /hosted-servers because the API ingress does not route arbitrary paths.
 @Controller("hosted-servers")
 export class PublicRanksController {
-  constructor(private readonly ranks: PublicRanksService) {}
+  constructor(
+    private readonly ranks: PublicRanksService,
+    private readonly sectionRatings: SectionRatingsService,
+  ) {}
 
   @Get("plugin/ranks/players")
   public async players(
@@ -81,6 +86,49 @@ export class PublicRanksController {
     return {
       players: await this.ranks.leaderboard(Number(limit) || 25),
       thresholds: this.ranks.thresholds(),
+    };
+  }
+
+  // Faceit-style Elo for Servers-section modes (duels, dm). Auth is the
+  // game pod's SERVER_API_PASSWORD, same as plugin/ranks/*.
+  @Get("plugin/section-ratings/:mode")
+  public async sectionRatingsGet(
+    @Headers("authorization") authorization: string,
+    @Param("mode") mode: string,
+    @Query("server_id") serverId: string,
+    @Query("steam_ids") steamIds: string,
+  ) {
+    await this.sectionRatings.authenticateServer(
+      String(serverId || ""),
+      authorization,
+    );
+    const key = this.sectionRatings.assertMode(mode);
+    const ids = String(steamIds || "")
+      .split(/[,\s]+/)
+      .filter(Boolean);
+    return { players: await this.sectionRatings.get(key, ids) };
+  }
+
+  @Post("plugin/section-ratings/:mode")
+  public async sectionRatingsPut(
+    @Headers("authorization") authorization: string,
+    @Param("mode") mode: string,
+    @Body()
+    body: {
+      server_id?: string;
+      players?: Array<{ steam_id?: string; rating?: number; name?: string }>;
+    },
+  ) {
+    await this.sectionRatings.authenticateServer(
+      String(body?.server_id || ""),
+      authorization,
+    );
+    const key = this.sectionRatings.assertMode(mode);
+    if (!Array.isArray(body?.players)) {
+      throw new BadRequestException("players required");
+    }
+    return {
+      players: await this.sectionRatings.upsert(key, body.players),
     };
   }
 }
