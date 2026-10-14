@@ -381,7 +381,9 @@ export const SERVER_SECTION_MODES: Record<
       "mp_respawn_on_death_ct 1",
       "mp_teammates_are_enemies 1",
       "mp_randomspawn 0",
-      "mp_respawn_immunitytime 2",
+      // -1 turns the deathmatch INVULNERABLE box off; the plugin also clears
+      // GunGameImmunity on every spawn in case a map still grants it.
+      "mp_respawn_immunitytime -1",
       "mp_dm_bonus_length_max 0",
       "mp_dm_bonus_length_min 0",
       "mp_dm_time_between_bonus_max 9999",
