@@ -345,14 +345,15 @@ export const SERVER_SECTION_MODES: Record<
       { id: "3522144043", name: "Poseidon" },
     ],
   },
-  // xplay's AWP: team against team in short rounds on the awp_ maps, with an
-  // AWP, a knife and armour for everyone, no buying and unlimited ammo. The
-  // plugin enforces the loadout on every spawn; the map only changes when an
-  // admin changes it.
+  // xplay's AWP DM: everyone against everyone on the awp_ maps with an AWP, a
+  // knife and armour, no buying and unlimited ammo. The game respawns the dead
+  // on their side's spawns, as the awp_ maps are built for two teams; the
+  // plugin enforces the loadout on every spawn and gives a killer health and
+  // armour back. The map only changes when an admin changes it.
   awp: {
     key: "awp",
     label: "AWP",
-    type: "Casual",
+    type: "Deathmatch",
     maxPlayers: 20,
     cfg: [
       'mp_t_default_primary "weapon_awp"',
@@ -365,21 +366,29 @@ export const SERVER_SECTION_MODES: Record<
       "mp_afterroundmoney 0",
       "mp_buytime 0",
       "mp_buy_anywhere 0",
+      "mp_buy_during_immunity 0",
       "mp_weapons_allow_map_placed 0",
       "mp_death_drop_gun 0",
       "mp_death_drop_grenade 0",
       "mp_death_drop_defuser 0",
       "sv_infinite_ammo 2",
-      "mp_freezetime 2",
-      "mp_roundtime 1.5",
-      "mp_roundtime_defuse 1.5",
-      "mp_roundtime_hostage 1.5",
-      "mp_round_restart_delay 3",
-      "mp_join_grace_time 10",
-      "mp_autoteambalance 1",
-      "mp_limitteams 1",
+      "mp_freezetime 0",
+      "mp_roundtime 60",
+      "mp_roundtime_defuse 60",
+      "mp_roundtime_hostage 60",
+      "mp_ignore_round_win_conditions 1",
+      "mp_respawn_on_death_t 1",
+      "mp_respawn_on_death_ct 1",
+      "mp_teammates_are_enemies 1",
+      "mp_randomspawn 0",
+      "mp_respawn_immunitytime 2",
+      "mp_dm_bonus_length_max 0",
+      "mp_dm_bonus_length_min 0",
+      "mp_dm_time_between_bonus_max 9999",
+      "mp_dm_time_between_bonus_min 9999",
+      "mp_autoteambalance 0",
+      "mp_limitteams 0",
       "mp_friendlyfire 0",
-      "mp_solid_teammates 1",
       ...MAP_NEVER_ENDS,
       ...NO_BOTS,
       ...HAND_END_OF_MATCH_TO_PLUGIN,
