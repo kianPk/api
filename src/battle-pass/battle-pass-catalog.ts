@@ -19,7 +19,7 @@ export const SUBSCRIBER_CHALLENGE_XP: Record<string, number> = {
 
 export type Track = "free" | "premium";
 
-export type BadgeKey = "veteran" | "elite" | "legend";
+export type BadgeKey = "veteran" | "elite" | "legend" | "premium";
 
 export type Reward =
   | { type: "ypoints"; amount: number }
@@ -44,6 +44,12 @@ export const BADGES: Record<
     name: "Battle Pass S{season} Legend",
     description: "Completed the Premium track of Battle Pass season {season}.",
     silhouette: 4,
+  },
+  // Shown next to the buyer's profile for the season they unlocked Premium.
+  premium: {
+    name: "Battle Pass S{season}",
+    description: "Unlocked the Premium Battle Pass for season {season}.",
+    silhouette: 3,
   },
 };
 

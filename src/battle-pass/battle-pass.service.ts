@@ -262,6 +262,8 @@ export class BattlePassService {
       [season.id, steamId],
     );
 
+    await this.grantBadge(steamId, season, "premium");
+
     this.logger.log(
       `battle pass: ${steamId} bought Premium for season ${season.number}`,
     );
