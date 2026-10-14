@@ -186,6 +186,8 @@ export const SERVER_SECTION_MODES: Record<
     extraGameParams: WORKSHOP_BOOT_MAP,
     plugins: [
       { slug: "servers-duels", required: true, config: null },
+      // Faceit level pins on TAB: Rank[5] + workshop 3724637448 (in MAM cfg).
+      MULTI_ADDON_MANAGER,
       INVENTORY,
       ANTI_NOCLIP,
     ],
