@@ -7,7 +7,11 @@ import {
   Param,
   Post,
   Query,
+  Req,
+  UnauthorizedException,
 } from "@nestjs/common";
+import { Request } from "express";
+import { User } from "../auth/types/User";
 import { PublicRanksService } from "./public-ranks.service";
 import { SectionRatingsService } from "./section-ratings.service";
 
@@ -129,6 +133,23 @@ export class PublicRanksController {
     }
     return {
       players: await this.sectionRatings.upsert(key, body.players),
+    };
+  }
+
+  // Site admin: set Faceit-style level for a player on a Servers-section mode.
+  @Post("section-ratings/:mode/admin-set")
+  public async sectionRatingsAdminSet(
+    @Req() request: Request,
+    @Param("mode") mode: string,
+    @Body()
+    body: { steam_id?: string; level?: number; name?: string },
+  ) {
+    const user = request.user as User | undefined;
+    if (!user?.steam_id) {
+      throw new UnauthorizedException("Authentication required");
+    }
+    return {
+      player: await this.sectionRatings.adminSetLevel(user, mode, body || {}),
     };
   }
 }

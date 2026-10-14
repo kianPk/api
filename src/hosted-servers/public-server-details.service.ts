@@ -8,8 +8,10 @@ import {
 import { User } from "../auth/types/User";
 import { PostgresService } from "../postgres/postgres.service";
 import { PublicRanksService } from "./public-ranks.service";
+import { SectionRatingsService } from "./section-ratings.service";
 import { timingSafeStringEqual } from "../utilities/timingSafeStringEqual";
 import { DedicatedServersService } from "../dedicated-servers/dedicated-servers.service";
+import { isServerSectionMode } from "../game-plugins/server-section-modes";
 
 type Profile = {
   show_vips: boolean;
@@ -28,6 +30,7 @@ export class PublicServerDetailsService {
   constructor(
     private readonly postgres: PostgresService,
     private readonly ranks: PublicRanksService,
+    private readonly sectionRatings: SectionRatingsService,
     private readonly dedicatedServers: DedicatedServersService,
   ) {}
 
@@ -39,21 +42,29 @@ export class PublicServerDetailsService {
   public async getLivePlayers(serverId: string) {
     const { id } = await this.requireServer(serverId);
     const [server] = await this.postgres.query<
-      Array<{ type: string; enabled: boolean }>
-    >(`SELECT type, enabled FROM servers WHERE id = $1`, [id]);
+      Array<{ type: string; enabled: boolean; section_mode: string | null }>
+    >(`SELECT type, enabled, section_mode FROM servers WHERE id = $1`, [id]);
     if (!server?.enabled || server.type === "Ranked") {
-      return { map: null, last_ping: null, players: [] };
+      return { map: null, last_ping: null, players: [], section_mode: null };
     }
 
-    const cached = await this.dedicatedServers.getCachedServerPlayers(
-      serverId,
-    );
+    const sectionMode =
+      server.section_mode && isServerSectionMode(server.section_mode)
+        ? server.section_mode
+        : null;
+
+    const cached = await this.dedicatedServers.getCachedServerPlayers(serverId);
     const steamIds = cached.players
       .map((p) => String(p.steam_id || ""))
       .filter((id) => /^7656119\d{10}$/.test(id));
 
     if (steamIds.length === 0) {
-      return { map: cached.map, last_ping: cached.last_ping, players: [] };
+      return {
+        map: cached.map,
+        last_ping: cached.last_ping,
+        players: [],
+        section_mode: sectionMode,
+      };
     }
 
     const rows = await this.postgres.query<
@@ -78,11 +89,22 @@ export class PublicServerDetailsService {
     );
     const byId = new Map(rows.map((r) => [r.steam_id, r]));
 
+    const sectionById = new Map<string, { rating: number; level: number }>();
+    if (sectionMode) {
+      for (const row of await this.sectionRatings.get(sectionMode, steamIds)) {
+        sectionById.set(row.steam_id, {
+          rating: row.rating,
+          level: row.level,
+        });
+      }
+    }
+
     const players = cached.players
       .filter((p) => byId.has(String(p.steam_id)))
       .map((p) => {
         const row = byId.get(String(p.steam_id))!;
         const points = Number(row.points) || 0;
+        const section = sectionById.get(String(p.steam_id));
         return {
           steam_id: String(p.steam_id),
           name: row.name || p.name || null,
@@ -90,11 +112,30 @@ export class PublicServerDetailsService {
           registered: row.name !== null,
           points,
           ...(points > 0 ? PublicRanksService.skillFromPoints(points) : {}),
+          ...(section
+            ? {
+                section_rating: Math.round(section.rating),
+                section_level: section.level,
+              }
+            : {}),
         };
       })
-      .sort((a, b) => b.points - a.points);
+      .sort((a, b) => {
+        if (sectionMode) {
+          return (
+            (b.section_rating ?? 0) - (a.section_rating ?? 0) ||
+            b.points - a.points
+          );
+        }
+        return b.points - a.points;
+      });
 
-    return { map: cached.map, last_ping: cached.last_ping, players };
+    return {
+      map: cached.map,
+      last_ping: cached.last_ping,
+      players,
+      section_mode: sectionMode,
+    };
   }
 
   private async requireServer(serverId: string) {
@@ -236,9 +277,10 @@ export class PublicServerDetailsService {
       throw new BadRequestException("points or skill_group required");
     }
 
-    const [player] = await this.postgres.query<
-      Array<{ name: string | null }>
-    >(`SELECT name FROM players WHERE steam_id = $1::bigint`, [steamId]);
+    const [player] = await this.postgres.query<Array<{ name: string | null }>>(
+      `SELECT name FROM players WHERE steam_id = $1::bigint`,
+      [steamId],
+    );
 
     const rank = await this.ranks.setServerPoints(
       serverId,
@@ -261,13 +303,17 @@ export class PublicServerDetailsService {
     const current = await this.getProfile(serverId);
     const next: Profile = {
       show_vips:
-        typeof body.show_vips === "boolean" ? body.show_vips : current.show_vips,
+        typeof body.show_vips === "boolean"
+          ? body.show_vips
+          : current.show_vips,
       show_ranks:
         typeof body.show_ranks === "boolean"
           ? body.show_ranks
           : current.show_ranks,
       show_bans:
-        typeof body.show_bans === "boolean" ? body.show_bans : current.show_bans,
+        typeof body.show_bans === "boolean"
+          ? body.show_bans
+          : current.show_bans,
     };
     await this.postgres.query(
       `INSERT INTO server_public_profile

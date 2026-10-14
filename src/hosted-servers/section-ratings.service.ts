@@ -1,7 +1,12 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from "@nestjs/common";
 import { PostgresService } from "../postgres/postgres.service";
 import { isServerSectionMode } from "../game-plugins/server-section-modes";
 import { PublicRanksService } from "./public-ranks.service";
+import { User } from "../auth/types/User";
 
 export type SectionRatingRow = {
   steam_id: string;
@@ -42,6 +47,13 @@ export class SectionRatingsService {
     if (elo < 1751) return 8;
     if (elo < 2001) return 9;
     return 10;
+  }
+
+  // Floor of each band so an admin set to level N always lands on N.
+  public static ratingForLevel(level: number): number {
+    const floors = [0, 1, 501, 751, 901, 1051, 1201, 1351, 1531, 1751, 2001];
+    const n = Math.min(10, Math.max(1, Math.round(Number(level) || 1)));
+    return floors[n];
   }
 
   public async get(
@@ -130,5 +142,39 @@ export class SectionRatingsService {
       mode,
       cleaned.map((row) => row.steam_id),
     );
+  }
+
+  /** Site administrator: set a player's Faceit-style level for a section mode. */
+  public async adminSetLevel(
+    user: User | undefined,
+    mode: string,
+    body: { steam_id?: string; level?: number; name?: string },
+  ): Promise<SectionRatingRow> {
+    if (!user?.steam_id || user.role !== "administrator") {
+      throw new ForbiddenException("Not allowed");
+    }
+    const key = this.assertMode(mode);
+    const steamId = String(body?.steam_id || "").match(
+      /\b(7656119\d{10})\b/,
+    )?.[1];
+    if (!steamId) {
+      throw new BadRequestException("Valid steam_id required");
+    }
+    const level = Math.min(10, Math.max(1, Math.round(Number(body?.level))));
+    if (!Number.isFinite(level)) {
+      throw new BadRequestException("level 1-10 required");
+    }
+    const [player] = await this.postgres.query<Array<{ name: string | null }>>(
+      `SELECT name FROM players WHERE steam_id = $1::bigint`,
+      [steamId],
+    );
+    const [row] = await this.upsert(key, [
+      {
+        steam_id: steamId,
+        rating: SectionRatingsService.ratingForLevel(level),
+        name: body?.name || player?.name || undefined,
+      },
+    ]);
+    return row;
   }
 }
