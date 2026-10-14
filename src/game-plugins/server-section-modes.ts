@@ -7,7 +7,7 @@
 // The database mirrors type and max_players in tbiu_servers_section_mode,
 // which forces them on every write; keep the two in step.
 
-export type ServerSectionModeKey = "duels" | "dm" | "bhop" | "2x2";
+export type ServerSectionModeKey = "duels" | "dm" | "bhop" | "2x2" | "awp";
 
 // id is a stock map name (de_inferno) or a workshop id.
 export type ServerSectionMap = {
@@ -120,8 +120,6 @@ const ANTI_NOCLIP_ALLOW_PLUGIN_NOCLIP: ServerSectionPlugin = {
   configPath: ANTI_NOCLIP_CONFIG_PATH,
 };
 
-// servers-awp is a retired mode's: still installed on a panel, it must not
-// auto-load onto matches either.
 export const SERVER_SECTION_PLUGIN_SLUGS = [
   "servers-duels",
   "servers-dm",
@@ -345,6 +343,58 @@ export const SERVER_SECTION_MODES: Record<
       { id: "de_overpass", name: "Overpass" },
       { id: "de_vertigo", name: "Vertigo" },
       { id: "3522144043", name: "Poseidon" },
+    ],
+  },
+  // xplay's AWP: team against team in short rounds on the awp_ maps, with an
+  // AWP, a knife and armour for everyone, no buying and unlimited ammo. The
+  // plugin enforces the loadout on every spawn; the map only changes when an
+  // admin changes it.
+  awp: {
+    key: "awp",
+    label: "AWP",
+    type: "Casual",
+    maxPlayers: 20,
+    cfg: [
+      'mp_t_default_primary "weapon_awp"',
+      'mp_ct_default_primary "weapon_awp"',
+      'mp_t_default_secondary ""',
+      'mp_ct_default_secondary ""',
+      "mp_free_armor 2",
+      "mp_startmoney 0",
+      "mp_maxmoney 0",
+      "mp_afterroundmoney 0",
+      "mp_buytime 0",
+      "mp_buy_anywhere 0",
+      "mp_weapons_allow_map_placed 0",
+      "mp_death_drop_gun 0",
+      "mp_death_drop_grenade 0",
+      "mp_death_drop_defuser 0",
+      "sv_infinite_ammo 2",
+      "mp_freezetime 2",
+      "mp_roundtime 1.5",
+      "mp_roundtime_defuse 1.5",
+      "mp_roundtime_hostage 1.5",
+      "mp_round_restart_delay 3",
+      "mp_join_grace_time 10",
+      "mp_autoteambalance 1",
+      "mp_limitteams 1",
+      "mp_friendlyfire 0",
+      "mp_solid_teammates 1",
+      ...MAP_NEVER_ENDS,
+      ...NO_BOTS,
+      ...HAND_END_OF_MATCH_TO_PLUGIN,
+    ].join("\n"),
+    extraGameParams: WORKSHOP_BOOT_MAP,
+    plugins: [
+      { slug: "servers-awp", required: true, config: null },
+      INVENTORY,
+      ANTI_NOCLIP,
+    ],
+    defaultMaps: [
+      { id: "3077655898", name: "awp_lego_2" },
+      { id: "3081154235", name: "awp_creek" },
+      { id: "3070577601", name: "awp_roost_fp" },
+      { id: "3094723224", name: "awp_gony_v2" },
     ],
   },
 };

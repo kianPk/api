@@ -625,7 +625,7 @@ describe("GameModesService Servers-section modes", () => {
     expect(resolved?.enabledPlugins).toEqual("servers-dm@1.0.0");
   });
 
-  it.each(["duels", "dm", "bhop"])(
+  it.each(["duels", "dm", "bhop", "awp"])(
     "refuses to boot %s without the plugin that runs it",
     async (section) => {
       const { service } = build(
