@@ -28,13 +28,17 @@ export class HostedServersController {
     return this.hostedServers.getSectionHostOverview();
   }
 
-  @Get("section-host/admin/plans")
+  /**
+   * Servers → Host plan admin. Kept under admin/* (same shape as classic
+   * hosted plans) so ingress / Nest path matching stay reliable.
+   */
+  @Get("admin/section-plans")
   public async sectionHostAdminPlans(@Req() request: Request) {
     this.requireAdmin(request);
     return this.hostedServers.listSectionHostAdminPlans();
   }
 
-  @Post("section-host/admin/plans")
+  @Post("admin/section-plans")
   public async sectionHostAdminCreatePlan(
     @Req() request: Request,
     @Body()
@@ -60,7 +64,7 @@ export class HostedServersController {
     });
   }
 
-  @Post("section-host/admin/plans/:id")
+  @Post("admin/section-plans/:id")
   public async sectionHostAdminUpdatePlan(
     @Req() request: Request,
     @Param("id") id: string,
@@ -88,7 +92,7 @@ export class HostedServersController {
     });
   }
 
-  @Post("section-host/admin/plans/:id/active")
+  @Post("admin/section-plans/:id/active")
   public async sectionHostAdminPlanActive(
     @Req() request: Request,
     @Param("id") id: string,
@@ -101,7 +105,7 @@ export class HostedServersController {
     );
   }
 
-  @Post("section-host/admin/plans/:id/delete")
+  @Post("admin/section-plans/:id/delete")
   public async sectionHostAdminPlanDelete(
     @Req() request: Request,
     @Param("id") id: string,
