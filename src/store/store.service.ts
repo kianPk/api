@@ -322,6 +322,128 @@ export class StoreService {
   }
 
   /**
+   * Servers → Host: buyer picks a section mode + duration; price comes from
+   * hourly rates (not a catalog plan).
+   */
+  public async checkoutSectionHost(
+    buyerSteamId: string,
+    opts: {
+      termsAccepted?: boolean;
+      sectionMode?: string;
+      duration?: string;
+      label?: string;
+      payWith?: "bale" | "ypoint";
+    },
+  ) {
+    if (!opts?.termsAccepted) {
+      throw new BadRequestException("Terms must be accepted before checkout");
+    }
+    if (!isServerSectionMode(opts.sectionMode)) {
+      throw new BadRequestException(
+        "Pick a Servers mode (duels, dm, bhop, 2x2, or awp)",
+      );
+    }
+    const payWithYpoint = opts.payWith === "ypoint";
+    const bale = payWithYpoint ? null : await this.resolveBale();
+    if (bale && (!bale.botToken || !bale.providerToken)) {
+      throw new ServiceUnavailableException(
+        "Bale Pay is not configured. Set BALE_BOT_TOKEN and BALE_PROVIDER_TOKEN.",
+      );
+    }
+
+    await this.ensureCartSchema();
+    await this.hostedServers.assertCanSellNew();
+
+    const quote = await this.hostedServers.quoteSectionHost(
+      String(opts.duration || ""),
+    );
+    if (payWithYpoint && quote.price_ypoint <= 0) {
+      throw new BadRequestException("This rental cannot be paid with Ypoints");
+    }
+    if (!payWithYpoint && quote.price_irr <= 0) {
+      throw new BadRequestException("Host rentals are not priced yet");
+    }
+
+    const carrier = await this.hostedServers.requireSectionHostCarrier();
+    const mode = SERVER_SECTION_MODES[opts.sectionMode];
+    const label =
+      (opts.label || "")
+        .replace(/[\r\n"';\\]/g, " ")
+        .trim()
+        .slice(0, 64) || `Host ${mode.label}`;
+
+    const cartItems: CartItemSnapshot[] = [
+      {
+        product_id: carrier.id,
+        title: `Host ${mode.label} · ${quote.duration}`,
+        price_irr: quote.price_irr,
+        ypoint_amount: null,
+        vip_server_id: null,
+        vip_duration: quote.duration,
+        subscription_tier: null,
+      },
+    ];
+    const orderId = randomUUID();
+    const payload = payWithYpoint ? `ypoint:${orderId}` : `store:${orderId}`;
+    if (!payWithYpoint) {
+      await this.cancelPendingOrders(buyerSteamId);
+    }
+
+    await this.postgres.query(
+      `INSERT INTO store_orders
+        (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
+         cart_items, terms_accepted_at, hosted_kind, hosted_server_id,
+         hosted_type, hosted_label, hosted_section_mode, hosted_duration,
+         payment_method, amount_ypoint, product_title)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now(), 'new', NULL,
+               $7, $8, $9, $10, $11, $12, $13)`,
+      [
+        orderId,
+        carrier.id,
+        buyerSteamId,
+        payWithYpoint ? 0 : quote.price_irr,
+        payload,
+        JSON.stringify(cartItems),
+        mode.type,
+        label,
+        opts.sectionMode,
+        quote.duration,
+        payWithYpoint ? "ypoint" : "bale",
+        payWithYpoint ? quote.price_ypoint : null,
+        `Host ${mode.label} · ${quote.duration}`,
+      ],
+    );
+
+    if (payWithYpoint) {
+      const balance = await this.completeYpointOrder(
+        orderId,
+        buyerSteamId,
+        quote.price_ypoint,
+      );
+      const [fulfilled] = await this.postgres.query<
+        Array<{ hosted_server_id: string | null }>
+      >(`SELECT hosted_server_id FROM store_orders WHERE id = $1`, [orderId]);
+      return {
+        orderId,
+        paid: true,
+        amountYpoint: quote.price_ypoint,
+        balance,
+        productTitle: `Host ${mode.label}`,
+        hostedServerId: fulfilled?.hosted_server_id || null,
+      };
+    }
+
+    return {
+      orderId,
+      paid: false,
+      amountIrr: quote.price_irr,
+      productTitle: `Host ${mode.label}`,
+      deepLink: this.buildDeepLink(orderId, bale!.botUsername),
+      botUsername: bale!.botUsername || null,
+    };
+  }
+
+  /**
    * Checkout for a hosted server plan. A new purchase is capacity-checked
    * here so buyers are not charged for a server the node can't run; renewals
    * target one of the buyer's existing hosted servers.
@@ -1098,7 +1220,9 @@ export class StoreService {
       await this.postgres.query(`
         ALTER TABLE public.store_orders
           ADD COLUMN IF NOT EXISTS cart_items jsonb,
-          ADD COLUMN IF NOT EXISTS terms_accepted_at timestamptz
+          ADD COLUMN IF NOT EXISTS terms_accepted_at timestamptz,
+          ADD COLUMN IF NOT EXISTS hosted_duration text,
+          ADD COLUMN IF NOT EXISTS hosted_section_mode text
       `);
     } catch (error) {
       this.logger.warn(

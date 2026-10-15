@@ -65,7 +65,21 @@ type HostedSettings = {
   slotPriceIrr: number;
   slotPriceYpoint: number;
   maxSlots: number;
+  /** Servers → Host: IRR per hour of rental. */
+  sectionHostPriceIrrPerHour: number;
+  sectionHostPriceYpointPerHour: number;
 };
+
+export const SECTION_HOST_DURATIONS = [
+  "1h",
+  "3h",
+  "12h",
+  "1d",
+  "3d",
+  "7d",
+  "14d",
+  "30d",
+] as const;
 
 type HostedRow = {
   id: string;
@@ -96,6 +110,7 @@ type OrderRow = {
   hosted_type: string | null;
   hosted_label: string | null;
   hosted_section_mode: string | null;
+  hosted_duration: string | null;
   hosted_fulfilled_at: string | null;
   product_id: string | null;
   product_title: string;
@@ -166,6 +181,14 @@ export class HostedServersService {
       slotPriceIrr: int(map.slot_price_irr, 0),
       slotPriceYpoint: int(map.slot_price_ypoint, 0),
       maxSlots: Math.min(64, Math.max(2, int(map.max_slots, 32))),
+      sectionHostPriceIrrPerHour: int(
+        map.section_host_price_irr_per_hour,
+        500_000,
+      ),
+      sectionHostPriceYpointPerHour: int(
+        map.section_host_price_ypoint_per_hour,
+        50,
+      ),
     };
   }
 
@@ -179,11 +202,15 @@ export class HostedServersService {
     slot_price_irr?: number;
     slot_price_ypoint?: number;
     max_slots?: number;
+    section_host_price_irr_per_hour?: number;
+    section_host_price_ypoint_per_hour?: number;
   }) {
     const entries: Array<[string, string]> = [];
     for (const [key, min, max] of [
       ["slot_price_irr", 0, 10_000_000_000],
       ["slot_price_ypoint", 0, 10_000_000],
+      ["section_host_price_irr_per_hour", 0, 10_000_000_000],
+      ["section_host_price_ypoint_per_hour", 0, 10_000_000],
       ["max_slots", 2, 64],
     ] as const) {
       const value = input[key];
@@ -241,6 +268,9 @@ export class HostedServersService {
       slot_price_irr: settings.slotPriceIrr,
       slot_price_ypoint: settings.slotPriceYpoint,
       max_slots: settings.maxSlots,
+      section_host_price_irr_per_hour: settings.sectionHostPriceIrrPerHour,
+      section_host_price_ypoint_per_hour:
+        settings.sectionHostPriceYpointPerHour,
     };
   }
 
@@ -333,19 +363,72 @@ export class HostedServersService {
   }
 
   public async getSectionHostOverview() {
-    const [availability, plans, settings] = await Promise.all([
+    const [availability, settings] = await Promise.all([
       this.getAvailability(),
-      this.listSectionHostPlans(),
       this.getSettings(),
     ]);
     return {
       ...availability,
-      plans,
       modes: Object.keys(SERVER_SECTION_MODES),
-      slot_price_irr: settings.slotPriceIrr,
-      slot_price_ypoint: settings.slotPriceYpoint,
-      max_slots: settings.maxSlots,
+      durations: [...SECTION_HOST_DURATIONS],
+      price_irr_per_hour: settings.sectionHostPriceIrrPerHour,
+      price_ypoint_per_hour: settings.sectionHostPriceYpointPerHour,
     };
+  }
+
+  public async quoteSectionHost(duration: string) {
+    const clean = String(duration || "")
+      .trim()
+      .toLowerCase();
+    if (
+      !(SECTION_HOST_DURATIONS as readonly string[]).includes(clean) &&
+      !/^(\d+)\s*(h|hr|hrs|d|day|days|w|week|weeks|mo|month|months)$/.test(
+        clean,
+      )
+    ) {
+      throw new BadRequestException("Unsupported rental duration");
+    }
+    return this.quoteSectionHostDuration(clean);
+  }
+
+  public async quoteSectionHostDuration(duration: string) {
+    const settings = await this.getSettings();
+    const ms = HostedServersService.durationMs(duration);
+    const hours = Math.max(1, Math.ceil(ms / 3_600_000));
+    const priceIrr =
+      Math.ceil(
+        (settings.sectionHostPriceIrrPerHour * hours) / 10_000,
+      ) * 10_000;
+    const priceYpoint =
+      settings.sectionHostPriceYpointPerHour > 0
+        ? Math.ceil(settings.sectionHostPriceYpointPerHour * hours)
+        : 0;
+    return {
+      duration,
+      hours,
+      price_irr: priceIrr,
+      price_ypoint: priceYpoint,
+      price_irr_per_hour: settings.sectionHostPriceIrrPerHour,
+      price_ypoint_per_hour: settings.sectionHostPriceYpointPerHour,
+    };
+  }
+
+  public async requireSectionHostCarrier() {
+    const [row] = await this.postgres.query<
+      Array<{ id: string; hosted_slots: number }>
+    >(
+      `SELECT id, hosted_slots FROM store_products
+        WHERE slug = 'host-section-dynamic'
+          AND hosted_slots IS NOT NULL
+          AND hosted_section_mode IS NOT NULL
+        LIMIT 1`,
+    );
+    if (!row) {
+      throw new BadRequestException(
+        "Host rentals are not configured (missing host-section-dynamic product)",
+      );
+    }
+    return row;
   }
 
   /**
@@ -435,7 +518,8 @@ export class HostedServersService {
     const [order] = await this.postgres.query<OrderRow[]>(
       `SELECT o.id, o.buyer_steam_id::text, o.status, o.hosted_kind,
               o.hosted_server_id, o.hosted_type, o.hosted_label,
-              o.hosted_section_mode, o.hosted_fulfilled_at, o.hosted_extra_slots,
+              o.hosted_section_mode, o.hosted_duration,
+              o.hosted_fulfilled_at, o.hosted_extra_slots,
               p.id AS product_id,
               COALESCE(p.title, o.product_title) AS product_title,
               p.hosted_slots, p.vip_duration
@@ -476,7 +560,7 @@ export class HostedServersService {
     }
 
     const durationMs = HostedServersService.durationMs(
-      order.vip_duration || "30d",
+      order.hosted_duration || order.vip_duration || "30d",
     );
 
     let hosted: HostedRow | null = null;

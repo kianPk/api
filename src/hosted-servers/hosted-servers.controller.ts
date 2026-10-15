@@ -22,96 +22,32 @@ export class HostedServersController {
     return this.hostedServers.getPublicOverview();
   }
 
-  /** Servers → Host: timed rentals that boot as Duels / DM / BHOP / 2x2 / AWP. */
+  /** Servers → Host: configure mode + duration, pay, get a private section server. */
   @Get("section-host/overview")
   public async sectionHostOverview() {
     return this.hostedServers.getSectionHostOverview();
   }
 
-  /**
-   * Servers → Host plan admin. Kept under admin/* (same shape as classic
-   * hosted plans) so ingress / Nest path matching stay reliable.
-   */
-  @Get("admin/section-plans")
-  public async sectionHostAdminPlans(@Req() request: Request) {
-    this.requireAdmin(request);
-    return this.hostedServers.listSectionHostAdminPlans();
+  @Get("section-host/quote")
+  public async sectionHostQuote(@Query("duration") duration?: string) {
+    return this.hostedServers.quoteSectionHost(String(duration || ""));
   }
 
-  @Post("admin/section-plans")
-  public async sectionHostAdminCreatePlan(
+  @Post("admin/section-host-pricing")
+  public async sectionHostPricing(
     @Req() request: Request,
     @Body()
     body: {
-      title?: string;
-      description?: string;
-      duration?: string;
-      price_irr?: number;
-      price_ypoint?: number | null;
-      sort_order?: number;
-      active?: boolean;
+      section_host_price_irr_per_hour?: number;
+      section_host_price_ypoint_per_hour?: number;
     },
   ) {
     this.requireAdmin(request);
-    return this.hostedServers.upsertSectionHostPlan({
-      title: String(body?.title || ""),
-      description: body?.description,
-      duration: String(body?.duration || ""),
-      price_irr: Number(body?.price_irr),
-      price_ypoint: body?.price_ypoint,
-      sort_order: body?.sort_order,
-      active: body?.active,
+    return this.hostedServers.updateSettings({
+      section_host_price_irr_per_hour: body?.section_host_price_irr_per_hour,
+      section_host_price_ypoint_per_hour:
+        body?.section_host_price_ypoint_per_hour,
     });
-  }
-
-  @Post("admin/section-plans/:id")
-  public async sectionHostAdminUpdatePlan(
-    @Req() request: Request,
-    @Param("id") id: string,
-    @Body()
-    body: {
-      title?: string;
-      description?: string;
-      duration?: string;
-      price_irr?: number;
-      price_ypoint?: number | null;
-      sort_order?: number;
-      active?: boolean;
-    },
-  ) {
-    this.requireAdmin(request);
-    return this.hostedServers.upsertSectionHostPlan({
-      id,
-      title: String(body?.title || ""),
-      description: body?.description,
-      duration: String(body?.duration || ""),
-      price_irr: Number(body?.price_irr),
-      price_ypoint: body?.price_ypoint,
-      sort_order: body?.sort_order,
-      active: body?.active,
-    });
-  }
-
-  @Post("admin/section-plans/:id/active")
-  public async sectionHostAdminPlanActive(
-    @Req() request: Request,
-    @Param("id") id: string,
-    @Body() body: { active?: boolean },
-  ) {
-    this.requireAdmin(request);
-    return this.hostedServers.adminSetSectionHostPlanActive(
-      id,
-      Boolean(body?.active),
-    );
-  }
-
-  @Post("admin/section-plans/:id/delete")
-  public async sectionHostAdminPlanDelete(
-    @Req() request: Request,
-    @Param("id") id: string,
-  ) {
-    this.requireAdmin(request);
-    return this.hostedServers.adminDeleteSectionHostPlan(id);
   }
 
   @Get("mine")
@@ -150,6 +86,8 @@ export class HostedServersController {
       slot_price_irr?: number;
       slot_price_ypoint?: number;
       max_slots?: number;
+      section_host_price_irr_per_hour?: number;
+      section_host_price_ypoint_per_hour?: number;
     },
   ) {
     this.requireAdmin(request);
