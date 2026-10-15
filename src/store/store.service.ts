@@ -23,6 +23,10 @@ import { e_notification_types_enum } from "../../generated/schema";
 import { ChallengesService } from "../challenges/challenges.service";
 import type { ChallengeTier } from "../challenges/challenge-catalog";
 import { HostedServersService } from "../hosted-servers/hosted-servers.service";
+import {
+  isServerSectionMode,
+  SERVER_SECTION_MODES,
+} from "../game-plugins/server-section-modes";
 
 const IMAGE_PREFIX = "store";
 const VIP_DURATION =
@@ -330,6 +334,7 @@ export class StoreService {
       hostedServerId?: string;
       type?: string;
       label?: string;
+      sectionMode?: string;
       payWith?: "bale" | "ypoint";
     },
   ) {
@@ -355,9 +360,11 @@ export class StoreService {
         price_ypoint: number | null;
         hosted_slots: number | null;
         vip_duration: string | null;
+        hosted_section_mode: string | null;
       }>
     >(
-      `SELECT id, title, price_irr, price_ypoint, hosted_slots, vip_duration
+      `SELECT id, title, price_irr, price_ypoint, hosted_slots, vip_duration,
+              hosted_section_mode
        FROM store_products
        WHERE id = $1 AND active = true AND hosted_slots IS NOT NULL`,
       [String(productId || "").trim()],
@@ -374,15 +381,46 @@ export class StoreService {
     let hostedServerId: string | null = null;
     let type: string | null = null;
     let label: string | null = null;
+    let sectionMode: string | null = null;
     let extraSlots = 0;
     let extraSlotsIrr = 0;
+
+    const resolveSectionMode = (raw: string | null | undefined) => {
+      if (!product.hosted_section_mode) {
+        return null;
+      }
+      if (product.hosted_section_mode === "any") {
+        if (!isServerSectionMode(raw)) {
+          throw new BadRequestException(
+            "Pick a Servers mode (duels, dm, bhop, 2x2, or awp)",
+          );
+        }
+        return raw;
+      }
+      if (!isServerSectionMode(product.hosted_section_mode)) {
+        throw new BadRequestException("Invalid Host plan mode");
+      }
+      return product.hosted_section_mode;
+    };
 
     if (opts.hostedServerId) {
       const hosted = await this.hostedServers.assertCanRenew(
         opts.hostedServerId,
         buyerSteamId,
       );
-      if (hosted.slots - hosted.extra_slots !== product.hosted_slots) {
+      const renewingSection = Boolean(hosted.section_mode);
+      const productIsSection = Boolean(product.hosted_section_mode);
+      if (renewingSection !== productIsSection) {
+        throw new BadRequestException(
+          renewingSection
+            ? "Renew this Host server with a Host plan"
+            : "Renew with a classic hosting plan",
+        );
+      }
+      if (
+        !renewingSection &&
+        hosted.slots - hosted.extra_slots !== product.hosted_slots
+      ) {
         throw new BadRequestException(
           "Renew with a plan that has the same number of slots",
         );
@@ -401,16 +439,28 @@ export class StoreService {
       priceYpoint += extras.price_ypoint;
       kind = "renew";
       hostedServerId = hosted.id;
+      sectionMode = hosted.section_mode;
     } else {
       await this.hostedServers.assertCanSellNew();
-      type = opts.type || "Casual";
-      if (!HostedServersService.isHostedType(type)) {
-        throw new BadRequestException("Unsupported server mode");
+      sectionMode = resolveSectionMode(opts.sectionMode);
+      if (sectionMode) {
+        type = SERVER_SECTION_MODES[sectionMode].type;
+        const modeLabel = SERVER_SECTION_MODES[sectionMode].label;
+        label =
+          (opts.label || "")
+            .replace(/[\r\n"';\\]/g, " ")
+            .trim()
+            .slice(0, 64) || `Host ${modeLabel}`;
+      } else {
+        type = opts.type || "Casual";
+        if (!HostedServersService.isHostedType(type)) {
+          throw new BadRequestException("Unsupported server mode");
+        }
+        label = (opts.label || "")
+          .replace(/[\r\n"';\\]/g, " ")
+          .trim()
+          .slice(0, 64);
       }
-      label = (opts.label || "")
-        .replace(/[\r\n"';\\]/g, " ")
-        .trim()
-        .slice(0, 64);
     }
 
     const cartItems: CartItemSnapshot[] = [
@@ -447,9 +497,10 @@ export class StoreService {
       `INSERT INTO store_orders
         (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
          cart_items, terms_accepted_at, hosted_kind, hosted_server_id,
-         hosted_type, hosted_label, payment_method, amount_ypoint)
+         hosted_type, hosted_label, hosted_section_mode, payment_method,
+         amount_ypoint)
        VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now(), $7, $8, $9, $10,
-               $11, $12)`,
+               $11, $12, $13)`,
       [
         orderId,
         product.id,
@@ -461,6 +512,7 @@ export class StoreService {
         hostedServerId,
         type,
         label,
+        sectionMode,
         payWithYpoint ? "ypoint" : "bale",
         payWithYpoint ? priceYpoint : null,
       ],

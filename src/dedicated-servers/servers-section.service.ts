@@ -114,7 +114,9 @@ export class ServersSectionService {
   ) {
     const servers = (
       await this.postgres.query<Array<{ id: string; label: string | null }>>(
-        `SELECT id, label FROM servers WHERE section_mode = $1`,
+        `SELECT id, label FROM servers
+          WHERE section_mode = $1
+            AND COALESCE(hosted_section, false) = false`,
         [mode.key],
       )
     ).map((server) => ({

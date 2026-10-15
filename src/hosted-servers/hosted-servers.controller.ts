@@ -22,6 +22,12 @@ export class HostedServersController {
     return this.hostedServers.getPublicOverview();
   }
 
+  /** Servers → Host: timed rentals that boot as Duels / DM / BHOP / 2x2 / AWP. */
+  @Get("section-host/overview")
+  public async sectionHostOverview() {
+    return this.hostedServers.getSectionHostOverview();
+  }
+
   @Get("mine")
   public async mine(@Req() request: Request) {
     const user = this.requireUser(request);

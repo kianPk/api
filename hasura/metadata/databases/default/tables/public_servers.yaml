@@ -98,6 +98,7 @@ select_permissions:
         - type
         - game_mode_id
         - section_mode
+        - hosted_section
       computed_fields:
         - connection_link
         - connection_string
@@ -126,6 +127,7 @@ select_permissions:
         - type
         - game_mode_id
         - section_mode
+        - hosted_section
       computed_fields:
         - connection_link
         - connection_string
@@ -159,6 +161,7 @@ select_permissions:
         - type
         - game_mode_id
         - section_mode
+        - hosted_section
       computed_fields:
         - connection_link
         - connection_string

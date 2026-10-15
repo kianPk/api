@@ -22,6 +22,11 @@ import {
   e_server_types_enum,
   servers_insert_input,
 } from "../../generated/schema";
+import {
+  isServerSectionMode,
+  SERVER_SECTION_MODES,
+  type ServerSectionModeKey,
+} from "../game-plugins/server-section-modes";
 
 export const HOSTED_SERVER_TYPES = [
   "Casual",
@@ -76,6 +81,7 @@ type HostedRow = {
   gslt_steam_id: string | null;
   reminded_at: string | null;
   created_at: string;
+  section_mode: string | null;
   chat_ads_enabled?: boolean;
   chat_ads_interval_seconds?: number;
   chat_ads_messages?: unknown;
@@ -89,6 +95,7 @@ type OrderRow = {
   hosted_server_id: string | null;
   hosted_type: string | null;
   hosted_label: string | null;
+  hosted_section_mode: string | null;
   hosted_fulfilled_at: string | null;
   product_id: string | null;
   product_title: string;
@@ -277,7 +284,34 @@ export class HostedServersService {
       `SELECT id, title, description, price_irr, price_ypoint, image_url, hosted_slots,
               COALESCE(NULLIF(vip_duration, ''), '30d') AS duration
        FROM store_products
-       WHERE active = true AND hosted_slots IS NOT NULL
+       WHERE active = true
+         AND hosted_slots IS NOT NULL
+         AND hosted_section_mode IS NULL
+       ORDER BY sort_order ASC, price_irr ASC`,
+    );
+  }
+
+  public async listSectionHostPlans() {
+    return this.postgres.query<
+      Array<{
+        id: string;
+        title: string;
+        description: string;
+        price_irr: number;
+        price_ypoint: number | null;
+        image_url: string | null;
+        hosted_slots: number;
+        duration: string;
+        hosted_section_mode: string;
+      }>
+    >(
+      `SELECT id, title, description, price_irr, price_ypoint, image_url, hosted_slots,
+              COALESCE(NULLIF(vip_duration, ''), '30d') AS duration,
+              hosted_section_mode
+       FROM store_products
+       WHERE active = true
+         AND hosted_slots IS NOT NULL
+         AND hosted_section_mode IS NOT NULL
        ORDER BY sort_order ASC, price_irr ASC`,
     );
   }
@@ -292,6 +326,22 @@ export class HostedServersService {
       ...availability,
       plans,
       types: HOSTED_SERVER_TYPES,
+      slot_price_irr: settings.slotPriceIrr,
+      slot_price_ypoint: settings.slotPriceYpoint,
+      max_slots: settings.maxSlots,
+    };
+  }
+
+  public async getSectionHostOverview() {
+    const [availability, plans, settings] = await Promise.all([
+      this.getAvailability(),
+      this.listSectionHostPlans(),
+      this.getSettings(),
+    ]);
+    return {
+      ...availability,
+      plans,
+      modes: Object.keys(SERVER_SECTION_MODES),
       slot_price_irr: settings.slotPriceIrr,
       slot_price_ypoint: settings.slotPriceYpoint,
       max_slots: settings.maxSlots,
@@ -385,7 +435,8 @@ export class HostedServersService {
     const [order] = await this.postgres.query<OrderRow[]>(
       `SELECT o.id, o.buyer_steam_id::text, o.status, o.hosted_kind,
               o.hosted_server_id, o.hosted_type, o.hosted_label,
-              o.hosted_fulfilled_at, o.hosted_extra_slots, p.id AS product_id,
+              o.hosted_section_mode, o.hosted_fulfilled_at, o.hosted_extra_slots,
+              p.id AS product_id,
               COALESCE(p.title, o.product_title) AS product_title,
               p.hosted_slots, p.vip_duration
        FROM store_orders o
@@ -445,25 +496,39 @@ export class HostedServersService {
         return;
       }
 
-      const type = HostedServersService.isHostedType(order.hosted_type || "")
-        ? (order.hosted_type as HostedServerType)
-        : "Casual";
+      const sectionMode = isServerSectionMode(order.hosted_section_mode)
+        ? order.hosted_section_mode
+        : null;
+      const mode = sectionMode ? SERVER_SECTION_MODES[sectionMode] : null;
+      const type = mode
+        ? mode.type
+        : HostedServersService.isHostedType(order.hosted_type || "")
+          ? (order.hosted_type as HostedServerType)
+          : "Casual";
+      const slots = mode
+        ? mode.maxPlayers
+        : Number(order.hosted_slots) || 10;
       const label =
         this.cleanLabel(order.hosted_label) ||
-        `${order.product_title}`.slice(0, 64);
+        (mode
+          ? `Host ${mode.label}`.slice(0, 64)
+          : `${order.product_title}`.slice(0, 64));
 
       const [created] = await this.postgres.query<Array<{ id: string }>>(
         `INSERT INTO hosted_servers
-          (owner_steam_id, product_id, slots, label, status, expires_at)
+          (owner_steam_id, product_id, slots, label, status, expires_at,
+           section_mode)
          VALUES ($1::bigint, $2::uuid, $3, $4, 'provisioning',
-                 now() + ($5::double precision * interval '1 millisecond'))
+                 now() + ($5::double precision * interval '1 millisecond'),
+                 $6)
          RETURNING id`,
         [
           order.buyer_steam_id,
           order.product_id,
-          order.hosted_slots,
+          slots,
           label,
           durationMs,
+          sectionMode,
         ],
       );
       await this.postgres.query(
@@ -557,7 +622,10 @@ export class HostedServersService {
     );
 
     if (hosted.status === "deleted" || !hosted.server_id) {
-      await this.provision(hosted.id, "Casual");
+      const type = isServerSectionMode(hosted.section_mode)
+        ? SERVER_SECTION_MODES[hosted.section_mode].type
+        : "Casual";
+      await this.provision(hosted.id, type);
       return;
     }
 
@@ -590,6 +658,13 @@ export class HostedServersService {
       return this.failProvision(hosted, "No free port slot on the game node");
     }
 
+    const sectionMode = isServerSectionMode(hosted.section_mode)
+      ? (hosted.section_mode as ServerSectionModeKey)
+      : null;
+    const mode = sectionMode ? SERVER_SECTION_MODES[sectionMode] : null;
+    const serverType = (mode?.type || type) as HostedServerType;
+    const maxPlayers = mode?.maxPlayers || hosted.slots;
+
     const gslt = await this.obtainGslt(hosted.id, settings);
 
     // The insert event builds the deployment straight away, so the token and
@@ -607,7 +682,7 @@ export class HostedServersService {
             id: serverId,
             enabled: true,
             is_dedicated: true,
-            type: type as e_server_types_enum,
+            type: serverType as e_server_types_enum,
             label: hosted.label || "Server",
             game: "cs2",
             region: "",
@@ -616,13 +691,25 @@ export class HostedServersService {
             port: 27015,
             tv_port: 27020,
             rcon_password: randomBytes(16).toString("hex"),
-            max_players: hosted.slots,
+            max_players: maxPlayers,
             steam_account_token: gslt?.token || null,
-          } as servers_insert_input,
+            ...(sectionMode ? { section_mode: sectionMode } : {}),
+          } as servers_insert_input & { section_mode?: string },
         },
         id: true,
       },
     });
+
+    if (sectionMode) {
+      // hosted_section is newer than some schema caches; set it in SQL.
+      await this.postgres.query(
+        `UPDATE servers
+            SET section_mode = $2, hosted_section = true,
+                type = $3, max_players = $4
+          WHERE id = $1`,
+        [serverId, sectionMode, mode!.type, maxPlayers],
+      );
+    }
 
     await this.postgres.query(
       `UPDATE hosted_servers
@@ -859,7 +946,7 @@ export class HostedServersService {
     const [row] = await this.postgres.query<HostedRow[]>(
       `SELECT id, server_id, owner_steam_id::text, product_id, slots, extra_slots, label,
               status, status_detail, expires_at, gslt_steam_id, reminded_at,
-              created_at
+              created_at, section_mode
        FROM hosted_servers WHERE id = $1`,
       [id],
     );
@@ -1001,6 +1088,7 @@ export class HostedServersService {
     >(
       `SELECT h.id, h.server_id, h.owner_steam_id::text, h.product_id, h.slots, h.extra_slots,
               h.label, h.status, h.status_detail, h.expires_at, h.created_at,
+              h.section_mode,
               h.chat_ads_enabled, h.chat_ads_interval_seconds, h.chat_ads_messages,
               h.chat_ads_color,
               COALESCE(h.friendly_fire, false) AS friendly_fire,
@@ -1042,6 +1130,7 @@ export class HostedServersService {
         created_at: row.created_at,
         product_id: row.product_id,
         type: row.type,
+        section_mode: row.section_mode,
         host: row.host,
         port: row.port,
         connect_password: row.connect_password,
