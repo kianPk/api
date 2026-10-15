@@ -1277,22 +1277,9 @@ export class HostedServersService {
 
   public async processLifecycle() {
     await this.ensureHostedSchema();
-    // Unstick paid Host orders that claimed fulfillment then failed before a
-    // hosted_servers row was linked (older builds left these permanently stuck).
-    await this.postgres.query(
-      `UPDATE store_orders
-       SET hosted_fulfilled_at = NULL
-       WHERE status = 'paid'
-         AND hosted_kind IN ('new', 'renew')
-         AND hosted_server_id IS NULL
-         AND hosted_fulfilled_at IS NOT NULL
-         AND paid_at > now() - interval '7 days'
-         AND (
-           hosted_section_mode IS NOT NULL
-           OR hosted_duration IS NOT NULL
-           OR hosted_requested_slots IS NOT NULL
-         )`,
-    );
+    // Do NOT clear hosted_fulfilled_at when hosted_server_id is null.
+    // Admin purge deletes the hosted_servers row (FK SET NULL on the order);
+    // clearing the claim here recreates a brand-new server every 5 minutes.
 
     const unfulfilled = await this.postgres.query<Array<{ id: string }>>(
       `SELECT o.id FROM store_orders o
@@ -1399,6 +1386,15 @@ export class HostedServersService {
   }
 
   private async destroy(hosted: HostedRow) {
+    // Seal linked paid orders first so lifecycle never re-fulfills them after
+    // the hosted row (and thus the order's hosted_server_id FK) goes away.
+    await this.postgres.query(
+      `UPDATE store_orders
+       SET hosted_fulfilled_at = COALESCE(hosted_fulfilled_at, now())
+       WHERE hosted_server_id = $1`,
+      [hosted.id],
+    );
+
     if (hosted.server_id) {
       try {
         await this.hasura.mutation({
@@ -1408,11 +1404,31 @@ export class HostedServersService {
           },
         });
       } catch (error) {
-        this.logger.error(
-          `hosted destroy: delete server ${hosted.server_id} failed`,
-          error instanceof Error ? error.stack : error,
+        this.logger.warn(
+          `hosted destroy: Hasura delete server ${hosted.server_id} failed, falling back to SQL: ${
+            error instanceof Error ? error.message : error
+          }`,
         );
-        return;
+        try {
+          await this.dedicatedServers.removeDedicatedServer(hosted.server_id);
+        } catch (k8sError) {
+          this.logger.warn(
+            `hosted destroy: k8s remove ${hosted.server_id}: ${
+              k8sError instanceof Error ? k8sError.message : k8sError
+            }`,
+          );
+        }
+        try {
+          await this.postgres.query(`DELETE FROM servers WHERE id = $1`, [
+            hosted.server_id,
+          ]);
+        } catch (sqlError) {
+          this.logger.warn(
+            `hosted destroy: SQL delete server ${hosted.server_id}: ${
+              sqlError instanceof Error ? sqlError.message : sqlError
+            }`,
+          );
+        }
       }
     }
     if (hosted.gslt_steam_id) {
@@ -1420,7 +1436,8 @@ export class HostedServersService {
     }
     await this.postgres.query(
       `UPDATE hosted_servers
-       SET status = 'deleted', server_id = NULL, gslt_steam_id = NULL, updated_at = now()
+       SET status = 'deleted', server_id = NULL, gslt_steam_id = NULL,
+           pending_server_id = NULL, updated_at = now()
        WHERE id = $1`,
       [hosted.id],
     );
