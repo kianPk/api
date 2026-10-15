@@ -321,7 +321,7 @@ export class HostedServersService {
     let hasHostRates = false;
     for (const key of hostRateKeys) {
       const value = input[key];
-      if (value !== undefined && value !== null && value !== "") {
+      if (value !== undefined && value !== null) {
         hostRatePatch[key] = Math.round(Number(value));
         hasHostRates = true;
       }
@@ -352,7 +352,7 @@ export class HostedServersService {
       ["max_slots", 2, 64],
     ] as const) {
       const value = input[key];
-      if (value !== undefined && value !== null && value !== "") {
+      if (value !== undefined && value !== null) {
         entries.push([key, this.settingInt(key, value, min, max)]);
       }
     }

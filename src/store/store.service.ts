@@ -594,7 +594,7 @@ export class StoreService {
     } else {
       await this.hostedServers.assertCanSellNew();
       sectionMode = resolveSectionMode(opts.sectionMode);
-      if (sectionMode) {
+      if (sectionMode && isServerSectionMode(sectionMode)) {
         type = SERVER_SECTION_MODES[sectionMode].type;
         const modeLabel = SERVER_SECTION_MODES[sectionMode].label;
         label =

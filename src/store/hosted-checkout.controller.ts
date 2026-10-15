@@ -116,6 +116,10 @@ export class HostedCheckoutController {
       type?: string;
       label?: string;
       sectionMode?: string;
+      duration?: string;
+      slots?: number;
+      connectPassword?: string;
+      adminSteamId?: string;
       termsAccepted?: boolean;
       payWith?: "bale" | "ypoint";
     },
@@ -123,6 +127,19 @@ export class HostedCheckoutController {
     const user = request.user as User | undefined;
     if (!user?.steam_id) {
       throw new UnauthorizedException("Authentication required");
+    }
+    // Servers → Host configure-and-pay uses this existing path (always routed).
+    if (!body?.productId && body?.sectionMode && body?.duration) {
+      return this.store.checkoutSectionHost(user.steam_id, {
+        termsAccepted: Boolean(body?.termsAccepted),
+        sectionMode: body.sectionMode,
+        duration: body.duration,
+        label: body.label,
+        slots: body.slots,
+        connectPassword: body.connectPassword,
+        adminSteamId: body.adminSteamId,
+        payWith: body.payWith === "ypoint" ? "ypoint" : "bale",
+      });
     }
     if (!body?.productId) {
       throw new BadRequestException("productId required");
