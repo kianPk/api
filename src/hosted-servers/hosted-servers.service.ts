@@ -131,6 +131,7 @@ type OrderRow = {
 @Injectable()
 export class HostedServersService {
   private readonly envSteamApiKey: string;
+  private schemaReady: Promise<void> | null = null;
 
   constructor(
     private readonly logger: Logger,
@@ -143,6 +144,42 @@ export class HostedServersService {
   ) {
     this.envSteamApiKey =
       this.config.get<SteamConfig>("steam")?.steamApiKey || "";
+  }
+
+  /**
+   * Columns Host fulfillment writes. Production has run without some Hasura
+   * migrations (1905/1920), and a single missing column makes every paid order
+   * fail at INSERT with nothing visible to the buyer.
+   */
+  private ensureHostedSchema(): Promise<void> {
+    if (!this.schemaReady) {
+      this.schemaReady = (async () => {
+        await this.postgres.query(
+          `ALTER TABLE public.hosted_servers
+             ADD COLUMN IF NOT EXISTS extra_slots integer NOT NULL DEFAULT 0,
+             ADD COLUMN IF NOT EXISTS section_mode text`,
+        );
+        await this.postgres.query(
+          `ALTER TABLE public.servers
+             ADD COLUMN IF NOT EXISTS hosted_section boolean NOT NULL DEFAULT false`,
+        );
+        await this.postgres.query(
+          `ALTER TABLE public.store_orders
+             ADD COLUMN IF NOT EXISTS hosted_extra_slots integer,
+             ADD COLUMN IF NOT EXISTS hosted_section_mode text,
+             ADD COLUMN IF NOT EXISTS hosted_duration text,
+             ADD COLUMN IF NOT EXISTS hosted_requested_slots integer,
+             ADD COLUMN IF NOT EXISTS hosted_connect_password text,
+             ADD COLUMN IF NOT EXISTS hosted_admin_steam_id bigint`,
+        );
+      })().catch((error) => {
+        this.schemaReady = null;
+        this.logger.error(
+          `ensureHostedSchema failed: ${error instanceof Error ? error.message : error}`,
+        );
+      });
+    }
+    return this.schemaReady;
   }
 
   public static isHostedType(type: string): type is HostedServerType {
@@ -276,10 +313,9 @@ export class HostedServersService {
        ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`,
       [names, values],
     );
-    const rows = await this.postgres.query<Array<{ name: string; value: string }>>(
-      `SELECT name, value FROM settings WHERE name = ANY($1::text[])`,
-      [names],
-    );
+    const rows = await this.postgres.query<
+      Array<{ name: string; value: string }>
+    >(`SELECT name, value FROM settings WHERE name = ANY($1::text[])`, [names]);
     const got = Object.fromEntries(rows.map((r) => [r.name, r.value ?? ""]));
     for (const [name, expected] of pairs) {
       if (String(got[name] ?? "") !== expected) {
@@ -569,9 +605,8 @@ export class HostedServersService {
     const extraSlots = Math.max(0, slots - includedSlots);
 
     const baseIrr =
-      Math.ceil(
-        (settings.sectionHostPriceIrrPerHour * hours) / 10_000,
-      ) * 10_000;
+      Math.ceil((settings.sectionHostPriceIrrPerHour * hours) / 10_000) *
+      10_000;
     const baseYpoint =
       settings.sectionHostPriceYpointPerHour > 0
         ? Math.ceil(settings.sectionHostPriceYpointPerHour * hours)
@@ -724,6 +759,7 @@ export class HostedServersService {
    * released so the lifecycle job can retry.
    */
   public async fulfillOrder(orderId: string) {
+    await this.ensureHostedSchema();
     const [order] = await this.postgres.query<OrderRow[]>(
       `SELECT o.id, o.buyer_steam_id::text, o.status, o.hosted_kind,
               o.hosted_server_id, o.hosted_type, o.hosted_label,
@@ -761,7 +797,12 @@ export class HostedServersService {
       !isHostedPurchase ||
       !hasProvisionSignal
     ) {
-      if (order && order.status === "paid" && isHostedPurchase && !order.hosted_fulfilled_at) {
+      if (
+        order &&
+        order.status === "paid" &&
+        isHostedPurchase &&
+        !order.hosted_fulfilled_at
+      ) {
         this.logger.warn(
           `hosted fulfill skipped order=${order.id} kind=${kind} product_slots=${order.hosted_slots} requested=${order.hosted_requested_slots} section=${order.hosted_section_mode} duration=${order.hosted_duration}`,
         );
@@ -876,14 +917,10 @@ export class HostedServersService {
       }
       if (createdHosted && order.hosted_admin_steam_id) {
         try {
-          await this.addAdmin(
-            createdHosted,
-            order.hosted_admin_steam_id,
-            {
-              steam_id: order.buyer_steam_id,
-              role: "user",
-            } as User,
-          );
+          await this.addAdmin(createdHosted, order.hosted_admin_steam_id, {
+            steam_id: order.buyer_steam_id,
+            role: "user",
+          } as User);
         } catch (error) {
           this.logger.warn(
             `hosted ${created.id}: admin apply failed: ${
@@ -904,6 +941,16 @@ export class HostedServersService {
          SET hosted_fulfilled_at = NULL
          WHERE id = $1 AND hosted_server_id IS NULL`,
         [order.id],
+      );
+      // A linked row would otherwise sit in 'provisioning' forever; 'failed'
+      // shows the buyer the reason and lets an admin hit retry.
+      await this.postgres.query(
+        `UPDATE hosted_servers h
+         SET status = 'failed', status_detail = $2, updated_at = now()
+         FROM store_orders o
+         WHERE o.id = $1 AND h.id = o.hosted_server_id
+           AND h.status = 'provisioning'`,
+        [order.id, message.slice(0, 500)],
       );
       await this.notifyAdmins(
         "Hosted server fulfillment failed",
@@ -1041,40 +1088,55 @@ export class HostedServersService {
       [hosted.id, serverId],
     );
 
-    await this.hasura.mutation({
-      insert_servers_one: {
-        __args: {
-          object: {
-            id: serverId,
-            enabled: true,
-            is_dedicated: true,
-            type: serverType as e_server_types_enum,
-            label: hosted.label || "Server",
-            game: "cs2",
-            region: "",
-            game_server_node_id: settings.nodeId,
-            host: "127.0.0.1",
-            port: 27015,
-            tv_port: 27020,
-            rcon_password: randomBytes(16).toString("hex"),
-            max_players: maxPlayers,
-            steam_account_token: gslt?.token || null,
-            ...(sectionMode ? { section_mode: sectionMode } : {}),
-          } as servers_insert_input & { section_mode?: string },
-        },
-        id: true,
-      },
-    });
-
     if (sectionMode) {
-      // hosted_section is newer than some schema caches; set it in SQL.
+      // One SQL insert with hosted_section already true: the section reconciler
+      // deletes any section_mode row without it, and Hasura's schema may not
+      // know hosted_section at all.
       await this.postgres.query(
-        `UPDATE servers
-            SET section_mode = $2, hosted_section = true,
-                type = $3, max_players = $4
-          WHERE id = $1`,
-        [serverId, sectionMode, mode!.type, maxPlayers],
+        `INSERT INTO servers (
+            id, label, section_mode, hosted_section, is_dedicated, enabled,
+            game, game_server_node_id, host, port, tv_port, region,
+            rcon_password, type, max_players, steam_account_token
+         ) VALUES (
+            $1, $2, $3, true, true, true,
+            'cs2', $4, '127.0.0.1', 27015, 27020, '',
+            $5::text::bytea, $6, $7, $8
+         )`,
+        [
+          serverId,
+          hosted.label || "Server",
+          sectionMode,
+          settings.nodeId,
+          randomBytes(16).toString("hex"),
+          mode!.type,
+          maxPlayers,
+          gslt?.token || null,
+        ],
       );
+    } else {
+      await this.hasura.mutation({
+        insert_servers_one: {
+          __args: {
+            object: {
+              id: serverId,
+              enabled: true,
+              is_dedicated: true,
+              type: serverType as e_server_types_enum,
+              label: hosted.label || "Server",
+              game: "cs2",
+              region: "",
+              game_server_node_id: settings.nodeId,
+              host: "127.0.0.1",
+              port: 27015,
+              tv_port: 27020,
+              rcon_password: randomBytes(16).toString("hex"),
+              max_players: maxPlayers,
+              steam_account_token: gslt?.token || null,
+            } as servers_insert_input,
+          },
+          id: true,
+        },
+      });
     }
 
     await this.postgres.query(
@@ -1214,6 +1276,7 @@ export class HostedServersService {
   }
 
   public async processLifecycle() {
+    await this.ensureHostedSchema();
     // Unstick paid Host orders that claimed fulfillment then failed before a
     // hosted_servers row was linked (older builds left these permanently stuck).
     await this.postgres.query(
@@ -1250,6 +1313,41 @@ export class HostedServersService {
     );
     for (const { id } of unfulfilled) {
       await this.fulfillOrder(id);
+    }
+
+    // Rows whose provision threw before a servers row existed (e.g. a missing
+    // column) would otherwise stay 'provisioning' forever.
+    const stalled = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT h.id FROM hosted_servers h
+       WHERE h.status = 'provisioning'
+         AND h.server_id IS NULL
+         AND h.updated_at < now() - interval '3 minutes'
+         AND h.created_at > now() - interval '7 days'
+         AND NOT EXISTS (
+           SELECT 1 FROM servers s WHERE s.id = h.pending_server_id
+         )
+       ORDER BY h.created_at ASC
+       LIMIT 5`,
+    );
+    for (const { id } of stalled) {
+      await this.postgres.query(
+        `UPDATE hosted_servers SET updated_at = now() WHERE id = $1`,
+        [id],
+      );
+      try {
+        await this.provision(id, "Casual");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `hosted ${id}: stalled provision retry failed: ${message}`,
+        );
+        await this.postgres.query(
+          `UPDATE hosted_servers
+           SET status = 'failed', status_detail = $2, updated_at = now()
+           WHERE id = $1 AND status = 'provisioning'`,
+          [id, message.slice(0, 500)],
+        );
+      }
     }
 
     const expiring = await this.postgres.query<HostedRow[]>(
@@ -1743,13 +1841,7 @@ export class HostedServersService {
            vip_price_90d = $5,
            updated_at = now()
        WHERE id = $1`,
-      [
-        hosted.id,
-        shop.enabled,
-        shop.price_7d,
-        shop.price_30d,
-        shop.price_90d,
-      ],
+      [hosted.id, shop.enabled, shop.price_7d, shop.price_30d, shop.price_90d],
     );
     return this.getHostedView(hosted.id);
   }
@@ -1819,7 +1911,11 @@ export class HostedServersService {
   } {
     const raw = Array.isArray(input.messages) ? input.messages : [];
     const messages = raw
-      .map((line) => String(line ?? "").replace(/\s+/g, " ").trim())
+      .map((line) =>
+        String(line ?? "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      )
       .filter(Boolean)
       .map((line) => line.slice(0, 220))
       .slice(0, 5);
@@ -2404,10 +2500,14 @@ export class HostedServersService {
     const priceIrr = Math.max(0, Math.round(Number(input.price_irr) || 0));
     const rawYpoint = input.price_ypoint;
     const priceYpoint =
-      rawYpoint === null || rawYpoint === undefined || Number.isNaN(Number(rawYpoint))
+      rawYpoint === null ||
+      rawYpoint === undefined ||
+      Number.isNaN(Number(rawYpoint))
         ? null
         : Math.max(0, Math.round(Number(rawYpoint) || 0)) || null;
-    const description = String(input.description || "").trim().slice(0, 2000);
+    const description = String(input.description || "")
+      .trim()
+      .slice(0, 2000);
     const sortOrder = Math.round(Number(input.sort_order) || 0);
     const active = input.active !== false;
     // Ceiling for renew matching; provision uses the mode's max_players.
