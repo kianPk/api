@@ -470,10 +470,10 @@ export class HostedServersService {
 
   private clampHostSlots(raw: number, maxSlots: number) {
     const n = Math.floor(Number(raw));
-    if (!Number.isInteger(n) || n < 2 || n > maxSlots) {
-      throw new BadRequestException(`Slots must be 2..${maxSlots}`);
+    if (!Number.isFinite(n)) {
+      return Math.min(maxSlots, Math.max(2, 10));
     }
-    return n;
+    return Math.min(maxSlots, Math.max(2, n));
   }
 
   public async requireSectionHostCarrier() {
