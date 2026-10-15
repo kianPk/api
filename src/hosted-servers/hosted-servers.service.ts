@@ -1949,14 +1949,192 @@ export class HostedServersService {
                 WHERE h.product_id = p.id AND h.status <> 'deleted') AS servers
        FROM store_products p
        WHERE p.hosted_slots IS NOT NULL
+         AND p.hosted_section_mode IS NULL
        ORDER BY p.sort_order ASC, p.price_irr ASC`,
     );
+  }
+
+  public async listSectionHostAdminPlans() {
+    return this.postgres.query<
+      Array<{
+        id: string;
+        title: string;
+        description: string;
+        price_irr: number;
+        price_ypoint: number | null;
+        hosted_slots: number;
+        duration: string;
+        hosted_section_mode: string;
+        sort_order: number;
+        active: boolean;
+        servers: number;
+      }>
+    >(
+      `SELECT p.id, p.title, p.description, p.price_irr, p.price_ypoint,
+              p.hosted_slots, p.active, p.sort_order,
+              COALESCE(NULLIF(p.vip_duration, ''), '30d') AS duration,
+              p.hosted_section_mode,
+              (SELECT count(*)::int FROM hosted_servers h
+                WHERE h.product_id = p.id AND h.status <> 'deleted') AS servers
+       FROM store_products p
+       WHERE p.hosted_slots IS NOT NULL
+         AND p.hosted_section_mode IS NOT NULL
+       ORDER BY p.sort_order ASC, p.price_irr ASC`,
+    );
+  }
+
+  public async upsertSectionHostPlan(input: {
+    id?: string;
+    title: string;
+    description?: string;
+    duration: string;
+    price_irr: number;
+    price_ypoint?: number | null;
+    sort_order?: number;
+    active?: boolean;
+  }) {
+    const title = String(input.title || "")
+      .replace(/[\r\n]/g, " ")
+      .trim()
+      .slice(0, 80);
+    if (!title) {
+      throw new BadRequestException("Title required");
+    }
+    const duration = String(input.duration || "")
+      .trim()
+      .toLowerCase();
+    if (
+      !/^(\d+)\s*(h|hr|hrs|d|day|days|w|week|weeks|mo|month|months)$/.test(
+        duration,
+      )
+    ) {
+      throw new BadRequestException(
+        "Duration must look like 1h, 3d, 1w, or 1mo",
+      );
+    }
+    const priceIrr = Math.max(0, Math.round(Number(input.price_irr) || 0));
+    const rawYpoint = input.price_ypoint;
+    const priceYpoint =
+      rawYpoint === null || rawYpoint === undefined || Number.isNaN(Number(rawYpoint))
+        ? null
+        : Math.max(0, Math.round(Number(rawYpoint) || 0)) || null;
+    const description = String(input.description || "").trim().slice(0, 2000);
+    const sortOrder = Math.round(Number(input.sort_order) || 0);
+    const active = input.active !== false;
+    // Ceiling for renew matching; provision uses the mode's max_players.
+    const hostedSlots = 20;
+
+    if (input.id) {
+      const rows = await this.postgres.query<Array<{ id: string }>>(
+        `UPDATE store_products
+            SET title = $2,
+                description = $3,
+                vip_duration = $4,
+                price_irr = $5,
+                price_ypoint = $6,
+                sort_order = $7,
+                active = $8,
+                hosted_slots = $9,
+                hosted_section_mode = 'any',
+                updated_at = now()
+          WHERE id = $1
+            AND hosted_slots IS NOT NULL
+            AND hosted_section_mode IS NOT NULL
+          RETURNING id`,
+        [
+          input.id,
+          title,
+          description,
+          duration,
+          priceIrr,
+          priceYpoint,
+          sortOrder,
+          active,
+          hostedSlots,
+        ],
+      );
+      if (!rows.length) {
+        throw new NotFoundException("Host plan not found");
+      }
+      return this.getSectionHostAdminPlan(rows[0].id);
+    }
+
+    const baseSlug = `host-section-${duration.replace(/\s+/g, "")}`
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 48);
+    let slug = baseSlug || `host-section-${Date.now()}`;
+    for (let i = 0; i < 8; i++) {
+      const candidate = i === 0 ? slug : `${slug}-${i + 1}`;
+      try {
+        const [created] = await this.postgres.query<Array<{ id: string }>>(
+          `INSERT INTO store_products
+            (slug, title, description, price_irr, price_ypoint, hosted_slots,
+             vip_duration, hosted_section_mode, sort_order, active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'any', $8, $9)
+           RETURNING id`,
+          [
+            candidate,
+            title,
+            description,
+            priceIrr,
+            priceYpoint,
+            hostedSlots,
+            duration,
+            sortOrder,
+            active,
+          ],
+        );
+        return this.getSectionHostAdminPlan(created.id);
+      } catch (error: any) {
+        if (error?.code !== "23505") {
+          throw error;
+        }
+      }
+    }
+    throw new BadRequestException("Could not allocate a unique plan slug");
+  }
+
+  private async getSectionHostAdminPlan(id: string) {
+    const [row] = await this.postgres.query<
+      Array<{
+        id: string;
+        title: string;
+        description: string;
+        price_irr: number;
+        price_ypoint: number | null;
+        hosted_slots: number;
+        duration: string;
+        hosted_section_mode: string;
+        sort_order: number;
+        active: boolean;
+        servers: number;
+      }>
+    >(
+      `SELECT p.id, p.title, p.description, p.price_irr, p.price_ypoint,
+              p.hosted_slots, p.active, p.sort_order,
+              COALESCE(NULLIF(p.vip_duration, ''), '30d') AS duration,
+              p.hosted_section_mode,
+              (SELECT count(*)::int FROM hosted_servers h
+                WHERE h.product_id = p.id AND h.status <> 'deleted') AS servers
+       FROM store_products p
+       WHERE p.id = $1
+         AND p.hosted_slots IS NOT NULL
+         AND p.hosted_section_mode IS NOT NULL`,
+      [id],
+    );
+    if (!row) {
+      throw new NotFoundException("Host plan not found");
+    }
+    return row;
   }
 
   public async adminSetPlanActive(productId: string, active: boolean) {
     const rows = await this.postgres.query<Array<{ id: string }>>(
       `UPDATE store_products SET active = $2, updated_at = now()
-       WHERE id = $1 AND hosted_slots IS NOT NULL
+       WHERE id = $1 AND hosted_slots IS NOT NULL AND hosted_section_mode IS NULL
        RETURNING id`,
       [productId, active],
     );
@@ -1966,15 +2144,48 @@ export class HostedServersService {
     return { success: true };
   }
 
+  public async adminSetSectionHostPlanActive(
+    productId: string,
+    active: boolean,
+  ) {
+    const rows = await this.postgres.query<Array<{ id: string }>>(
+      `UPDATE store_products SET active = $2, updated_at = now()
+       WHERE id = $1
+         AND hosted_slots IS NOT NULL
+         AND hosted_section_mode IS NOT NULL
+       RETURNING id`,
+      [productId, active],
+    );
+    if (!rows.length) {
+      throw new NotFoundException("Host plan not found");
+    }
+    return { success: true };
+  }
+
   public async adminDeletePlan(productId: string) {
     const rows = await this.postgres.query<Array<{ id: string }>>(
       `DELETE FROM store_products
-       WHERE id = $1 AND hosted_slots IS NOT NULL
+       WHERE id = $1 AND hosted_slots IS NOT NULL AND hosted_section_mode IS NULL
        RETURNING id`,
       [productId],
     );
     if (!rows.length) {
       throw new NotFoundException("Plan not found");
+    }
+    return { deleted: true };
+  }
+
+  public async adminDeleteSectionHostPlan(productId: string) {
+    const rows = await this.postgres.query<Array<{ id: string }>>(
+      `DELETE FROM store_products
+       WHERE id = $1
+         AND hosted_slots IS NOT NULL
+         AND hosted_section_mode IS NOT NULL
+       RETURNING id`,
+      [productId],
+    );
+    if (!rows.length) {
+      throw new NotFoundException("Host plan not found");
     }
     return { deleted: true };
   }

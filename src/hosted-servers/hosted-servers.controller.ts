@@ -28,6 +28,88 @@ export class HostedServersController {
     return this.hostedServers.getSectionHostOverview();
   }
 
+  @Get("section-host/admin/plans")
+  public async sectionHostAdminPlans(@Req() request: Request) {
+    this.requireAdmin(request);
+    return this.hostedServers.listSectionHostAdminPlans();
+  }
+
+  @Post("section-host/admin/plans")
+  public async sectionHostAdminCreatePlan(
+    @Req() request: Request,
+    @Body()
+    body: {
+      title?: string;
+      description?: string;
+      duration?: string;
+      price_irr?: number;
+      price_ypoint?: number | null;
+      sort_order?: number;
+      active?: boolean;
+    },
+  ) {
+    this.requireAdmin(request);
+    return this.hostedServers.upsertSectionHostPlan({
+      title: String(body?.title || ""),
+      description: body?.description,
+      duration: String(body?.duration || ""),
+      price_irr: Number(body?.price_irr),
+      price_ypoint: body?.price_ypoint,
+      sort_order: body?.sort_order,
+      active: body?.active,
+    });
+  }
+
+  @Post("section-host/admin/plans/:id")
+  public async sectionHostAdminUpdatePlan(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Body()
+    body: {
+      title?: string;
+      description?: string;
+      duration?: string;
+      price_irr?: number;
+      price_ypoint?: number | null;
+      sort_order?: number;
+      active?: boolean;
+    },
+  ) {
+    this.requireAdmin(request);
+    return this.hostedServers.upsertSectionHostPlan({
+      id,
+      title: String(body?.title || ""),
+      description: body?.description,
+      duration: String(body?.duration || ""),
+      price_irr: Number(body?.price_irr),
+      price_ypoint: body?.price_ypoint,
+      sort_order: body?.sort_order,
+      active: body?.active,
+    });
+  }
+
+  @Post("section-host/admin/plans/:id/active")
+  public async sectionHostAdminPlanActive(
+    @Req() request: Request,
+    @Param("id") id: string,
+    @Body() body: { active?: boolean },
+  ) {
+    this.requireAdmin(request);
+    return this.hostedServers.adminSetSectionHostPlanActive(
+      id,
+      Boolean(body?.active),
+    );
+  }
+
+  @Post("section-host/admin/plans/:id/delete")
+  public async sectionHostAdminPlanDelete(
+    @Req() request: Request,
+    @Param("id") id: string,
+  ) {
+    this.requireAdmin(request);
+    return this.hostedServers.adminDeleteSectionHostPlan(id);
+  }
+
   @Get("mine")
   public async mine(@Req() request: Request) {
     const user = this.requireUser(request);
