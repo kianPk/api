@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Post,
   Query,
@@ -34,6 +35,39 @@ export class HostedCheckoutController {
     return this.hostedServers.quoteSectionHost(String(duration || "1h"), {
       slots: slots !== undefined && slots !== "" ? Number(slots) : undefined,
       sectionMode: sectionMode || undefined,
+    });
+  }
+
+  /**
+   * Host pricing write on the checkout controller so store-only rollouts still
+   * persist admin rates. Path is unique (not shared with HostedServersController).
+   */
+  @Post("host-pricing")
+  public async sectionHostPricing(
+    @Req() request: Request,
+    @Body()
+    body: {
+      section_host_price_irr_per_hour?: number;
+      section_host_price_ypoint_per_hour?: number;
+      section_host_slot_price_irr_per_hour?: number;
+      section_host_slot_price_ypoint_per_hour?: number;
+    },
+  ) {
+    const user = request.user as User | undefined;
+    if (!user?.steam_id) {
+      throw new UnauthorizedException("Authentication required");
+    }
+    if (user.role !== "administrator") {
+      throw new ForbiddenException("Administrator access required");
+    }
+    return this.hostedServers.updateSectionHostPricing({
+      section_host_price_irr_per_hour: body?.section_host_price_irr_per_hour,
+      section_host_price_ypoint_per_hour:
+        body?.section_host_price_ypoint_per_hour,
+      section_host_slot_price_irr_per_hour:
+        body?.section_host_slot_price_irr_per_hour,
+      section_host_slot_price_ypoint_per_hour:
+        body?.section_host_slot_price_ypoint_per_hour,
     });
   }
 

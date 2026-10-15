@@ -92,7 +92,7 @@ export class HostedServersController {
     },
   ) {
     this.requireAdmin(request);
-    return this.hostedServers.updateSettings({
+    return this.hostedServers.updateSectionHostPricing({
       section_host_price_irr_per_hour: body?.section_host_price_irr_per_hour,
       section_host_price_ypoint_per_hour:
         body?.section_host_price_ypoint_per_hour,

@@ -209,6 +209,88 @@ export class HostedServersService {
     };
   }
 
+  /** Clamp + stringify a settings numeric field. */
+  private settingInt(
+    key: string,
+    value: unknown,
+    min: number,
+    max: number,
+  ): string {
+    const n = Math.round(Number(value));
+    if (!Number.isFinite(n) || n < min || n > max) {
+      throw new BadRequestException(`${key} must be ${min}..${max}`);
+    }
+    return String(n);
+  }
+
+  /** Upsert Host hourly rates and verify they stuck in settings. */
+  public async updateSectionHostPricing(input: {
+    section_host_price_irr_per_hour?: number;
+    section_host_price_ypoint_per_hour?: number;
+    section_host_slot_price_irr_per_hour?: number;
+    section_host_slot_price_ypoint_per_hour?: number;
+  }) {
+    const pairs: Array<[string, string]> = [
+      [
+        "hosted_servers.section_host_price_irr_per_hour",
+        this.settingInt(
+          "section_host_price_irr_per_hour",
+          input.section_host_price_irr_per_hour,
+          0,
+          10_000_000_000,
+        ),
+      ],
+      [
+        "hosted_servers.section_host_price_ypoint_per_hour",
+        this.settingInt(
+          "section_host_price_ypoint_per_hour",
+          input.section_host_price_ypoint_per_hour,
+          0,
+          10_000_000,
+        ),
+      ],
+      [
+        "hosted_servers.section_host_slot_price_irr_per_hour",
+        this.settingInt(
+          "section_host_slot_price_irr_per_hour",
+          input.section_host_slot_price_irr_per_hour,
+          0,
+          10_000_000_000,
+        ),
+      ],
+      [
+        "hosted_servers.section_host_slot_price_ypoint_per_hour",
+        this.settingInt(
+          "section_host_slot_price_ypoint_per_hour",
+          input.section_host_slot_price_ypoint_per_hour,
+          0,
+          10_000_000,
+        ),
+      ],
+    ];
+    const names = pairs.map(([n]) => n);
+    const values = pairs.map(([, v]) => v);
+    await this.postgres.query(
+      `INSERT INTO settings (name, value)
+       SELECT * FROM unnest($1::text[], $2::text[]) AS t(name, value)
+       ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`,
+      [names, values],
+    );
+    const rows = await this.postgres.query<Array<{ name: string; value: string }>>(
+      `SELECT name, value FROM settings WHERE name = ANY($1::text[])`,
+      [names],
+    );
+    const got = Object.fromEntries(rows.map((r) => [r.name, r.value ?? ""]));
+    for (const [name, expected] of pairs) {
+      if (String(got[name] ?? "") !== expected) {
+        throw new BadRequestException(
+          `Failed to persist ${name} (wanted ${expected}, got ${got[name] ?? "missing"})`,
+        );
+      }
+    }
+    return this.getAdminSettings();
+  }
+
   public async updateSettings(input: {
     enabled?: boolean;
     max_active?: number;
@@ -224,23 +306,54 @@ export class HostedServersService {
     section_host_slot_price_irr_per_hour?: number;
     section_host_slot_price_ypoint_per_hour?: number;
   }) {
+    const hostRateKeys = [
+      "section_host_price_irr_per_hour",
+      "section_host_price_ypoint_per_hour",
+      "section_host_slot_price_irr_per_hour",
+      "section_host_slot_price_ypoint_per_hour",
+    ] as const;
+    const hostRatePatch: {
+      section_host_price_irr_per_hour?: number;
+      section_host_price_ypoint_per_hour?: number;
+      section_host_slot_price_irr_per_hour?: number;
+      section_host_slot_price_ypoint_per_hour?: number;
+    } = {};
+    let hasHostRates = false;
+    for (const key of hostRateKeys) {
+      const value = input[key];
+      if (value !== undefined && value !== null && value !== "") {
+        hostRatePatch[key] = Math.round(Number(value));
+        hasHostRates = true;
+      }
+    }
+    if (hasHostRates) {
+      // Require all four so a partial body cannot leave slots/base out of sync.
+      const current = await this.getSettings();
+      await this.updateSectionHostPricing({
+        section_host_price_irr_per_hour:
+          hostRatePatch.section_host_price_irr_per_hour ??
+          current.sectionHostPriceIrrPerHour,
+        section_host_price_ypoint_per_hour:
+          hostRatePatch.section_host_price_ypoint_per_hour ??
+          current.sectionHostPriceYpointPerHour,
+        section_host_slot_price_irr_per_hour:
+          hostRatePatch.section_host_slot_price_irr_per_hour ??
+          current.sectionHostSlotPriceIrrPerHour,
+        section_host_slot_price_ypoint_per_hour:
+          hostRatePatch.section_host_slot_price_ypoint_per_hour ??
+          current.sectionHostSlotPriceYpointPerHour,
+      });
+    }
+
     const entries: Array<[string, string]> = [];
     for (const [key, min, max] of [
       ["slot_price_irr", 0, 10_000_000_000],
       ["slot_price_ypoint", 0, 10_000_000],
-      ["section_host_price_irr_per_hour", 0, 10_000_000_000],
-      ["section_host_price_ypoint_per_hour", 0, 10_000_000],
-      ["section_host_slot_price_irr_per_hour", 0, 10_000_000_000],
-      ["section_host_slot_price_ypoint_per_hour", 0, 10_000_000],
       ["max_slots", 2, 64],
     ] as const) {
       const value = input[key];
       if (value !== undefined && value !== null && value !== "") {
-        const n = Math.round(Number(value));
-        if (!Number.isFinite(n) || n < min || n > max) {
-          throw new BadRequestException(`${key} must be ${min}..${max}`);
-        }
-        entries.push([key, String(n)]);
+        entries.push([key, this.settingInt(key, value, min, max)]);
       }
     }
     if (typeof input.enabled === "boolean") {
