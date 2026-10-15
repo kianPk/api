@@ -87,6 +87,8 @@ export class HostedServersController {
     body: {
       section_host_price_irr_per_hour?: number;
       section_host_price_ypoint_per_hour?: number;
+      section_host_slot_price_irr_per_hour?: number;
+      section_host_slot_price_ypoint_per_hour?: number;
     },
   ) {
     this.requireAdmin(request);
@@ -94,6 +96,10 @@ export class HostedServersController {
       section_host_price_irr_per_hour: body?.section_host_price_irr_per_hour,
       section_host_price_ypoint_per_hour:
         body?.section_host_price_ypoint_per_hour,
+      section_host_slot_price_irr_per_hour:
+        body?.section_host_slot_price_irr_per_hour,
+      section_host_slot_price_ypoint_per_hour:
+        body?.section_host_slot_price_ypoint_per_hour,
     });
   }
 

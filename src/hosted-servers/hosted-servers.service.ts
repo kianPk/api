@@ -235,9 +235,9 @@ export class HostedServersService {
       ["max_slots", 2, 64],
     ] as const) {
       const value = input[key];
-      if (value !== undefined && value !== null) {
-        const n = Number(value);
-        if (!Number.isInteger(n) || n < min || n > max) {
+      if (value !== undefined && value !== null && value !== "") {
+        const n = Math.round(Number(value));
+        if (!Number.isFinite(n) || n < min || n > max) {
           throw new BadRequestException(`${key} must be ${min}..${max}`);
         }
         entries.push([key, String(n)]);
