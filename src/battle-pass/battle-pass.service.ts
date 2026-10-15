@@ -58,6 +58,7 @@ type SeasonState = {
     daily: number;
     weekly: number;
     subscriber: number;
+    bonus: number;
   };
   today: string;
   daily: MissionView[];
@@ -338,6 +339,17 @@ export class BattlePassService {
           refId: `${season.id}:${level}:${track}`,
         });
         return;
+      case "xp":
+        await this.postgres.query(
+          `INSERT INTO public.battle_pass_progress
+             (season_id, steam_id, xp, bonus_xp)
+           VALUES ($1::uuid, $2::bigint, 0, $3::int)
+           ON CONFLICT (season_id, steam_id) DO UPDATE SET
+             bonus_xp = battle_pass_progress.bonus_xp + EXCLUDED.bonus_xp,
+             updated_at = now()`,
+          [season.id, steamId, reward.amount],
+        );
+        return;
       case "subscription":
         await this.challenges.grantSubscription({
           steamId,
@@ -412,16 +424,25 @@ export class BattlePassService {
     season: Season,
   ): Promise<SeasonState> {
     const state = await this.computeState(steamId, season);
-    const [row] = await this.postgres.query<Array<{ premium: boolean }>>(
+    const [row] = await this.postgres.query<
+      Array<{ premium: boolean; bonus_xp: number }>
+    >(
       `INSERT INTO public.battle_pass_progress (season_id, steam_id, xp)
        VALUES ($1::uuid, $2::bigint, $3::int)
        ON CONFLICT (season_id, steam_id) DO UPDATE SET
          xp = EXCLUDED.xp,
          updated_at = now()
-       RETURNING premium`,
+       RETURNING premium, COALESCE(bonus_xp, 0)::int AS bonus_xp`,
       [season.id, steamId, state.xp],
     );
     state.premium = !!row?.premium;
+    const bonus = Number(row?.bonus_xp) || 0;
+    state.xp += bonus;
+    state.level = levelForXp(state.xp);
+    state.breakdown = {
+      ...state.breakdown,
+      bonus,
+    };
     return state;
   }
 
@@ -534,6 +555,7 @@ export class BattlePassService {
         daily: dailyXp,
         weekly: weeklyXp,
         subscriber: subscriberXp,
+        bonus: 0,
       },
       today,
       daily: todayMissions,

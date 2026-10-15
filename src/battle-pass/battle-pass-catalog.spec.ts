@@ -49,7 +49,12 @@ describe("battle pass catalog", () => {
     });
     expect(rewardFor(50, "free")).toEqual({ type: "badge", badge: "elite" });
     expect(rewardFor(25, "free")).toEqual({ type: "badge", badge: "veteran" });
-    expect(rewardFor(3, "free")).toBeNull();
+    expect(rewardFor(10, "free")).toEqual({
+      type: "badge",
+      badge: "contender",
+    });
+    expect(rewardFor(3, "free")).toEqual({ type: "xp", amount: 200 });
+    expect(rewardFor(4, "free")).toBeNull();
     expect(rewardFor(0, "premium")).toBeNull();
     expect(rewardFor(MAX_LEVEL + 1, "premium")).toBeNull();
   });
