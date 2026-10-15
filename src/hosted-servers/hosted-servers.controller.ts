@@ -48,11 +48,10 @@ export class HostedServersController {
   }
 
   /**
-   * Host configure-and-pay checkout. Registered on this controller (same as
-   * overview/quote) so it is always present when the Host page works.
-   * Alias `host-checkout` avoids older ingress path quirks.
+   * Host configure-and-pay checkout. Flat aliases avoid nested-path 404s;
+   * kept on this controller too so overview+checkout ship together.
    */
-  @Post(["section-host/checkout", "host-checkout"])
+  @Post(["host-checkout", "section-host-checkout", "section-host/checkout"])
   public async sectionHostCheckout(
     @Req() request: Request,
     @Body()

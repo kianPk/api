@@ -71,7 +71,11 @@ export class HostedCheckoutController {
     });
   }
 
-  @Post("section-host/checkout")
+  /**
+   * Flat aliases first — some ingress / older images 404 nested
+   * `section-host/checkout` even when this controller is live.
+   */
+  @Post(["host-checkout", "section-host-checkout", "section-host/checkout"])
   public async sectionHostCheckout(
     @Req() request: Request,
     @Body()
