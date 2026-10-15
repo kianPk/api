@@ -51,16 +51,27 @@ export class HasuraController {
 
   @Get()
   public async hasura(@Req() request: Request) {
-    const user = request.user;
-
-    if (!user) {
-      return {
-        "x-hasura-user-id": "0",
-        "x-hasura-role": "guest",
-      };
+    // Hasura only accepts 200/401 from the auth webhook. Anything else
+    // (timeouts, 500s while API is rolling) becomes
+    // "webhook authentication request failed" in the browser.
+    const guest = {
+      "x-hasura-user-id": "0",
+      "x-hasura-role": "guest",
+    };
+    try {
+      const user = request.user;
+      if (!user?.steam_id) {
+        return guest;
+      }
+      return await this.hasuraService.getHasuraHeaders(user.steam_id);
+    } catch (error) {
+      this.logger.warn(
+        `hasura auth webhook failed; falling back to guest: ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+      return guest;
     }
-
-    return this.hasuraService.getHasuraHeaders(user.steam_id);
   }
 
   @Post("actions")

@@ -105,9 +105,10 @@ export class HasuraService {
       60 * 60 * 1000,
     );
 
+    // Hasura rejects missing/null roles; never return an empty role string.
     return {
-      "x-hasura-role": playerRole,
-      "x-hasura-user-id": steamId,
+      "x-hasura-role": playerRole || "user",
+      "x-hasura-user-id": String(steamId),
     };
   }
 
