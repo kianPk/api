@@ -116,6 +116,9 @@ type OrderRow = {
   product_title: string;
   hosted_slots: number | null;
   hosted_extra_slots: number | null;
+  hosted_requested_slots: number | null;
+  hosted_connect_password: string | null;
+  hosted_admin_steam_id: string | null;
   vip_duration: string | null;
 };
 
@@ -367,16 +370,30 @@ export class HostedServersService {
       this.getAvailability(),
       this.getSettings(),
     ]);
+    const modeSlots = Object.fromEntries(
+      Object.entries(SERVER_SECTION_MODES).map(([key, mode]) => [
+        key,
+        mode.maxPlayers,
+      ]),
+    );
     return {
       ...availability,
       modes: Object.keys(SERVER_SECTION_MODES),
       durations: [...SECTION_HOST_DURATIONS],
+      mode_slots: modeSlots,
+      included_slots_by_mode: modeSlots,
+      max_slots: settings.maxSlots,
+      slot_price_irr: settings.slotPriceIrr,
+      slot_price_ypoint: settings.slotPriceYpoint,
       price_irr_per_hour: settings.sectionHostPriceIrrPerHour,
       price_ypoint_per_hour: settings.sectionHostPriceYpointPerHour,
     };
   }
 
-  public async quoteSectionHost(duration: string) {
+  public async quoteSectionHost(
+    duration: string,
+    opts: { slots?: number; sectionMode?: string } = {},
+  ) {
     const clean = String(duration || "")
       .trim()
       .toLowerCase();
@@ -388,29 +405,75 @@ export class HostedServersService {
     ) {
       throw new BadRequestException("Unsupported rental duration");
     }
-    return this.quoteSectionHostDuration(clean);
+    return this.quoteSectionHostDuration(clean, opts);
   }
 
-  public async quoteSectionHostDuration(duration: string) {
+  public async quoteSectionHostDuration(
+    duration: string,
+    opts: { slots?: number; sectionMode?: string } = {},
+  ) {
     const settings = await this.getSettings();
     const ms = HostedServersService.durationMs(duration);
     const hours = Math.max(1, Math.ceil(ms / 3_600_000));
-    const priceIrr =
+    const modeKey = isServerSectionMode(opts.sectionMode)
+      ? opts.sectionMode
+      : "duels";
+    const includedSlots = SERVER_SECTION_MODES[modeKey].maxPlayers;
+    const slots = this.clampHostSlots(
+      opts.slots ?? includedSlots,
+      settings.maxSlots,
+    );
+    const extraSlots = Math.max(0, slots - includedSlots);
+
+    const baseIrr =
       Math.ceil(
         (settings.sectionHostPriceIrrPerHour * hours) / 10_000,
       ) * 10_000;
-    const priceYpoint =
+    const baseYpoint =
       settings.sectionHostPriceYpointPerHour > 0
         ? Math.ceil(settings.sectionHostPriceYpointPerHour * hours)
         : 0;
+
+    // Extra slots priced per slot per 30 days, prorated by rental hours.
+    const slotsIrr =
+      extraSlots > 0 && settings.slotPriceIrr > 0
+        ? Math.ceil(
+            (settings.slotPriceIrr * extraSlots * hours) / (30 * 24) / 10_000,
+          ) * 10_000
+        : 0;
+    const slotsYpoint =
+      extraSlots > 0 && settings.slotPriceYpoint > 0
+        ? Math.ceil(
+            (settings.slotPriceYpoint * extraSlots * hours) / (30 * 24),
+          )
+        : 0;
+
     return {
       duration,
       hours,
-      price_irr: priceIrr,
-      price_ypoint: priceYpoint,
+      slots,
+      included_slots: includedSlots,
+      extra_slots: extraSlots,
+      base_price_irr: baseIrr,
+      base_price_ypoint: baseYpoint,
+      slots_price_irr: slotsIrr,
+      slots_price_ypoint: slotsYpoint,
+      price_irr: baseIrr + slotsIrr,
+      price_ypoint: baseYpoint + slotsYpoint,
       price_irr_per_hour: settings.sectionHostPriceIrrPerHour,
       price_ypoint_per_hour: settings.sectionHostPriceYpointPerHour,
+      slot_price_irr: settings.slotPriceIrr,
+      slot_price_ypoint: settings.slotPriceYpoint,
+      max_slots: settings.maxSlots,
     };
+  }
+
+  private clampHostSlots(raw: number, maxSlots: number) {
+    const n = Math.floor(Number(raw));
+    if (!Number.isInteger(n) || n < 2 || n > maxSlots) {
+      throw new BadRequestException(`Slots must be 2..${maxSlots}`);
+    }
+    return n;
   }
 
   public async requireSectionHostCarrier() {
@@ -519,6 +582,8 @@ export class HostedServersService {
       `SELECT o.id, o.buyer_steam_id::text, o.status, o.hosted_kind,
               o.hosted_server_id, o.hosted_type, o.hosted_label,
               o.hosted_section_mode, o.hosted_duration,
+              o.hosted_requested_slots, o.hosted_connect_password,
+              o.hosted_admin_steam_id::text AS hosted_admin_steam_id,
               o.hosted_fulfilled_at, o.hosted_extra_slots,
               p.id AS product_id,
               COALESCE(p.title, o.product_title) AS product_title,
@@ -589,9 +654,21 @@ export class HostedServersService {
         : HostedServersService.isHostedType(order.hosted_type || "")
           ? (order.hosted_type as HostedServerType)
           : "Casual";
-      const slots = mode
-        ? mode.maxPlayers
-        : Number(order.hosted_slots) || 10;
+      const settings = await this.getSettings();
+      const requested = Number(order.hosted_requested_slots || 0);
+      const slots = Math.min(
+        settings.maxSlots,
+        Math.max(
+          2,
+          requested > 0
+            ? requested
+            : mode
+              ? mode.maxPlayers
+              : Number(order.hosted_slots) || 10,
+        ),
+      );
+      const included = mode?.maxPlayers || slots;
+      const extraSlots = Math.max(0, slots - included);
       const label =
         this.cleanLabel(order.hosted_label) ||
         (mode
@@ -600,16 +677,17 @@ export class HostedServersService {
 
       const [created] = await this.postgres.query<Array<{ id: string }>>(
         `INSERT INTO hosted_servers
-          (owner_steam_id, product_id, slots, label, status, expires_at,
-           section_mode)
-         VALUES ($1::bigint, $2::uuid, $3, $4, 'provisioning',
-                 now() + ($5::double precision * interval '1 millisecond'),
-                 $6)
+          (owner_steam_id, product_id, slots, extra_slots, label, status,
+           expires_at, section_mode)
+         VALUES ($1::bigint, $2::uuid, $3, $4, $5, 'provisioning',
+                 now() + ($6::double precision * interval '1 millisecond'),
+                 $7)
          RETURNING id`,
         [
           order.buyer_steam_id,
           order.product_id,
           slots,
+          extraSlots,
           label,
           durationMs,
           sectionMode,
@@ -621,6 +699,39 @@ export class HostedServersService {
       );
 
       await this.provision(created.id, type);
+
+      const createdHosted = await this.getHosted(created.id);
+      if (createdHosted?.server_id && order.hosted_connect_password) {
+        try {
+          await this.updateServerSettings(createdHosted, {
+            connect_password: order.hosted_connect_password,
+          });
+        } catch (error) {
+          this.logger.warn(
+            `hosted ${created.id}: connect password apply failed: ${
+              error instanceof Error ? error.message : error
+            }`,
+          );
+        }
+      }
+      if (createdHosted && order.hosted_admin_steam_id) {
+        try {
+          await this.addAdmin(
+            createdHosted,
+            order.hosted_admin_steam_id,
+            {
+              steam_id: order.buyer_steam_id,
+              role: "user",
+            } as User,
+          );
+        } catch (error) {
+          this.logger.warn(
+            `hosted ${created.id}: admin apply failed: ${
+              error instanceof Error ? error.message : error
+            }`,
+          );
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(
@@ -747,7 +858,11 @@ export class HostedServersService {
       : null;
     const mode = sectionMode ? SERVER_SECTION_MODES[sectionMode] : null;
     const serverType = (mode?.type || type) as HostedServerType;
-    const maxPlayers = mode?.maxPlayers || hosted.slots;
+    // Buyer-chosen slots win; fall back to the mode default for older rows.
+    const maxPlayers = Math.max(
+      2,
+      Number(hosted.slots) || mode?.maxPlayers || 10,
+    );
 
     const gslt = await this.obtainGslt(hosted.id, settings);
 

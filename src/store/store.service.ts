@@ -332,6 +332,9 @@ export class StoreService {
       sectionMode?: string;
       duration?: string;
       label?: string;
+      slots?: number;
+      connectPassword?: string;
+      adminSteamId?: string;
       payWith?: "bale" | "ypoint";
     },
   ) {
@@ -356,12 +359,34 @@ export class StoreService {
 
     const quote = await this.hostedServers.quoteSectionHost(
       String(opts.duration || ""),
+      {
+        slots: opts.slots,
+        sectionMode: opts.sectionMode,
+      },
     );
     if (payWithYpoint && quote.price_ypoint <= 0) {
       throw new BadRequestException("This rental cannot be paid with Ypoints");
     }
     if (!payWithYpoint && quote.price_irr <= 0) {
       throw new BadRequestException("Host rentals are not priced yet");
+    }
+
+    const connectPassword = (opts.connectPassword || "").trim();
+    if (connectPassword && !/^[A-Za-z0-9_\-.]{1,32}$/.test(connectPassword)) {
+      throw new BadRequestException(
+        "Password may only contain letters, digits, _ - . (max 32)",
+      );
+    }
+
+    let adminSteamId: string | null = null;
+    const adminRaw = (opts.adminSteamId || "").trim();
+    if (adminRaw) {
+      adminSteamId = await resolveSteamId64(adminRaw);
+      if (adminSteamId === String(buyerSteamId)) {
+        throw new BadRequestException(
+          "You are already an admin as the server owner",
+        );
+      }
     }
 
     const carrier = await this.hostedServers.requireSectionHostCarrier();
@@ -375,7 +400,7 @@ export class StoreService {
     const cartItems: CartItemSnapshot[] = [
       {
         product_id: carrier.id,
-        title: `Host ${mode.label} · ${quote.duration}`,
+        title: `Host ${mode.label} · ${quote.slots} slots · ${quote.duration}`,
         price_irr: quote.price_irr,
         ypoint_amount: null,
         vip_server_id: null,
@@ -394,9 +419,10 @@ export class StoreService {
         (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
          cart_items, terms_accepted_at, hosted_kind, hosted_server_id,
          hosted_type, hosted_label, hosted_section_mode, hosted_duration,
+         hosted_requested_slots, hosted_connect_password, hosted_admin_steam_id,
          payment_method, amount_ypoint, product_title)
        VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now(), 'new', NULL,
-               $7, $8, $9, $10, $11, $12, $13)`,
+               $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
       [
         orderId,
         carrier.id,
@@ -408,9 +434,12 @@ export class StoreService {
         label,
         opts.sectionMode,
         quote.duration,
+        quote.slots,
+        connectPassword || null,
+        adminSteamId,
         payWithYpoint ? "ypoint" : "bale",
         payWithYpoint ? quote.price_ypoint : null,
-        `Host ${mode.label} · ${quote.duration}`,
+        `Host ${mode.label} · ${quote.slots} slots · ${quote.duration}`,
       ],
     );
 
@@ -1222,7 +1251,10 @@ export class StoreService {
           ADD COLUMN IF NOT EXISTS cart_items jsonb,
           ADD COLUMN IF NOT EXISTS terms_accepted_at timestamptz,
           ADD COLUMN IF NOT EXISTS hosted_duration text,
-          ADD COLUMN IF NOT EXISTS hosted_section_mode text
+          ADD COLUMN IF NOT EXISTS hosted_section_mode text,
+          ADD COLUMN IF NOT EXISTS hosted_requested_slots integer,
+          ADD COLUMN IF NOT EXISTS hosted_connect_password text,
+          ADD COLUMN IF NOT EXISTS hosted_admin_steam_id bigint
       `);
     } catch (error) {
       this.logger.warn(

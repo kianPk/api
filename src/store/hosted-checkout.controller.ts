@@ -23,6 +23,9 @@ export class HostedCheckoutController {
       sectionMode?: string;
       duration?: string;
       label?: string;
+      slots?: number;
+      connectPassword?: string;
+      adminSteamId?: string;
       termsAccepted?: boolean;
       payWith?: "bale" | "ypoint";
     },
@@ -36,6 +39,9 @@ export class HostedCheckoutController {
       sectionMode: body?.sectionMode,
       duration: body?.duration,
       label: body?.label,
+      slots: body?.slots,
+      connectPassword: body?.connectPassword,
+      adminSteamId: body?.adminSteamId,
       payWith: body.payWith === "ypoint" ? "ypoint" : "bale",
     });
   }

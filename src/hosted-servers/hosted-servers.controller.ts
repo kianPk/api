@@ -29,8 +29,15 @@ export class HostedServersController {
   }
 
   @Get("section-host/quote")
-  public async sectionHostQuote(@Query("duration") duration?: string) {
-    return this.hostedServers.quoteSectionHost(String(duration || ""));
+  public async sectionHostQuote(
+    @Query("duration") duration?: string,
+    @Query("slots") slots?: string,
+    @Query("sectionMode") sectionMode?: string,
+  ) {
+    return this.hostedServers.quoteSectionHost(String(duration || ""), {
+      slots: slots !== undefined ? Number(slots) : undefined,
+      sectionMode: sectionMode || undefined,
+    });
   }
 
   @Post("admin/section-host-pricing")
