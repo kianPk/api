@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
+  forwardRef,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomBytes, randomUUID } from "crypto";
@@ -87,6 +89,7 @@ export class StoreService {
     private readonly notifications: NotificationsService,
     private readonly s3: S3Service,
     private readonly challenges: ChallengesService,
+    @Inject(forwardRef(() => HostedServersService))
     private readonly hostedServers: HostedServersService,
   ) {
     this.envBale = this.configService.get<BaleConfig>("bale");
@@ -348,7 +351,7 @@ export class StoreService {
     }
     const payWithYpoint = opts.payWith === "ypoint";
     const bale = payWithYpoint ? null : await this.resolveBale();
-    if (bale && (!bale.botToken || !bale.providerToken)) {
+    if (!payWithYpoint && (!bale?.botToken || !bale?.providerToken)) {
       throw new ServiceUnavailableException(
         "Bale Pay is not configured. Set BALE_BOT_TOKEN and BALE_PROVIDER_TOKEN.",
       );
@@ -364,10 +367,15 @@ export class StoreService {
         sectionMode: opts.sectionMode,
       },
     );
-    if (payWithYpoint && quote.price_ypoint <= 0) {
+    const amountIrr = Math.max(0, Math.round(Number(quote.price_irr) || 0));
+    const amountYpoint = Math.max(
+      0,
+      Math.round(Number(quote.price_ypoint) || 0),
+    );
+    if (payWithYpoint && amountYpoint <= 0) {
       throw new BadRequestException("This rental cannot be paid with Ypoints");
     }
-    if (!payWithYpoint && quote.price_irr <= 0) {
+    if (!payWithYpoint && amountIrr <= 0) {
       throw new BadRequestException("Host rentals are not priced yet");
     }
 
@@ -389,8 +397,13 @@ export class StoreService {
       }
     }
 
-    const carrier = await this.hostedServers.requireSectionHostCarrier();
+    const carrier = await this.ensureSectionHostCarrierProduct();
     const mode = SERVER_SECTION_MODES[opts.sectionMode];
+    const title =
+      `Host ${mode.label} · ${quote.slots} slots · ${quote.duration}`.slice(
+        0,
+        120,
+      );
     const label =
       (opts.label || "")
         .replace(/[\r\n"';\\]/g, " ")
@@ -400,8 +413,8 @@ export class StoreService {
     const cartItems: CartItemSnapshot[] = [
       {
         product_id: carrier.id,
-        title: `Host ${mode.label} · ${quote.slots} slots · ${quote.duration}`,
-        price_irr: quote.price_irr,
+        title,
+        price_irr: amountIrr,
         ypoint_amount: null,
         vip_server_id: null,
         vip_duration: quote.duration,
@@ -414,40 +427,52 @@ export class StoreService {
       await this.cancelPendingOrders(buyerSteamId);
     }
 
-    await this.postgres.query(
-      `INSERT INTO store_orders
-        (id, product_id, buyer_steam_id, amount_irr, status, bale_payload,
-         cart_items, terms_accepted_at, hosted_kind, hosted_server_id,
-         hosted_type, hosted_label, hosted_section_mode, hosted_duration,
-         hosted_requested_slots, hosted_connect_password, hosted_admin_steam_id,
-         payment_method, amount_ypoint, product_title)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb, now(), 'new', NULL,
-               $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-      [
-        orderId,
-        carrier.id,
-        buyerSteamId,
-        payWithYpoint ? 0 : quote.price_irr,
-        payload,
-        JSON.stringify(cartItems),
-        mode.type,
-        label,
-        opts.sectionMode,
-        quote.duration,
-        quote.slots,
-        connectPassword || null,
-        adminSteamId,
-        payWithYpoint ? "ypoint" : "bale",
-        payWithYpoint ? quote.price_ypoint : null,
-        `Host ${mode.label} · ${quote.slots} slots · ${quote.duration}`,
-      ],
-    );
+    try {
+      await this.postgres.query(
+        `INSERT INTO store_orders
+          (id, product_id, product_title, buyer_steam_id, amount_irr, status,
+           bale_payload, cart_items, terms_accepted_at, hosted_kind,
+           hosted_server_id, hosted_type, hosted_label, hosted_section_mode,
+           hosted_duration, hosted_requested_slots, hosted_connect_password,
+           hosted_admin_steam_id, payment_method, amount_ypoint)
+         VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7::jsonb, now(), 'new',
+                 NULL, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+        [
+          orderId,
+          carrier.id,
+          title,
+          buyerSteamId,
+          payWithYpoint ? 0 : amountIrr,
+          payload,
+          JSON.stringify(cartItems),
+          mode.type,
+          label,
+          opts.sectionMode,
+          quote.duration,
+          quote.slots,
+          connectPassword || null,
+          adminSteamId,
+          payWithYpoint ? "ypoint" : "bale",
+          payWithYpoint ? amountYpoint : null,
+        ],
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`checkoutSectionHost insert failed: ${msg}`);
+      throw new BadRequestException(
+        /column|does not exist|undefined_column/i.test(msg)
+          ? "Host checkout schema is missing columns. Apply Hasura migrations 192100–192300."
+          : /store product not found/i.test(msg)
+            ? "Host rentals are not configured (missing host-section-dynamic product)"
+            : msg.slice(0, 240),
+      );
+    }
 
     if (payWithYpoint) {
       const balance = await this.completeYpointOrder(
         orderId,
         buyerSteamId,
-        quote.price_ypoint,
+        amountYpoint,
       );
       const [fulfilled] = await this.postgres.query<
         Array<{ hosted_server_id: string | null }>
@@ -455,9 +480,9 @@ export class StoreService {
       return {
         orderId,
         paid: true,
-        amountYpoint: quote.price_ypoint,
+        amountYpoint,
         balance,
-        productTitle: `Host ${mode.label}`,
+        productTitle: title,
         hostedServerId: fulfilled?.hosted_server_id || null,
       };
     }
@@ -465,11 +490,54 @@ export class StoreService {
     return {
       orderId,
       paid: false,
-      amountIrr: quote.price_irr,
-      productTitle: `Host ${mode.label}`,
+      amountIrr,
+      productTitle: title,
       deepLink: this.buildDeepLink(orderId, bale!.botUsername),
       botUsername: bale!.botUsername || null,
     };
+  }
+
+  /** Internal carrier for duration-priced Host rentals (not sold in catalog). */
+  private async ensureSectionHostCarrierProduct(): Promise<{ id: string }> {
+    const [existing] = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id FROM store_products WHERE slug = 'host-section-dynamic' LIMIT 1`,
+    );
+    if (existing?.id) {
+      await this.postgres.query(
+        `UPDATE store_products
+         SET hosted_slots = COALESCE(hosted_slots, 20),
+             hosted_section_mode = COALESCE(hosted_section_mode, 'any'),
+             vip_duration = COALESCE(NULLIF(vip_duration, ''), '1d'),
+             active = false,
+             updated_at = now()
+         WHERE id = $1`,
+        [existing.id],
+      );
+      return existing;
+    }
+    const [row] = await this.postgres.query<Array<{ id: string }>>(
+      `INSERT INTO store_products (
+         slug, title, description, price_irr, price_ypoint, hosted_slots,
+         vip_duration, hosted_section_mode, sort_order, active
+       ) VALUES (
+         'host-section-dynamic',
+         'Host (custom)',
+         'Internal carrier for Servers Host rentals priced by duration.',
+         0, NULL, 20, '1d', 'any', 9998, false
+       )
+       ON CONFLICT (slug) DO UPDATE SET
+         hosted_slots = 20,
+         hosted_section_mode = 'any',
+         active = false,
+         updated_at = now()
+       RETURNING id`,
+    );
+    if (!row?.id) {
+      throw new BadRequestException(
+        "Host rentals are not configured (missing host-section-dynamic product)",
+      );
+    }
+    return row;
   }
 
   /**
@@ -1254,7 +1322,14 @@ export class StoreService {
           ADD COLUMN IF NOT EXISTS hosted_section_mode text,
           ADD COLUMN IF NOT EXISTS hosted_requested_slots integer,
           ADD COLUMN IF NOT EXISTS hosted_connect_password text,
-          ADD COLUMN IF NOT EXISTS hosted_admin_steam_id bigint
+          ADD COLUMN IF NOT EXISTS hosted_admin_steam_id bigint,
+          ADD COLUMN IF NOT EXISTS product_title text,
+          ADD COLUMN IF NOT EXISTS payment_method text,
+          ADD COLUMN IF NOT EXISTS amount_ypoint integer
+      `);
+      await this.postgres.query(`
+        ALTER TABLE public.store_products
+          ADD COLUMN IF NOT EXISTS hosted_section_mode text
       `);
     } catch (error) {
       this.logger.warn(
