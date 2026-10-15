@@ -2,18 +2,40 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Post,
+  Query,
   Req,
   UnauthorizedException,
 } from "@nestjs/common";
 import { Request } from "express";
 import { User } from "../auth/types/User";
+import { HostedServersService } from "../hosted-servers/hosted-servers.service";
 import { StoreService } from "./store.service";
 
 // Lives under /hosted-servers because the API ingress does not route /store.
 @Controller("hosted-servers")
 export class HostedCheckoutController {
-  constructor(private readonly store: StoreService) {}
+  constructor(
+    private readonly store: StoreService,
+    private readonly hostedServers: HostedServersService,
+  ) {}
+
+  /**
+   * Duplicate of HostedServersController quote — registered here so older
+   * rollouts that only wired the store checkout controller still price Host.
+   */
+  @Get("section-host/quote")
+  public async sectionHostQuote(
+    @Query("duration") duration?: string,
+    @Query("slots") slots?: string,
+    @Query("sectionMode") sectionMode?: string,
+  ) {
+    return this.hostedServers.quoteSectionHost(String(duration || "1h"), {
+      slots: slots !== undefined && slots !== "" ? Number(slots) : undefined,
+      sectionMode: sectionMode || undefined,
+    });
+  }
 
   @Post("section-host/checkout")
   public async sectionHostCheckout(

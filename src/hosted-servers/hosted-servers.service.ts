@@ -394,16 +394,31 @@ export class HostedServersService {
     duration: string,
     opts: { slots?: number; sectionMode?: string } = {},
   ) {
-    const clean = String(duration || "")
+    let clean = String(duration || "")
       .trim()
       .toLowerCase();
+    // Bare numbers (e.g. "1") are treated as hours — matches the Host UI.
+    if (/^\d+$/.test(clean)) {
+      clean = `${clean}h`;
+    }
+    clean = clean.replace(/\s+/g, "");
     if (
       !(SECTION_HOST_DURATIONS as readonly string[]).includes(clean) &&
-      !/^(\d+)\s*(h|hr|hrs|d|day|days|w|week|weeks|mo|month|months)$/.test(
-        clean,
-      )
+      !/^(\d+)(h|hr|hrs|d|day|days|w|week|weeks|mo|month|months)$/.test(clean)
     ) {
       throw new BadRequestException("Unsupported rental duration");
+    }
+    // Canonical unit form for durationMs / display.
+    const m = clean.match(
+      /^(\d+)(h|hr|hrs|d|day|days|w|week|weeks|mo|month|months)$/,
+    );
+    if (m) {
+      const n = m[1];
+      const u = m[2];
+      if (/^(h|hr|hrs)$/.test(u)) clean = `${n}h`;
+      else if (/^(d|day|days)$/.test(u)) clean = `${n}d`;
+      else if (/^(w|week|weeks)$/.test(u)) clean = `${n}w`;
+      else clean = `${n}mo`;
     }
     return this.quoteSectionHostDuration(clean, opts);
   }
