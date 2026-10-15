@@ -3,19 +3,26 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Inject,
   Param,
   Post,
   Query,
   Req,
   UnauthorizedException,
+  forwardRef,
 } from "@nestjs/common";
 import { Request } from "express";
 import { User } from "../auth/types/User";
+import { StoreService } from "../store/store.service";
 import { HostedServersService } from "./hosted-servers.service";
 
 @Controller("hosted-servers")
 export class HostedServersController {
-  constructor(private readonly hostedServers: HostedServersService) {}
+  constructor(
+    private readonly hostedServers: HostedServersService,
+    @Inject(forwardRef(() => StoreService))
+    private readonly store: StoreService,
+  ) {}
 
   @Get("overview")
   public async overview() {
@@ -37,6 +44,39 @@ export class HostedServersController {
     return this.hostedServers.quoteSectionHost(String(duration || ""), {
       slots: slots !== undefined ? Number(slots) : undefined,
       sectionMode: sectionMode || undefined,
+    });
+  }
+
+  /**
+   * Host configure-and-pay checkout. Registered on this controller (same as
+   * overview/quote) so it is always present when the Host page works.
+   * Alias `host-checkout` avoids older ingress path quirks.
+   */
+  @Post(["section-host/checkout", "host-checkout"])
+  public async sectionHostCheckout(
+    @Req() request: Request,
+    @Body()
+    body: {
+      sectionMode?: string;
+      duration?: string;
+      label?: string;
+      slots?: number;
+      connectPassword?: string;
+      adminSteamId?: string;
+      termsAccepted?: boolean;
+      payWith?: "bale" | "ypoint";
+    },
+  ) {
+    const user = this.requireUser(request);
+    return this.store.checkoutSectionHost(user.steam_id, {
+      termsAccepted: Boolean(body?.termsAccepted),
+      sectionMode: body?.sectionMode,
+      duration: body?.duration,
+      label: body?.label,
+      slots: body?.slots,
+      connectPassword: body?.connectPassword,
+      adminSteamId: body?.adminSteamId,
+      payWith: body?.payWith === "ypoint" ? "ypoint" : "bale",
     });
   }
 

@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { StoreController } from "./store.controller";
 import { HostedCheckoutController } from "./hosted-checkout.controller";
 import { HostedVipOwnerController } from "./hosted-vip-owner.controller";
@@ -23,7 +23,7 @@ import { HostedServersModule } from "../hosted-servers/hosted-servers.module";
     RconModule,
     NotificationsModule,
     ChallengesModule,
-    HostedServersModule,
+    forwardRef(() => HostedServersModule),
   ],
   controllers: [
     StoreController,
