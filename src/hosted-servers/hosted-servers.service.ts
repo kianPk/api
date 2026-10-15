@@ -68,7 +68,13 @@ type HostedSettings = {
   /** Servers → Host: IRR per hour of rental. */
   sectionHostPriceIrrPerHour: number;
   sectionHostPriceYpointPerHour: number;
+  /** Servers → Host: IRR per extra slot per hour (base includes 10 slots). */
+  sectionHostSlotPriceIrrPerHour: number;
+  sectionHostSlotPriceYpointPerHour: number;
 };
+
+/** Base slot count included in the Host hourly rate. */
+export const SECTION_HOST_INCLUDED_SLOTS = 10;
 
 export const SECTION_HOST_DURATIONS = [
   "1h",
@@ -192,6 +198,14 @@ export class HostedServersService {
         map.section_host_price_ypoint_per_hour,
         50,
       ),
+      sectionHostSlotPriceIrrPerHour: int(
+        map.section_host_slot_price_irr_per_hour,
+        50_000,
+      ),
+      sectionHostSlotPriceYpointPerHour: int(
+        map.section_host_slot_price_ypoint_per_hour,
+        5,
+      ),
     };
   }
 
@@ -207,6 +221,8 @@ export class HostedServersService {
     max_slots?: number;
     section_host_price_irr_per_hour?: number;
     section_host_price_ypoint_per_hour?: number;
+    section_host_slot_price_irr_per_hour?: number;
+    section_host_slot_price_ypoint_per_hour?: number;
   }) {
     const entries: Array<[string, string]> = [];
     for (const [key, min, max] of [
@@ -214,6 +230,8 @@ export class HostedServersService {
       ["slot_price_ypoint", 0, 10_000_000],
       ["section_host_price_irr_per_hour", 0, 10_000_000_000],
       ["section_host_price_ypoint_per_hour", 0, 10_000_000],
+      ["section_host_slot_price_irr_per_hour", 0, 10_000_000_000],
+      ["section_host_slot_price_ypoint_per_hour", 0, 10_000_000],
       ["max_slots", 2, 64],
     ] as const) {
       const value = input[key];
@@ -274,6 +292,10 @@ export class HostedServersService {
       section_host_price_irr_per_hour: settings.sectionHostPriceIrrPerHour,
       section_host_price_ypoint_per_hour:
         settings.sectionHostPriceYpointPerHour,
+      section_host_slot_price_irr_per_hour:
+        settings.sectionHostSlotPriceIrrPerHour,
+      section_host_slot_price_ypoint_per_hour:
+        settings.sectionHostSlotPriceYpointPerHour,
     };
   }
 
@@ -370,21 +392,17 @@ export class HostedServersService {
       this.getAvailability(),
       this.getSettings(),
     ]);
-    const modeSlots = Object.fromEntries(
-      Object.entries(SERVER_SECTION_MODES).map(([key, mode]) => [
-        key,
-        mode.maxPlayers,
-      ]),
-    );
     return {
       ...availability,
       modes: Object.keys(SERVER_SECTION_MODES),
       durations: [...SECTION_HOST_DURATIONS],
-      mode_slots: modeSlots,
-      included_slots_by_mode: modeSlots,
+      included_slots: SECTION_HOST_INCLUDED_SLOTS,
       max_slots: settings.maxSlots,
-      slot_price_irr: settings.slotPriceIrr,
-      slot_price_ypoint: settings.slotPriceYpoint,
+      slot_price_irr_per_hour: settings.sectionHostSlotPriceIrrPerHour,
+      slot_price_ypoint_per_hour: settings.sectionHostSlotPriceYpointPerHour,
+      // Keep classic keys for older web builds (unused for Host extras now).
+      slot_price_irr: settings.sectionHostSlotPriceIrrPerHour,
+      slot_price_ypoint: settings.sectionHostSlotPriceYpointPerHour,
       price_irr_per_hour: settings.sectionHostPriceIrrPerHour,
       price_ypoint_per_hour: settings.sectionHostPriceYpointPerHour,
     };
@@ -430,10 +448,7 @@ export class HostedServersService {
     const settings = await this.getSettings();
     const ms = HostedServersService.durationMs(duration);
     const hours = Math.max(1, Math.ceil(ms / 3_600_000));
-    const modeKey = isServerSectionMode(opts.sectionMode)
-      ? opts.sectionMode
-      : "duels";
-    const includedSlots = SERVER_SECTION_MODES[modeKey].maxPlayers;
+    const includedSlots = SECTION_HOST_INCLUDED_SLOTS;
     const slots = this.clampHostSlots(
       opts.slots ?? includedSlots,
       settings.maxSlots,
@@ -449,17 +464,18 @@ export class HostedServersService {
         ? Math.ceil(settings.sectionHostPriceYpointPerHour * hours)
         : 0;
 
-    // Extra slots priced per slot per 30 days, prorated by rental hours.
+    // Each slot above the included 10 is billed per hour for the rental length.
     const slotsIrr =
-      extraSlots > 0 && settings.slotPriceIrr > 0
+      extraSlots > 0 && settings.sectionHostSlotPriceIrrPerHour > 0
         ? Math.ceil(
-            (settings.slotPriceIrr * extraSlots * hours) / (30 * 24) / 10_000,
+            (settings.sectionHostSlotPriceIrrPerHour * extraSlots * hours) /
+              10_000,
           ) * 10_000
         : 0;
     const slotsYpoint =
-      extraSlots > 0 && settings.slotPriceYpoint > 0
+      extraSlots > 0 && settings.sectionHostSlotPriceYpointPerHour > 0
         ? Math.ceil(
-            (settings.slotPriceYpoint * extraSlots * hours) / (30 * 24),
+            settings.sectionHostSlotPriceYpointPerHour * extraSlots * hours,
           )
         : 0;
 
@@ -477,8 +493,8 @@ export class HostedServersService {
       price_ypoint: baseYpoint + slotsYpoint,
       price_irr_per_hour: settings.sectionHostPriceIrrPerHour,
       price_ypoint_per_hour: settings.sectionHostPriceYpointPerHour,
-      slot_price_irr: settings.slotPriceIrr,
-      slot_price_ypoint: settings.slotPriceYpoint,
+      slot_price_irr_per_hour: settings.sectionHostSlotPriceIrrPerHour,
+      slot_price_ypoint_per_hour: settings.sectionHostSlotPriceYpointPerHour,
       max_slots: settings.maxSlots,
     };
   }
@@ -682,7 +698,7 @@ export class HostedServersService {
               : Number(order.hosted_slots) || 10,
         ),
       );
-      const included = mode?.maxPlayers || slots;
+      const included = SECTION_HOST_INCLUDED_SLOTS;
       const extraSlots = Math.max(0, slots - included);
       const label =
         this.cleanLabel(order.hosted_label) ||
