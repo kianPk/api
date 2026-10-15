@@ -720,6 +720,8 @@ export class HostedServersService {
   /**
    * Idempotent: the hosted_fulfilled_at claim makes a second call (web webhook
    * forward + lifecycle sweep) a no-op, so a paid order never yields two servers.
+   * If provisioning fails before a hosted_servers row is linked, the claim is
+   * released so the lifecycle job can retry.
    */
   public async fulfillOrder(orderId: string) {
     const [order] = await this.postgres.query<OrderRow[]>(
@@ -740,16 +742,30 @@ export class HostedServersService {
     // ONLY explicit hosted checkouts may provision. Never infer from
     // product.hosted_slots alone — VIP shop used to borrow plan products and
     // that legacy path created a new server for every VIP purchase.
+    // Section Host orders store slots/mode/duration on the order and use a
+    // carrier product; do not require p.hosted_slots for those.
     const kind = order?.hosted_kind || null;
     const isHostedPurchase =
       kind === "new" || kind === "renew" || kind === "slots";
+    const hasProvisionSignal =
+      kind === "slots" ||
+      kind === "renew" ||
+      Number(order?.hosted_slots || 0) > 0 ||
+      Number(order?.hosted_requested_slots || 0) > 0 ||
+      !!order?.hosted_section_mode ||
+      !!order?.hosted_duration;
     if (
       !order ||
       order.status !== "paid" ||
       order.hosted_fulfilled_at ||
       !isHostedPurchase ||
-      (!order.hosted_slots && kind !== "slots")
+      !hasProvisionSignal
     ) {
+      if (order && order.status === "paid" && isHostedPurchase && !order.hosted_fulfilled_at) {
+        this.logger.warn(
+          `hosted fulfill skipped order=${order.id} kind=${kind} product_slots=${order.hosted_slots} requested=${order.hosted_requested_slots} section=${order.hosted_section_mode} duration=${order.hosted_duration}`,
+        );
+      }
       return;
     }
 
@@ -881,6 +897,13 @@ export class HostedServersService {
       this.logger.error(
         `hosted fulfillment failed order=${order.id}: ${message}`,
         error instanceof Error ? error.stack : undefined,
+      );
+      // Release the claim when nothing was linked so lifecycle can retry.
+      await this.postgres.query(
+        `UPDATE store_orders
+         SET hosted_fulfilled_at = NULL
+         WHERE id = $1 AND hosted_server_id IS NULL`,
+        [order.id],
       );
       await this.notifyAdmins(
         "Hosted server fulfillment failed",
@@ -1191,13 +1214,36 @@ export class HostedServersService {
   }
 
   public async processLifecycle() {
+    // Unstick paid Host orders that claimed fulfillment then failed before a
+    // hosted_servers row was linked (older builds left these permanently stuck).
+    await this.postgres.query(
+      `UPDATE store_orders
+       SET hosted_fulfilled_at = NULL
+       WHERE status = 'paid'
+         AND hosted_kind IN ('new', 'renew')
+         AND hosted_server_id IS NULL
+         AND hosted_fulfilled_at IS NOT NULL
+         AND paid_at > now() - interval '7 days'
+         AND (
+           hosted_section_mode IS NOT NULL
+           OR hosted_duration IS NOT NULL
+           OR hosted_requested_slots IS NOT NULL
+         )`,
+    );
+
     const unfulfilled = await this.postgres.query<Array<{ id: string }>>(
       `SELECT o.id FROM store_orders o
        LEFT JOIN store_products p ON p.id = o.product_id
        WHERE o.status = 'paid'
          AND o.hosted_fulfilled_at IS NULL
          AND o.hosted_kind IN ('new', 'renew', 'slots')
-         AND (p.hosted_slots IS NOT NULL OR o.hosted_kind = 'slots')
+         AND (
+           p.hosted_slots IS NOT NULL
+           OR o.hosted_kind = 'slots'
+           OR o.hosted_section_mode IS NOT NULL
+           OR o.hosted_duration IS NOT NULL
+           OR o.hosted_requested_slots IS NOT NULL
+         )
          AND o.paid_at > now() - interval '7 days'
        ORDER BY o.paid_at ASC
        LIMIT 20`,

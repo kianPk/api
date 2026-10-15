@@ -505,7 +505,7 @@ export class StoreService {
     if (existing?.id) {
       await this.postgres.query(
         `UPDATE store_products
-         SET hosted_slots = COALESCE(hosted_slots, 20),
+         SET hosted_slots = GREATEST(COALESCE(hosted_slots, 0), 20),
              hosted_section_mode = COALESCE(hosted_section_mode, 'any'),
              vip_duration = COALESCE(NULLIF(vip_duration, ''), '1d'),
              active = false,
