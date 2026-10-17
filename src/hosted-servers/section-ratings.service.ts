@@ -93,6 +93,39 @@ export class SectionRatingsService {
     });
   }
 
+  /** Site read: only rows that exist (no default level for missing players). */
+  public async getExisting(
+    mode: string,
+    steamIds: string[],
+  ): Promise<SectionRatingRow[]> {
+    const ids = [
+      ...new Set(
+        steamIds
+          .map((id) => String(id || "").match(/\b(7656119\d{10})\b/)?.[1])
+          .filter(Boolean) as string[],
+      ),
+    ].slice(0, 64);
+    if (!ids.length) {
+      return [];
+    }
+
+    const rows = await this.postgres.query<
+      Array<{ steam_id: string; rating: number; name: string | null }>
+    >(
+      `SELECT steam_id::text AS steam_id, rating, name
+         FROM public.servers_section_ratings
+        WHERE mode = $1 AND steam_id = ANY($2::bigint[])`,
+      [mode, ids],
+    );
+
+    return rows.map((row) => ({
+      steam_id: row.steam_id,
+      rating: row.rating,
+      name: row.name ?? null,
+      level: SectionRatingsService.levelFromElo(row.rating),
+    }));
+  }
+
   public async upsert(
     mode: string,
     updates: Array<{ steam_id?: string; rating?: number; name?: string }>,

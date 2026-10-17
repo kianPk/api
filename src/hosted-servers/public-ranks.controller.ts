@@ -136,6 +136,19 @@ export class PublicRanksController {
     };
   }
 
+  /** Public site read — only players who already have a stored section rating. */
+  @Get("section-ratings/:mode")
+  public async sectionRatingsPublicGet(
+    @Param("mode") mode: string,
+    @Query("steam_ids") steamIds: string,
+  ) {
+    const key = this.sectionRatings.assertMode(mode);
+    const ids = String(steamIds || "")
+      .split(/[,\s]+/)
+      .filter(Boolean);
+    return { players: await this.sectionRatings.getExisting(key, ids) };
+  }
+
   // Site admin: set Faceit-style level for a player on a Servers-section mode.
   @Post("section-ratings/:mode/admin-set")
   public async sectionRatingsAdminSet(
