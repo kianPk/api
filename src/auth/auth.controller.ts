@@ -93,7 +93,7 @@ export class AuthController {
       const steamId = String(request.user.steam_id);
       void this.faceitRanksQueue
         .add(
-          RefreshFaceitRanks.name,
+          "RefreshFaceitRanks",
           { steamIds: [steamId], force: true },
           {
             jobId: `faceit-rank-me.${steamId}`,

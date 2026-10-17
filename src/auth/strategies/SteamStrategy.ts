@@ -146,7 +146,7 @@ export class SteamStrategy extends PassportStrategy(_SteamStrategy) {
     // Pull FACEIT level from FACEIT Data API whenever someone signs in.
     void this.faceitRanksQueue
       .add(
-        RefreshFaceitRanks.name,
+        "RefreshFaceitRanks",
         { steamIds: [steamId], force: true },
         {
           jobId: `faceit-rank-login.${steamId}`,
