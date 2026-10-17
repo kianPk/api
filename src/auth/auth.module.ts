@@ -12,7 +12,7 @@ import { ApiKeys } from "./ApiKeys";
 import { ApiKeyGuard } from "./strategies/ApiKeyGuard";
 import { BullModule } from "@nestjs/bullmq";
 import { SteamMatchHistoryQueues } from "../steam-match-history/enums/SteamMatchHistoryQueues";
-import { FaceitModule } from "../faceit/faceit.module";
+import { FaceitQueues } from "../faceit/enums/FaceitQueues";
 
 @Module({
   imports: [
@@ -20,12 +20,13 @@ import { FaceitModule } from "../faceit/faceit.module";
       session: true,
     }),
     forwardRef(() => HasuraModule),
-    forwardRef(() => FaceitModule),
     CacheModule,
     RedisModule,
     BullModule.registerQueue(
       { name: SteamMatchHistoryQueues.CheckSteamBans },
       { name: SteamMatchHistoryQueues.PollSteamMatchHistoryForUser },
+      // Queue only — do not import FaceitModule (Auth↔Hasura↔Faceit cycle).
+      { name: FaceitQueues.RefreshFaceitRanks },
     ),
   ],
   providers: [

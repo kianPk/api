@@ -12,7 +12,9 @@ import { ApiKeys } from "./ApiKeys";
 import { BadRequestException } from "@nestjs/common";
 import { User } from "./types/User";
 import { SocketsService } from "src/sockets/sockets.service";
-import { FaceitService } from "../faceit/faceit.service";
+import { InjectQueue } from "@nestjs/bullmq";
+import { Queue } from "bullmq";
+import { FaceitQueues } from "../faceit/enums/FaceitQueues";
 
 const AUTH_THROTTLE = { default: { limit: 10, ttl: 60 * 1000 } };
 
@@ -23,7 +25,8 @@ export class AuthController {
     private readonly hasura: HasuraService,
     private readonly redis: RedisManagerService,
     private readonly apiKeys: ApiKeys,
-    private readonly faceit: FaceitService,
+    @InjectQueue(FaceitQueues.RefreshFaceitRanks)
+    private readonly faceitRanksQueue: Queue,
     private readonly logger: Logger,
   ) {}
 
@@ -87,11 +90,20 @@ export class AuthController {
       user.last_sign_in_at = now;
 
       // Session return: refresh FACEIT level from FACEIT API in the background.
-      void this.faceit
-        .refreshPlayer(String(request.user.steam_id), true)
+      const steamId = String(request.user.steam_id);
+      void this.faceitRanksQueue
+        .add(
+          RefreshFaceitRanks.name,
+          { steamIds: [steamId], force: true },
+          {
+            jobId: `faceit-rank-me.${steamId}`,
+            removeOnComplete: 20,
+            removeOnFail: 20,
+          },
+        )
         .catch((err) => {
           this.logger.warn(
-            `me() faceit refresh failed for ${request.user.steam_id}: ${
+            `me() faceit refresh enqueue failed for ${steamId}: ${
               (err as Error)?.message ?? err
             }`,
           );
