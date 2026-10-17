@@ -8,12 +8,16 @@ import {
   Req,
   UseGuards,
 } from "@nestjs/common";
+import { InjectQueue } from "@nestjs/bullmq";
+import { Queue } from "bullmq";
 import { Request } from "express";
 import { HasuraAction } from "../hasura/hasura.controller";
 import { SteamGuard } from "../auth/strategies/SteamGuard";
 import { User } from "../auth/types/User";
 import { FaceitService } from "./faceit.service";
 import { FaceitMatchImportService } from "./faceit-match-import.service";
+import { FaceitQueues } from "./enums/FaceitQueues";
+import { RefreshFaceitRanks } from "./jobs/RefreshFaceitRanks";
 
 @Controller("faceit")
 export class FaceitController {
@@ -21,6 +25,8 @@ export class FaceitController {
     private readonly faceitService: FaceitService,
     private readonly faceitImport: FaceitMatchImportService,
     private readonly logger: Logger,
+    @InjectQueue(FaceitQueues.RefreshFaceitRanks)
+    private readonly ranksQueue: Queue,
   ) {}
 
   @HasuraAction()
@@ -72,6 +78,32 @@ export class FaceitController {
       throw new ForbiddenException("administrator access required");
     }
     return this.faceitService.testIntegration(data.user.steam_id);
+  }
+
+  /** Admin: queue a larger FACEIT rank backfill for active players. */
+  @Post("refresh-ranks")
+  @UseGuards(SteamGuard)
+  public async refreshRanks(
+    @Req() request: Request,
+    @Body() body: { limit?: number; force?: boolean },
+  ): Promise<{ queued: boolean; limit: number }> {
+    if (!request.user) {
+      throw new ForbiddenException("authentication required");
+    }
+    if (request.user.role !== "administrator") {
+      throw new ForbiddenException("administrator access required");
+    }
+    if (!this.faceitService.isEnabled()) {
+      throw new ForbiddenException("FACEIT_API_KEY not configured");
+    }
+    const limit = Math.min(120, Math.max(1, Number(body?.limit) || 80));
+    await this.ranksQueue.add(
+      RefreshFaceitRanks.name,
+      { limit, force: body?.force === true },
+      { removeOnComplete: 20, removeOnFail: 20 },
+    );
+    this.logger.log(`faceit ranks refresh queued limit=${limit}`);
+    return { queued: true, limit };
   }
 
   private async assertCanImport(request: Request): Promise<User> {

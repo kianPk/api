@@ -356,8 +356,94 @@ export class FaceitService {
     return true;
   }
 
+  /**
+   * Backfill / refresh FACEIT ranks for recently active players whose
+   * faceit_* columns are missing or stale. Bounded batch + delay to stay
+   * within FACEIT Data API rate limits.
+   */
+  public async refreshStalePlayers(
+    limit = 40,
+    force = false,
+  ): Promise<{ checked: number; updated: number; missing: number }> {
+    if (!this.isEnabled()) {
+      return { checked: 0, updated: 0, missing: 0 };
+    }
+
+    const batch = Math.min(120, Math.max(1, Math.round(limit)));
+    const activeSince = new Date(
+      Date.now() - 90 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const staleBefore = new Date(
+      Date.now() - 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const { players } = await this.hasura.query({
+      players: {
+        __args: {
+          where: {
+            last_sign_in_at: { _gte: activeSince },
+            _or: [
+              { faceit_updated_at: { _is_null: true } },
+              { faceit_skill_level: { _is_null: true } },
+              { faceit_updated_at: { _lt: staleBefore } },
+            ],
+          },
+          order_by: [{ last_sign_in_at: "desc" }],
+          limit: batch,
+        },
+        steam_id: true,
+      },
+    });
+
+    let updated = 0;
+    let missing = 0;
+    for (const row of players ?? []) {
+      const steamId = String(row.steam_id || "");
+      if (!steamId) continue;
+      try {
+        const ok = await this.refreshPlayer(steamId, force);
+        if (ok) {
+          updated += 1;
+        } else {
+          missing += 1;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `faceit stale refresh failed for ${steamId}: ${
+            error instanceof Error ? error.message : error
+          }`,
+        );
+        missing += 1;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    return {
+      checked: (players ?? []).length,
+      updated,
+      missing,
+    };
+  }
+
   private async fetchPlayer(steamId: string): Promise<FaceitPlayerData | null> {
-    const url = `${FaceitService.BASE_URL}/players?game=cs2&game_player_id=${encodeURIComponent(
+    // Prefer CS2; fall back to CSGO for older FACEIT accounts that never
+    // migrated their game stats.
+    const cs2 = await this.fetchPlayerForGame(steamId, "cs2");
+    if (cs2?.faceit_skill_level != null) {
+      return cs2;
+    }
+    const csgo = await this.fetchPlayerForGame(steamId, "csgo");
+    if (csgo?.faceit_skill_level != null) {
+      return csgo;
+    }
+    return cs2 ?? csgo;
+  }
+
+  private async fetchPlayerForGame(
+    steamId: string,
+    game: "cs2" | "csgo",
+  ): Promise<FaceitPlayerData | null> {
+    const url = `${FaceitService.BASE_URL}/players?game=${game}&game_player_id=${encodeURIComponent(
       steamId,
     )}`;
 
@@ -373,14 +459,14 @@ export class FaceitService {
 
       if (response.status === 404) {
         this.logger.debug(
-          `faceit 404 for steam_id ${steamId} — no faceit account linked`,
+          `faceit 404 for steam_id ${steamId} game=${game} — no faceit account linked`,
         );
         return null;
       }
 
       if (!response.ok) {
         this.logger.error(
-          `faceit responded with ${response.status} for steam_id ${steamId}`,
+          `faceit responded with ${response.status} for steam_id ${steamId} game=${game}`,
         );
         return null;
       }
@@ -394,10 +480,14 @@ export class FaceitService {
             skill_level?: number;
             faceit_elo?: number;
           };
+          csgo?: {
+            skill_level?: number;
+            faceit_elo?: number;
+          };
         };
       };
 
-      const cs2 = data.games?.cs2;
+      const stats = data.games?.cs2 ?? data.games?.csgo;
 
       return {
         faceit_player_id: data.player_id,
@@ -405,12 +495,12 @@ export class FaceitService {
         faceit_url: data.faceit_url
           ? data.faceit_url.replace("{lang}", "en")
           : null,
-        faceit_skill_level: cs2?.skill_level ?? null,
-        faceit_elo: cs2?.faceit_elo ?? null,
+        faceit_skill_level: stats?.skill_level ?? null,
+        faceit_elo: stats?.faceit_elo ?? null,
       };
     } catch (error) {
       this.logger.error(
-        `unable to fetch faceit profile for steam_id ${steamId}`,
+        `unable to fetch faceit profile for steam_id ${steamId} game=${game}`,
         error,
       );
       return null;

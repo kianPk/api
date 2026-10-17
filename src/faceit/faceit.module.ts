@@ -16,6 +16,7 @@ import { FaceitMatchImportService } from "./faceit-match-import.service";
 import { FaceitQueues } from "./enums/FaceitQueues";
 import { PollAllFaceitMatchHistory } from "./jobs/PollAllFaceitMatchHistory";
 import { ImportFaceitMatch } from "./jobs/ImportFaceitMatch";
+import { RefreshFaceitRanks } from "./jobs/RefreshFaceitRanks";
 
 @Module({
   imports: [
@@ -25,12 +26,19 @@ import { ImportFaceitMatch } from "./jobs/ImportFaceitMatch";
     BullModule.registerQueue({
       name: FaceitQueues.ImportFaceitMatch,
     }),
+    BullModule.registerQueue({
+      name: FaceitQueues.RefreshFaceitRanks,
+    }),
     BullBoardModule.forFeature({
       name: FaceitQueues.PollAllFaceitMatchHistory,
       adapter: BullMQAdapter,
     }),
     BullBoardModule.forFeature({
       name: FaceitQueues.ImportFaceitMatch,
+      adapter: BullMQAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: FaceitQueues.RefreshFaceitRanks,
       adapter: BullMQAdapter,
     }),
     CacheModule,
@@ -46,6 +54,7 @@ import { ImportFaceitMatch } from "./jobs/ImportFaceitMatch";
     FaceitMatchImportService,
     PollAllFaceitMatchHistory,
     ImportFaceitMatch,
+    RefreshFaceitRanks,
     ...getQueuesProcessors("Faceit"),
   ],
   exports: [FaceitService],
@@ -53,18 +62,31 @@ import { ImportFaceitMatch } from "./jobs/ImportFaceitMatch";
 export class FaceitModule {
   constructor(
     @InjectQueue(FaceitQueues.PollAllFaceitMatchHistory)
-    queue: Queue,
+    pollQueue: Queue,
+    @InjectQueue(FaceitQueues.RefreshFaceitRanks)
+    ranksQueue: Queue,
   ) {
     if (process.env.RUN_MIGRATIONS) {
       return;
     }
 
-    void queue.add(
+    void pollQueue.add(
       PollAllFaceitMatchHistory.name,
       {},
       {
         repeat: {
           pattern: "30 * * * *",
+        },
+      },
+    );
+
+    // Backfill FACEIT levels for active players (not only on profile visit).
+    void ranksQueue.add(
+      RefreshFaceitRanks.name,
+      { limit: 40 },
+      {
+        repeat: {
+          pattern: "*/10 * * * *",
         },
       },
     );
