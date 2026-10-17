@@ -81,29 +81,44 @@ export class FaceitController {
   }
 
   /** Admin: queue a larger FACEIT rank backfill for active players. */
+  @HasuraAction()
+  public async syncFaceitRanks(data: {
+    user?: User;
+    limit?: number;
+    force?: boolean;
+  }): Promise<{ success: boolean; limit: number }> {
+    if (!data.user) {
+      throw new ForbiddenException("authentication required");
+    }
+    if (data.user.role !== "administrator") {
+      throw new ForbiddenException("administrator access required");
+    }
+    if (!this.faceitService.isEnabled()) {
+      throw new ForbiddenException("FACEIT_API_KEY not configured");
+    }
+    const limit = Math.min(120, Math.max(1, Number(data?.limit) || 80));
+    await this.ranksQueue.add(
+      RefreshFaceitRanks.name,
+      { limit, force: data?.force !== false },
+      { removeOnComplete: 20, removeOnFail: 20 },
+    );
+    this.logger.log(`faceit ranks refresh queued limit=${limit}`);
+    return { success: true, limit };
+  }
+
+  /** Kept for in-cluster / future ingress; browser should use syncFaceitRanks. */
   @Post("refresh-ranks")
   @UseGuards(SteamGuard)
   public async refreshRanks(
     @Req() request: Request,
     @Body() body: { limit?: number; force?: boolean },
   ): Promise<{ queued: boolean; limit: number }> {
-    if (!request.user) {
-      throw new ForbiddenException("authentication required");
-    }
-    if (request.user.role !== "administrator") {
-      throw new ForbiddenException("administrator access required");
-    }
-    if (!this.faceitService.isEnabled()) {
-      throw new ForbiddenException("FACEIT_API_KEY not configured");
-    }
-    const limit = Math.min(120, Math.max(1, Number(body?.limit) || 80));
-    await this.ranksQueue.add(
-      RefreshFaceitRanks.name,
-      { limit, force: body?.force === true },
-      { removeOnComplete: 20, removeOnFail: 20 },
-    );
-    this.logger.log(`faceit ranks refresh queued limit=${limit}`);
-    return { queued: true, limit };
+    const result = await this.syncFaceitRanks({
+      user: request.user,
+      limit: body?.limit,
+      force: body?.force,
+    });
+    return { queued: result.success, limit: result.limit };
   }
 
   private async assertCanImport(request: Request): Promise<User> {

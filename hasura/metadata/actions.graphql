@@ -503,6 +503,13 @@ type Mutation {
 }
 
 type Mutation {
+  syncFaceitRanks(
+    limit: Int
+    force: Boolean
+  ): FaceitSyncRanksOutput
+}
+
+type Mutation {
   refreshLiveHud(
     match_id: uuid!
   ): SuccessOutput
@@ -941,6 +948,11 @@ type FaceitTestResult {
 type FaceitTestOutput {
   dataApi: FaceitTestResult!
   downloadApi: FaceitTestResult!
+}
+
+type FaceitSyncRanksOutput {
+  success: Boolean!
+  limit: Int!
 }
 
 type CreateClipRenderOutput {
