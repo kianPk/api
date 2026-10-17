@@ -12,6 +12,7 @@ import { Queue } from "bullmq";
 import { RedisManagerService } from "../../redis/redis-manager/redis-manager.service";
 import { SteamMatchHistoryQueues } from "../../steam-match-history/enums/SteamMatchHistoryQueues";
 import { SteamBansService } from "../../steam-match-history/steam-bans.service";
+import { FaceitService } from "../../faceit/faceit.service";
 import { e_player_roles_enum } from "../../../generated";
 
 interface SteamProfile {
@@ -48,6 +49,7 @@ export class SteamStrategy extends PassportStrategy(_SteamStrategy) {
     @InjectQueue(SteamMatchHistoryQueues.CheckSteamBans)
     private readonly steamBansQueue: Queue,
     private readonly redisManager: RedisManagerService,
+    private readonly faceit: FaceitService,
     private readonly logger: Logger,
   ) {
     const webDomain = config.get<AppConfig>("app").webDomain;
@@ -137,6 +139,13 @@ export class SteamStrategy extends PassportStrategy(_SteamStrategy) {
     ).catch((err) => {
       this.logger.error(
         `on-login steam-bans enqueue failed for ${steamId}: ${(err as Error)?.message ?? err}`,
+      );
+    });
+
+    // Pull FACEIT level from FACEIT Data API whenever someone signs in.
+    void this.faceit.refreshPlayer(steamId, true).catch((err) => {
+      this.logger.warn(
+        `on-login faceit refresh failed for ${steamId}: ${(err as Error)?.message ?? err}`,
       );
     });
   }

@@ -80,13 +80,14 @@ export class FaceitModule {
       },
     );
 
-    // Backfill FACEIT levels for active players (not only on profile visit).
+    // Auto-load FACEIT levels from FACEIT Data API for active players.
+    void ranksQueue.add(RefreshFaceitRanks.name, { limit: 80, force: true });
     void ranksQueue.add(
       RefreshFaceitRanks.name,
-      { limit: 40 },
+      { limit: 60 },
       {
         repeat: {
-          pattern: "*/10 * * * *",
+          pattern: "*/5 * * * *",
         },
       },
     );

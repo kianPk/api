@@ -377,16 +377,13 @@ export class FaceitService {
       Date.now() - 24 * 60 * 60 * 1000,
     ).toISOString();
 
-    const { players } = await this.hasura.query({
+    // Prefer players who still have no FACEIT level, then stale rows.
+    const missing = await this.hasura.query({
       players: {
         __args: {
           where: {
             last_sign_in_at: { _gte: activeSince },
-            _or: [
-              { faceit_updated_at: { _is_null: true } },
-              { faceit_skill_level: { _is_null: true } },
-              { faceit_updated_at: { _lt: staleBefore } },
-            ],
+            faceit_skill_level: { _is_null: true },
           },
           order_by: [{ last_sign_in_at: "desc" }],
           limit: batch,
@@ -394,6 +391,34 @@ export class FaceitService {
         steam_id: true,
       },
     });
+
+    const need = Math.max(0, batch - (missing.players?.length ?? 0));
+    const stale =
+      need > 0
+        ? await this.hasura.query({
+            players: {
+              __args: {
+                where: {
+                  last_sign_in_at: { _gte: activeSince },
+                  faceit_skill_level: { _is_null: false },
+                  faceit_updated_at: { _lt: staleBefore },
+                },
+                order_by: [{ last_sign_in_at: "desc" }],
+                limit: need,
+              },
+              steam_id: true,
+            },
+          })
+        : { players: [] as Array<{ steam_id: string }> };
+
+    const seen = new Set<string>();
+    const players: Array<{ steam_id: string }> = [];
+    for (const row of [...(missing.players ?? []), ...(stale.players ?? [])]) {
+      const id = String(row.steam_id || "");
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      players.push({ steam_id: id });
+    }
 
     let updated = 0;
     let missing = 0;

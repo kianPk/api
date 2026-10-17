@@ -12,6 +12,7 @@ import { ApiKeys } from "./ApiKeys";
 import { ApiKeyGuard } from "./strategies/ApiKeyGuard";
 import { BullModule } from "@nestjs/bullmq";
 import { SteamMatchHistoryQueues } from "../steam-match-history/enums/SteamMatchHistoryQueues";
+import { FaceitModule } from "../faceit/faceit.module";
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { SteamMatchHistoryQueues } from "../steam-match-history/enums/SteamMatch
       session: true,
     }),
     forwardRef(() => HasuraModule),
+    forwardRef(() => FaceitModule),
     CacheModule,
     RedisModule,
     BullModule.registerQueue(

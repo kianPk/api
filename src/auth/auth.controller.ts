@@ -12,6 +12,7 @@ import { ApiKeys } from "./ApiKeys";
 import { BadRequestException } from "@nestjs/common";
 import { User } from "./types/User";
 import { SocketsService } from "src/sockets/sockets.service";
+import { FaceitService } from "../faceit/faceit.service";
 
 const AUTH_THROTTLE = { default: { limit: 10, ttl: 60 * 1000 } };
 
@@ -22,6 +23,7 @@ export class AuthController {
     private readonly hasura: HasuraService,
     private readonly redis: RedisManagerService,
     private readonly apiKeys: ApiKeys,
+    private readonly faceit: FaceitService,
     private readonly logger: Logger,
   ) {}
 
@@ -83,6 +85,17 @@ export class AuthController {
       });
       await this.cache.put(lastSignInKey, true, 60 * 60);
       user.last_sign_in_at = now;
+
+      // Session return: refresh FACEIT level from FACEIT API in the background.
+      void this.faceit
+        .refreshPlayer(String(request.user.steam_id), true)
+        .catch((err) => {
+          this.logger.warn(
+            `me() faceit refresh failed for ${request.user.steam_id}: ${
+              (err as Error)?.message ?? err
+            }`,
+          );
+        });
     }
 
     return user;
