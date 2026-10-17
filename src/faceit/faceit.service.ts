@@ -378,7 +378,7 @@ export class FaceitService {
     ).toISOString();
 
     // Prefer players who still have no FACEIT level, then stale rows.
-    const missing = await this.hasura.query({
+    const withoutLevel = await this.hasura.query({
       players: {
         __args: {
           where: {
@@ -392,7 +392,7 @@ export class FaceitService {
       },
     });
 
-    const need = Math.max(0, batch - (missing.players?.length ?? 0));
+    const need = Math.max(0, batch - (withoutLevel.players?.length ?? 0));
     const stale =
       need > 0
         ? await this.hasura.query({
@@ -413,7 +413,10 @@ export class FaceitService {
 
     const seen = new Set<string>();
     const players: Array<{ steam_id: string }> = [];
-    for (const row of [...(missing.players ?? []), ...(stale.players ?? [])]) {
+    for (const row of [
+      ...(withoutLevel.players ?? []),
+      ...(stale.players ?? []),
+    ]) {
       const id = String(row.steam_id || "");
       if (!id || seen.has(id)) continue;
       seen.add(id);
@@ -421,8 +424,8 @@ export class FaceitService {
     }
 
     let updated = 0;
-    let missing = 0;
-    for (const row of players ?? []) {
+    let notFound = 0;
+    for (const row of players) {
       const steamId = String(row.steam_id || "");
       if (!steamId) continue;
       try {
@@ -430,7 +433,7 @@ export class FaceitService {
         if (ok) {
           updated += 1;
         } else {
-          missing += 1;
+          notFound += 1;
         }
       } catch (error) {
         this.logger.warn(
@@ -438,15 +441,15 @@ export class FaceitService {
             error instanceof Error ? error.message : error
           }`,
         );
-        missing += 1;
+        notFound += 1;
       }
       await new Promise((r) => setTimeout(r, 250));
     }
 
     return {
-      checked: (players ?? []).length,
+      checked: players.length,
       updated,
-      missing,
+      missing: notFound,
     };
   }
 
