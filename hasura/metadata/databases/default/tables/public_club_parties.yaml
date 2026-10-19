@@ -1,63 +1,71 @@
-﻿table:
+table:
   name: club_parties
   schema: public
 object_relationships:
-  - name: club
-    using:
-      foreign_key_constraint_on: club_id
-  - name: leader
-    using:
-      foreign_key_constraint_on: leader_steam_id
+- name: club
+  using:
+    foreign_key_constraint_on: club_id
+- name: leader
+  using:
+    foreign_key_constraint_on: leader_steam_id
 array_relationships:
-  - name: members
-    using:
-      foreign_key_constraint_on:
-        column: party_id
-        table:
-          name: club_party_members
-          schema: public
+- name: members
+  using:
+    foreign_key_constraint_on:
+      column: party_id
+      table:
+        name: club_party_members
+        schema: public
 insert_permissions:
-  - role: user
-    permission:
-      check:
-        club:
-          members:
-            steam_id:
-              _eq: X-Hasura-User-Id
-      set:
-        leader_steam_id: x-hasura-user-id
-      columns:
-        - club_id
-        - title
-        - listed
-        - min_elo
-        - max_elo
+- role: user
+  permission:
+    check:
+      club:
+        members:
+          steam_id:
+            _eq: X-Hasura-User-Id
+    set:
+      leader_steam_id: x-hasura-user-id
+    columns:
+    - club_id
+    - title
+    - listed
+    - min_elo
+    - max_elo
 select_permissions:
-  - role: guest
-    permission:
-      columns: '*'
-      filter:
-        listed:
-          _eq: true
-  - role: user
-    permission:
-      columns: '*'
-      filter: {}
+- role: guest
+  permission:
+    columns: &id001
+    - id
+    - club_id
+    - leader_steam_id
+    - title
+    - listed
+    - min_elo
+    - max_elo
+    - created_at
+    filter:
+      listed:
+        _eq: true
+- role: user
+  permission:
+    columns: *id001
+    filter: {}
 update_permissions:
-  - role: user
-    permission:
-      columns:
-        - title
-        - listed
-        - min_elo
-        - max_elo
-      filter:
-        leader_steam_id:
-          _eq: X-Hasura-User-Id
-      check: {}
+- role: user
+  permission:
+    columns:
+    - title
+    - listed
+    - min_elo
+    - max_elo
+    filter:
+      leader_steam_id:
+        _eq: X-Hasura-User-Id
+    check: {}
 delete_permissions:
-  - role: user
-    permission:
-      filter:
-        leader_steam_id:
-          _eq: X-Hasura-User-Id
+- role: user
+  permission:
+    filter:
+      leader_steam_id:
+        _eq: X-Hasura-User-Id

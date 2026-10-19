@@ -1,21 +1,23 @@
-﻿table:
+table:
   name: club_leaderboard_entries
   schema: public
 object_relationships:
-  - name: leaderboard
-    using:
-      foreign_key_constraint_on: leaderboard_id
-  - name: player
-    using:
-      foreign_key_constraint_on: steam_id
+- name: leaderboard
+  using:
+    foreign_key_constraint_on: leaderboard_id
+- name: player
+  using:
+    foreign_key_constraint_on: steam_id
 select_permissions:
-  - role: guest
-    permission:
-      columns: '*'
-      filter: {}
-      allow_aggregations: true
-  - role: user
-    permission:
-      columns: '*'
-      filter: {}
-      allow_aggregations: true
+- role: guest
+  permission:
+    columns:
+    - leaderboard_id
+    - steam_id
+    - points
+    - wins
+    - losses
+    - streak
+    - updated_at
+    filter: {}
+    allow_aggregations: true

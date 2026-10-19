@@ -1,57 +1,64 @@
-﻿table:
+table:
   name: club_messages
   schema: public
 object_relationships:
-  - name: channel
-    using:
-      foreign_key_constraint_on: channel_id
-  - name: club
-    using:
-      foreign_key_constraint_on: club_id
-  - name: author
-    using:
-      foreign_key_constraint_on: author_steam_id
+- name: channel
+  using:
+    foreign_key_constraint_on: channel_id
+- name: club
+  using:
+    foreign_key_constraint_on: club_id
+- name: author
+  using:
+    foreign_key_constraint_on: author_steam_id
 insert_permissions:
-  - role: user
-    permission:
-      check:
-        club:
-          members:
-            steam_id:
-              _eq: X-Hasura-User-Id
-      set:
-        author_steam_id: x-hasura-user-id
-      columns:
-        - channel_id
-        - club_id
-        - body
+- role: user
+  permission:
+    check:
+      club:
+        members:
+          steam_id:
+            _eq: X-Hasura-User-Id
+    set:
+      author_steam_id: x-hasura-user-id
+    columns:
+    - channel_id
+    - club_id
+    - body
 select_permissions:
-  - role: user
-    permission:
-      columns: '*'
-      filter:
-        club:
-          members:
-            steam_id:
-              _eq: X-Hasura-User-Id
+- role: user
+  permission:
+    columns:
+    - id
+    - channel_id
+    - club_id
+    - author_steam_id
+    - body
+    - created_at
+    - deleted_at
+    filter:
+      club:
+        members:
+          steam_id:
+            _eq: X-Hasura-User-Id
 update_permissions:
-  - role: user
-    permission:
-      columns:
-        - deleted_at
-        - body
-      filter:
-        _or:
-          - author_steam_id:
-              _eq: X-Hasura-User-Id
-          - club:
-              members:
-                _and:
-                  - steam_id:
-                      _eq: X-Hasura-User-Id
-                  - role:
-                      _in:
-                        - owner
-                        - admin
-                        - moderator
-      check: {}
+- role: user
+  permission:
+    columns:
+    - deleted_at
+    - body
+    filter:
+      _or:
+      - author_steam_id:
+          _eq: X-Hasura-User-Id
+      - club:
+          members:
+            _and:
+            - steam_id:
+                _eq: X-Hasura-User-Id
+            - role:
+                _in:
+                - owner
+                - admin
+                - moderator
+    check: {}

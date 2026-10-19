@@ -1,79 +1,84 @@
-﻿table:
+table:
   name: club_queues
   schema: public
 object_relationships:
-  - name: club
-    using:
-      foreign_key_constraint_on: club_id
+- name: club
+  using:
+    foreign_key_constraint_on: club_id
 array_relationships:
-  - name: players
-    using:
-      foreign_key_constraint_on:
-        column: queue_id
-        table:
-          name: club_queue_players
-          schema: public
+- name: players
+  using:
+    foreign_key_constraint_on:
+      column: queue_id
+      table:
+        name: club_queue_players
+        schema: public
 insert_permissions:
-  - role: user
-    permission:
-      check:
-        club:
-          members:
-            _and:
-              - steam_id:
-                  _eq: X-Hasura-User-Id
-              - role:
-                  _in:
-                    - owner
-                    - admin
-      columns:
-        - club_id
-        - name
-        - region
-        - team_size
-        - min_players
-        - map_pool
-        - enabled
+- role: user
+  permission:
+    check:
+      club:
+        members:
+          _and:
+          - steam_id:
+              _eq: X-Hasura-User-Id
+          - role:
+              _in:
+              - owner
+              - admin
+    columns:
+    - club_id
+    - name
+    - region
+    - team_size
+    - min_players
+    - map_pool
+    - enabled
 select_permissions:
-  - role: guest
-    permission:
-      columns: '*'
-      filter: {}
-  - role: user
-    permission:
-      columns: '*'
-      filter: {}
+- role: guest
+  permission:
+    columns:
+    - id
+    - club_id
+    - name
+    - region
+    - team_size
+    - min_players
+    - map_pool
+    - enabled
+    - created_at
+    filter: {}
 update_permissions:
-  - role: user
-    permission:
-      columns:
-        - name
-        - region
-        - team_size
-        - min_players
-        - map_pool
-        - enabled
-      filter:
-        club:
-          members:
-            _and:
-              - steam_id:
-                  _eq: X-Hasura-User-Id
-              - role:
-                  _in:
-                    - owner
-                    - admin
-      check: {}
+- role: user
+  permission:
+    columns:
+    - name
+    - region
+    - team_size
+    - min_players
+    - map_pool
+    - enabled
+    filter:
+      club:
+        members:
+          _and:
+          - steam_id:
+              _eq: X-Hasura-User-Id
+          - role:
+              _in:
+              - owner
+              - admin
+    check: {}
 delete_permissions:
-  - role: user
-    permission:
-      filter:
-        club:
-          members:
-            _and:
-              - steam_id:
-                  _eq: X-Hasura-User-Id
-              - role:
-                  _in:
-                    - owner
-                    - admin
+- role: user
+  permission:
+    filter:
+      club:
+        members:
+          _and:
+          - steam_id:
+              _eq: X-Hasura-User-Id
+          - role:
+              _in:
+              - owner
+              - admin

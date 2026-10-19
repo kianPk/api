@@ -1,16 +1,11 @@
 import {
   BadRequestException,
   ForbiddenException,
-  Inject,
   Injectable,
   Logger,
-  forwardRef,
 } from "@nestjs/common";
 import { randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
-import { SystemService } from "../system/system.service";
-import { SystemSettingName } from "../system/enums/SystemSettingName";
-import { MatchAssistantService } from "../matches/match-assistant/match-assistant.service";
 import { HasuraService } from "../hasura/hasura.service";
 
 @Injectable()
@@ -18,10 +13,7 @@ export class ClubsService {
   constructor(
     private readonly postgres: PostgresService,
     private readonly logger: Logger,
-    private readonly system: SystemService,
     private readonly hasura: HasuraService,
-    @Inject(forwardRef(() => MatchAssistantService))
-    private readonly matchAssistant: MatchAssistantService,
   ) {}
 
   public async acceptClubInvite(inviteId: string, steamId: string) {
@@ -206,11 +198,13 @@ export class ClubsService {
   }
 
   public async joinClubQueue(queueId: string, steamId: string) {
-    const enabled = await this.system.getSetting(
-      SystemSettingName.ClubsQueuesEnabled,
-      false,
+    const flag = await this.postgres.query<Array<{ value: string }>>(
+      `SELECT value FROM public.settings
+       WHERE name = 'public.clubs_queues_enabled' LIMIT 1`,
     );
-    if (!enabled) throw new BadRequestException("Club queues are disabled");
+    if ((flag.at(0)?.value ?? "false") !== "true") {
+      throw new BadRequestException("Club queues are disabled");
+    }
 
     const q = await this.postgres.query<
       Array<{ club_id: string; enabled: boolean; min_players: number }>
@@ -281,38 +275,11 @@ export class ClubsService {
     );
 
     try {
-      const match = await this.matchAssistant.createMatchBasedOnType(
-        "Competitive" as any,
-        "Competitive" as any,
-        {
-          mr: 12,
-          best_of: 1,
-          knife: true,
-          overtime: true,
-          timeout_setting: "Admin" as any,
-          region: queue.region || undefined,
-        },
+      const match = await this.createClubInHouseMatch(
+        team1,
+        team2,
+        queue.region,
       );
-
-      await this.hasura.mutation({
-        insert_match_lineup_players: {
-          __args: {
-            objects: [
-              ...team1.map((steam_id) => ({
-                steam_id,
-                match_lineup_id: match.lineup_1_id,
-              })),
-              ...team2.map((steam_id) => ({
-                steam_id,
-                match_lineup_id: match.lineup_2_id,
-              })),
-            ],
-          },
-          __typename: true,
-        },
-      });
-
-      await this.matchAssistant.updateMatchStatus(match.id, "Live" as any);
 
       await this.logActivity(queue.club_id, taken[0], "queue_match_created", {
         queue_id: queueId,
@@ -325,7 +292,6 @@ export class ClubsService {
       );
     } catch (err) {
       this.logger.error(`Club queue match create failed queue=${queueId}: ${err}`);
-      // Re-queue players so they are not silently dropped.
       for (const steamId of taken) {
         await this.postgres.query(
           `INSERT INTO public.club_queue_players (queue_id, steam_id)
@@ -337,6 +303,85 @@ export class ClubsService {
     }
 
     return players.length - taken.length;
+  }
+
+  /** Create a Competitive in-house match without importing MatchesModule (avoids cycles). */
+  private async createClubInHouseMatch(
+    team1: string[],
+    team2: string[],
+    region?: string | null,
+  ) {
+    const pools = await this.hasura.query({
+      map_pools: {
+        __args: {
+          where: { type: { _eq: "Competitive" }, enabled: { _eq: true } },
+          order_by: [{ seed: "desc" as const }],
+          limit: 1,
+        },
+        id: true,
+      },
+    });
+    const mapPoolId = pools.map_pools?.at(0)?.id;
+    if (!mapPoolId) {
+      throw new BadRequestException("No Competitive map pool configured");
+    }
+
+    const { insert_matches_one: match } = await this.hasura.mutation({
+      insert_matches_one: {
+        __args: {
+          object: {
+            region: region || undefined,
+            options: {
+              data: {
+                map_pool_id: mapPoolId,
+                map_veto: true,
+                mr: 12,
+                type: "Competitive",
+                best_of: 1,
+                overtime: true,
+                knife_round: true,
+                region_veto: !region,
+                timeout_setting: "Admin",
+              },
+            },
+          },
+        },
+        id: true,
+        lineup_1_id: true,
+        lineup_2_id: true,
+      },
+    });
+    if (!match?.id) throw new BadRequestException("Failed to create club match");
+
+    await this.hasura.mutation({
+      insert_match_lineup_players: {
+        __args: {
+          objects: [
+            ...team1.map((steam_id) => ({
+              steam_id,
+              match_lineup_id: match.lineup_1_id,
+            })),
+            ...team2.map((steam_id) => ({
+              steam_id,
+              match_lineup_id: match.lineup_2_id,
+            })),
+          ],
+        },
+        __typename: true,
+      },
+    });
+
+    await this.hasura.mutation({
+      update_matches_by_pk: {
+        __args: {
+          pk_columns: { id: match.id },
+          _set: { status: "Live" },
+        },
+        id: true,
+      },
+    });
+
+    return match;
   }
 
   public async addClubPartyGuest(

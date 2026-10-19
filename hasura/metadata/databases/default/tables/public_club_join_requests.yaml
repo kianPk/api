@@ -1,74 +1,82 @@
-﻿table:
+table:
   name: club_join_requests
   schema: public
 object_relationships:
-  - name: club
-    using:
-      foreign_key_constraint_on: club_id
-  - name: player
-    using:
-      foreign_key_constraint_on: steam_id
+- name: club
+  using:
+    foreign_key_constraint_on: club_id
+- name: player
+  using:
+    foreign_key_constraint_on: steam_id
 insert_permissions:
-  - role: user
-    permission:
-      check:
-        club:
-          join_mode:
-            _eq: request
-      set:
-        steam_id: x-hasura-user-id
-        status: pending
-      columns:
-        - club_id
-        - message
+- role: user
+  permission:
+    check:
+      club:
+        join_mode:
+          _eq: request
+    set:
+      steam_id: x-hasura-user-id
+      status: pending
+    columns:
+    - club_id
+    - message
 select_permissions:
-  - role: user
-    permission:
-      columns: '*'
-      filter:
-        _or:
-          - steam_id:
-              _eq: X-Hasura-User-Id
-          - club:
-              members:
-                _and:
-                  - steam_id:
-                      _eq: X-Hasura-User-Id
-                  - role:
-                      _in:
-                        - owner
-                        - admin
-update_permissions:
-  - role: user
-    permission:
-      columns:
-        - status
-        - reviewed_by_steam_id
-        - reviewed_at
-      filter:
-        club:
+- role: user
+  permission:
+    columns:
+    - id
+    - club_id
+    - steam_id
+    - message
+    - status
+    - reviewed_by_steam_id
+    - created_at
+    - reviewed_at
+    filter:
+      _or:
+      - steam_id:
+          _eq: X-Hasura-User-Id
+      - club:
           members:
             _and:
-              - steam_id:
-                  _eq: X-Hasura-User-Id
-              - role:
-                  _in:
-                    - owner
-                    - admin
-      check: {}
-delete_permissions:
-  - role: user
-    permission:
-      filter:
-        _or:
+            - steam_id:
+                _eq: X-Hasura-User-Id
+            - role:
+                _in:
+                - owner
+                - admin
+update_permissions:
+- role: user
+  permission:
+    columns:
+    - status
+    - reviewed_by_steam_id
+    - reviewed_at
+    filter:
+      club:
+        members:
+          _and:
           - steam_id:
               _eq: X-Hasura-User-Id
-          - club:
-              members:
-                _and:
-                  - steam_id:
-                      _eq: X-Hasura-User-Id
-                  - role:
-                      _in:
-                        - owner
-                        - admin
+          - role:
+              _in:
+              - owner
+              - admin
+    check: {}
+delete_permissions:
+- role: user
+  permission:
+    filter:
+      _or:
+      - steam_id:
+          _eq: X-Hasura-User-Id
+      - club:
+          members:
+            _and:
+            - steam_id:
+                _eq: X-Hasura-User-Id
+            - role:
+                _in:
+                - owner
+                - admin

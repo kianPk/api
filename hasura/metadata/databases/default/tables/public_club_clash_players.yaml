@@ -1,31 +1,30 @@
-﻿table:
+table:
   name: club_clash_players
   schema: public
 object_relationships:
-  - name: event
-    using:
-      foreign_key_constraint_on: event_id
-  - name: club
-    using:
-      foreign_key_constraint_on: club_id
-  - name: player
-    using:
-      foreign_key_constraint_on: steam_id
+- name: event
+  using:
+    foreign_key_constraint_on: event_id
+- name: club
+  using:
+    foreign_key_constraint_on: club_id
+- name: player
+  using:
+    foreign_key_constraint_on: steam_id
 select_permissions:
-  - role: guest
-    permission:
-      columns: '*'
-      filter: {}
-  - role: user
-    permission:
-      columns: '*'
-      filter: {}
+- role: guest
+  permission:
+    columns:
+    - event_id
+    - steam_id
+    - club_id
+    filter: {}
 insert_permissions:
-  - role: user
-    permission:
-      check: {}
-      set:
-        steam_id: x-hasura-user-id
-      columns:
-        - event_id
-        - club_id
+- role: user
+  permission:
+    check: {}
+    set:
+      steam_id: x-hasura-user-id
+    columns:
+    - event_id
+    - club_id

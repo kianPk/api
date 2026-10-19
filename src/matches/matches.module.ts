@@ -88,7 +88,7 @@ import { ClubsModule } from "../clubs/clubs.module";
     HasuraModule,
     MediaMtxModule,
     AnticheatModule,
-    forwardRef(() => ClubsModule),
+    ClubsModule,
 
     forwardRef(() => RconModule),
     CacheModule,
