@@ -2,6 +2,9 @@ table:
   name: players
   schema: public
 object_relationships:
+  - name: primary_club
+    using:
+      foreign_key_constraint_on: primary_club_id
   - name: stats
     using:
       manual_configuration:
@@ -12,6 +15,13 @@ object_relationships:
           name: player_stats
           schema: public
 array_relationships:
+  - name: club_memberships
+    using:
+      foreign_key_constraint_on:
+        column: steam_id
+        table:
+          name: club_members
+          schema: public
   - name: abandoned_matches
     using:
       foreign_key_constraint_on:
@@ -451,6 +461,7 @@ select_permissions:
         - roster_image_url
         - show_match_ready_modal
         - steam_id
+        - primary_club_id
         - vac_banned
         - vac_ban_count
         - game_ban_count
@@ -502,6 +513,7 @@ select_permissions:
         - roster_image_url
         - show_match_ready_modal
         - steam_id
+        - primary_club_id
         - vac_banned
         - vac_ban_count
         - game_ban_count
@@ -555,6 +567,7 @@ select_permissions:
         - roster_image_url
         - show_match_ready_modal
         - steam_id
+        - primary_club_id
         - vac_banned
         - vac_ban_count
         - game_ban_count

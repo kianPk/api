@@ -1,0 +1,57 @@
+﻿table:
+  name: club_bans
+  schema: public
+object_relationships:
+  - name: club
+    using:
+      foreign_key_constraint_on: club_id
+  - name: player
+    using:
+      foreign_key_constraint_on: steam_id
+insert_permissions:
+  - role: user
+    permission:
+      check:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin
+      set:
+        banned_by_steam_id: x-hasura-user-id
+      columns:
+        - club_id
+        - steam_id
+        - reason
+select_permissions:
+  - role: user
+    permission:
+      columns: '*'
+      filter:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin
+                    - moderator
+delete_permissions:
+  - role: user
+    permission:
+      filter:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin

@@ -1,0 +1,54 @@
+﻿table:
+  name: club_channels
+  schema: public
+object_relationships:
+  - name: club
+    using:
+      foreign_key_constraint_on: club_id
+array_relationships:
+  - name: messages
+    using:
+      foreign_key_constraint_on:
+        column: channel_id
+        table:
+          name: club_messages
+          schema: public
+insert_permissions:
+  - role: user
+    permission:
+      check:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin
+      columns:
+        - club_id
+        - name
+        - slug
+select_permissions:
+  - role: guest
+    permission:
+      columns: '*'
+      filter: {}
+  - role: user
+    permission:
+      columns: '*'
+      filter: {}
+delete_permissions:
+  - role: user
+    permission:
+      filter:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin

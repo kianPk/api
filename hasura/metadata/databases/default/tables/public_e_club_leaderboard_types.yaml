@@ -1,0 +1,13 @@
+﻿table:
+  name: e_club_leaderboard_types
+  schema: public
+is_enum: true
+select_permissions:
+  - role: guest
+    permission:
+      columns: '*'
+      filter: {}
+  - role: user
+    permission:
+      columns: '*'
+      filter: {}

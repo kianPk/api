@@ -1,0 +1,38 @@
+﻿table:
+  name: club_party_members
+  schema: public
+object_relationships:
+  - name: party
+    using:
+      foreign_key_constraint_on: party_id
+  - name: player
+    using:
+      foreign_key_constraint_on: steam_id
+insert_permissions:
+  - role: user
+    permission:
+      check: {}
+      set:
+        steam_id: x-hasura-user-id
+      columns:
+        - party_id
+        - is_guest
+select_permissions:
+  - role: guest
+    permission:
+      columns: '*'
+      filter: {}
+  - role: user
+    permission:
+      columns: '*'
+      filter: {}
+delete_permissions:
+  - role: user
+    permission:
+      filter:
+        _or:
+          - steam_id:
+              _eq: X-Hasura-User-Id
+          - party:
+              leader_steam_id:
+                _eq: X-Hasura-User-Id

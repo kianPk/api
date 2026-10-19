@@ -1,0 +1,71 @@
+﻿table:
+  name: club_leaderboards
+  schema: public
+object_relationships:
+  - name: club
+    using:
+      foreign_key_constraint_on: club_id
+array_relationships:
+  - name: entries
+    using:
+      foreign_key_constraint_on:
+        column: leaderboard_id
+        table:
+          name: club_leaderboard_entries
+          schema: public
+insert_permissions:
+  - role: user
+    permission:
+      check:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin
+      columns:
+        - club_id
+        - name
+        - type
+        - points_win
+        - points_loss
+        - starting_points
+        - starts_at
+        - ends_at
+select_permissions:
+  - role: guest
+    permission:
+      columns: '*'
+      filter: {}
+  - role: user
+    permission:
+      columns: '*'
+      filter: {}
+update_permissions:
+  - role: user
+    permission:
+      columns:
+        - name
+        - points_win
+        - points_loss
+        - starting_points
+        - starts_at
+        - ends_at
+        - frozen
+      filter:
+        _and:
+          - frozen:
+              _eq: false
+          - club:
+              members:
+                _and:
+                  - steam_id:
+                      _eq: X-Hasura-User-Id
+                  - role:
+                      _in:
+                        - owner
+                        - admin
+      check: {}

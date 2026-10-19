@@ -1,0 +1,74 @@
+﻿table:
+  name: club_invite_links
+  schema: public
+object_relationships:
+  - name: club
+    using:
+      foreign_key_constraint_on: club_id
+insert_permissions:
+  - role: user
+    permission:
+      check:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin
+      set:
+        created_by_steam_id: x-hasura-user-id
+      columns:
+        - club_id
+        - code
+        - max_uses
+        - expires_at
+        - bypass_requirements
+select_permissions:
+  - role: user
+    permission:
+      columns: '*'
+      filter:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin
+update_permissions:
+  - role: user
+    permission:
+      columns:
+        - max_uses
+        - expires_at
+        - bypass_requirements
+        - revoked_at
+      filter:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin
+      check: {}
+delete_permissions:
+  - role: user
+    permission:
+      filter:
+        club:
+          members:
+            _and:
+              - steam_id:
+                  _eq: X-Hasura-User-Id
+              - role:
+                  _in:
+                    - owner
+                    - admin

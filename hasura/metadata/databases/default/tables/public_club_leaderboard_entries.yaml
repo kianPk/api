@@ -1,0 +1,21 @@
+﻿table:
+  name: club_leaderboard_entries
+  schema: public
+object_relationships:
+  - name: leaderboard
+    using:
+      foreign_key_constraint_on: leaderboard_id
+  - name: player
+    using:
+      foreign_key_constraint_on: steam_id
+select_permissions:
+  - role: guest
+    permission:
+      columns: '*'
+      filter: {}
+      allow_aggregations: true
+  - role: user
+    permission:
+      columns: '*'
+      filter: {}
+      allow_aggregations: true

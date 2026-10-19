@@ -81,12 +81,15 @@ import { CameraController } from "./camera/camera.controller";
 import { CameraService } from "./camera/camera.service";
 import { CameraMonitorService } from "./camera/camera-monitor.service";
 import { AnticheatModule } from "../anticheat/anticheat.module";
+import { ClubsModule } from "../clubs/clubs.module";
 
 @Module({
   imports: [
     HasuraModule,
     MediaMtxModule,
     AnticheatModule,
+    forwardRef(() => ClubsModule),
+
     forwardRef(() => RconModule),
     CacheModule,
     RedisModule,

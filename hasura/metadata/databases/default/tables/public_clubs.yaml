@@ -1,0 +1,181 @@
+table:
+  name: clubs
+  schema: public
+object_relationships:
+  - name: owner
+    using:
+      foreign_key_constraint_on: owner_steam_id
+array_relationships:
+  - name: members
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_members
+          schema: public
+  - name: invites
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_invites
+          schema: public
+  - name: invite_links
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_invite_links
+          schema: public
+  - name: join_requests
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_join_requests
+          schema: public
+  - name: bans
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_bans
+          schema: public
+  - name: activity
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_activity
+          schema: public
+  - name: channels
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_channels
+          schema: public
+  - name: leaderboards
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_leaderboards
+          schema: public
+  - name: queues
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_queues
+          schema: public
+  - name: parties
+    using:
+      foreign_key_constraint_on:
+        column: club_id
+        table:
+          name: club_parties
+          schema: public
+computed_fields:
+  - name: role
+    definition:
+      function:
+        name: club_role
+        schema: public
+      session_argument: hasura_session
+  - name: can_manage
+    definition:
+      function:
+        name: can_manage_club_cf
+        schema: public
+      session_argument: hasura_session
+insert_permissions:
+  - role: user
+    permission:
+      check: {}
+      set:
+        owner_steam_id: x-hasura-user-id
+      columns:
+        - name
+        - short_name
+        - avatar_url
+        - cover_url
+        - description
+        - join_mode
+        - min_elo
+        - min_faceit_level
+select_permissions:
+  - role: guest
+    permission:
+      columns:
+        - id
+        - name
+        - slug
+        - short_name
+        - avatar_url
+        - cover_url
+        - description
+        - join_mode
+        - owner_steam_id
+        - min_elo
+        - min_faceit_level
+        - created_at
+        - updated_at
+      computed_fields:
+        - role
+        - can_manage
+      filter: {}
+      allow_aggregations: true
+  - role: user
+    permission:
+      columns:
+        - id
+        - name
+        - slug
+        - short_name
+        - avatar_url
+        - cover_url
+        - description
+        - join_mode
+        - owner_steam_id
+        - min_elo
+        - min_faceit_level
+        - created_at
+        - updated_at
+      computed_fields:
+        - role
+        - can_manage
+      filter: {}
+      allow_aggregations: true
+update_permissions:
+  - role: user
+    permission:
+      columns:
+        - name
+        - short_name
+        - avatar_url
+        - cover_url
+        - description
+        - join_mode
+        - min_elo
+        - min_faceit_level
+        - owner_steam_id
+      filter:
+        _or:
+          - owner_steam_id:
+              _eq: X-Hasura-User-Id
+          - members:
+              _and:
+                - steam_id:
+                    _eq: X-Hasura-User-Id
+                - role:
+                    _in:
+                      - owner
+                      - admin
+      check: {}
+delete_permissions:
+  - role: user
+    permission:
+      filter:
+        owner_steam_id:
+          _eq: X-Hasura-User-Id

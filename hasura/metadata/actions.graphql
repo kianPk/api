@@ -81,6 +81,51 @@ type Mutation {
 }
 
 type Mutation {
+  acceptClubInvite(invite_id: uuid!): SuccessOutput
+}
+
+type Mutation {
+  redeemClubInviteLink(code: String!): RedeemClubInviteLinkOutput
+}
+
+type Mutation {
+  createClubInviteLink(
+    club_id: uuid!
+    max_uses: Int
+    expires_hours: Int
+    bypass_requirements: Boolean
+  ): CreateClubInviteLinkOutput
+}
+
+type Mutation {
+  reviewClubJoinRequest(request_id: uuid!, accept: Boolean!): SuccessOutput
+}
+
+type Mutation {
+  joinClubOpen(club_id: uuid!): SuccessOutput
+}
+
+type Mutation {
+  setPrimaryClub(club_id: uuid!): SuccessOutput
+}
+
+type Mutation {
+  joinClubQueue(queue_id: uuid!): ClubQueueJoinOutput
+}
+
+type Mutation {
+  leaveClubQueue(queue_id: uuid!): SuccessOutput
+}
+
+type Mutation {
+  registerClubClash(event_id: uuid!, club_id: uuid!): SuccessOutput
+}
+
+type Mutation {
+  addClubPartyGuest(party_id: uuid!, steam_id: String!): SuccessOutput
+}
+
+type Mutation {
   approveNameChange(
     steam_id: bigint!
     name: String!
@@ -1024,6 +1069,22 @@ type MeResponse {
 
 type SuccessOutput {
   success: Boolean!
+}
+
+type RedeemClubInviteLinkOutput {
+  success: Boolean!
+  club_id: uuid
+}
+
+type CreateClubInviteLinkOutput {
+  success: Boolean!
+  id: uuid
+  code: String
+}
+
+type ClubQueueJoinOutput {
+  success: Boolean!
+  queued: Int
 }
 
 type WebPushPlatformCount {

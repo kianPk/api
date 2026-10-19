@@ -68,6 +68,7 @@ export enum SystemSettingName {
   // id belongs to, and assertMember is deliberately built not to care.
   VideoChatEnabled = "public.video_chat_enabled",
   LeaguesEnabled = "public.leagues_enabled",
+  ClubsQueuesEnabled = "public.clubs_queues_enabled",
   UtilityLibraryEnabled = "public.utility_library_enabled",
   UtilityPracticeEnabled = "public.utility_practice_enabled",
   // Minutes an empty practice server is kept alive before the reaper stops it.

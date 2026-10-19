@@ -1,10 +1,30 @@
+import { Injectable, Logger, Scope } from "@nestjs/common";
 import MatchEventProcessor from "./abstracts/MatchEventProcessor";
 import { e_match_map_status_enum } from "../../../generated";
+import { HasuraService } from "../../hasura/hasura.service";
+import { MatchAssistantService } from "../match-assistant/match-assistant.service";
+import { ChatService } from "../../chat/chat.service";
+import { NotificationsService } from "../../notifications/notifications.service";
+import { AnticheatService } from "../../anticheat/anticheat.service";
+import { ClubsService } from "../../clubs/clubs.service";
 
+@Injectable({ scope: Scope.REQUEST })
 export default class MatchMapStatusEvent extends MatchEventProcessor<{
   status: e_match_map_status_enum;
   winning_lineup_id?: string;
 }> {
+  constructor(
+    logger: Logger,
+    hasura: HasuraService,
+    matchAssistant: MatchAssistantService,
+    chat: ChatService,
+    notifications: NotificationsService,
+    anticheat: AnticheatService,
+    private readonly clubs: ClubsService,
+  ) {
+    super(logger, hasura, matchAssistant, chat, notifications, anticheat);
+  }
+
   public async process() {
     const { matches_by_pk: match } = await this.hasura.query({
       matches_by_pk: {
@@ -186,6 +206,53 @@ export default class MatchMapStatusEvent extends MatchEventProcessor<{
       this.logger.warn(summaryLine);
     } else {
       this.logger.log(summaryLine);
+    }
+
+    await this.awardClubLeaderboardPoints(matchAfter.winning_lineup_id);
+  }
+
+  private async awardClubLeaderboardPoints(winningLineupId: string) {
+    try {
+      const { matches_by_pk } = await this.hasura.query({
+        matches_by_pk: {
+          __args: { id: this.matchId },
+          lineup_1: { players: { steam_id: true } },
+          lineup_2: { players: { steam_id: true } },
+          lineup_1_id: true,
+          lineup_2_id: true,
+          options: { type: true },
+        },
+      });
+      if (!matches_by_pk) return;
+      // Phase 5: only platform ranked modes count for club LBs.
+      const ranked = new Set([
+        "Competitive",
+        "Wingman",
+        "Rush",
+        "Premier",
+        "Faceit",
+      ]);
+      if (!ranked.has(String(matches_by_pk.options?.type ?? ""))) return;
+      const winSide =
+        winningLineupId === matches_by_pk.lineup_1_id
+          ? (matches_by_pk.lineup_1?.players ?? [])
+          : (matches_by_pk.lineup_2?.players ?? []);
+      const loseSide =
+        winningLineupId === matches_by_pk.lineup_1_id
+          ? (matches_by_pk.lineup_2?.players ?? [])
+          : (matches_by_pk.lineup_1?.players ?? []);
+      for (const p of winSide) {
+        if (p?.steam_id)
+          await this.clubs.applyMatchPoints(String(p.steam_id), true);
+      }
+      for (const p of loseSide) {
+        if (p?.steam_id)
+          await this.clubs.applyMatchPoints(String(p.steam_id), false);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `club LB award failed match=${this.matchId}: ${err instanceof Error ? err.message : err}`,
+      );
     }
   }
 }

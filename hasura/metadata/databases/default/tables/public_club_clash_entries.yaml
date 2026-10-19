@@ -1,0 +1,19 @@
+﻿table:
+  name: club_clash_entries
+  schema: public
+object_relationships:
+  - name: event
+    using:
+      foreign_key_constraint_on: event_id
+  - name: club
+    using:
+      foreign_key_constraint_on: club_id
+select_permissions:
+  - role: guest
+    permission:
+      columns: '*'
+      filter: {}
+  - role: user
+    permission:
+      columns: '*'
+      filter: {}

@@ -68,6 +68,7 @@ import { IrrModule } from "./irr/irr.module";
 import { AnticheatModule } from "./anticheat/anticheat.module";
 import { ChallengesModule } from "./challenges/challenges.module";
 import { BattlePassModule } from "./battle-pass/battle-pass.module";
+import { ClubsModule } from "./clubs/clubs.module";
 
 @Module({
   imports: [
@@ -171,6 +172,7 @@ import { BattlePassModule } from "./battle-pass/battle-pass.module";
     AnticheatModule,
     ChallengesModule,
     BattlePassModule,
+    ClubsModule,
     EventsModule,
     ScrimsModule,
     LeaguesModule,
