@@ -216,8 +216,8 @@ export default class MatchMapStatusEvent extends MatchEventProcessor<{
       const { matches_by_pk } = await this.hasura.query({
         matches_by_pk: {
           __args: { id: this.matchId },
-          lineup_1: { players: { steam_id: true } },
-          lineup_2: { players: { steam_id: true } },
+          lineup_1: { lineup_players: { steam_id: true } },
+          lineup_2: { lineup_players: { steam_id: true } },
           lineup_1_id: true,
           lineup_2_id: true,
           options: { type: true },
@@ -235,12 +235,12 @@ export default class MatchMapStatusEvent extends MatchEventProcessor<{
       if (!ranked.has(String(matches_by_pk.options?.type ?? ""))) return;
       const winSide =
         winningLineupId === matches_by_pk.lineup_1_id
-          ? (matches_by_pk.lineup_1?.players ?? [])
-          : (matches_by_pk.lineup_2?.players ?? []);
+          ? (matches_by_pk.lineup_1?.lineup_players ?? [])
+          : (matches_by_pk.lineup_2?.lineup_players ?? []);
       const loseSide =
         winningLineupId === matches_by_pk.lineup_1_id
-          ? (matches_by_pk.lineup_2?.players ?? [])
-          : (matches_by_pk.lineup_1?.players ?? []);
+          ? (matches_by_pk.lineup_2?.lineup_players ?? [])
+          : (matches_by_pk.lineup_1?.lineup_players ?? []);
       for (const p of winSide) {
         if (p?.steam_id)
           await this.clubs.applyMatchPoints(String(p.steam_id), true);
