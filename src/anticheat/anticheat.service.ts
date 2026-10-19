@@ -43,9 +43,9 @@ const CHALLENGE_TTL_SECONDS = 45;
 /** Reject attest clocks skewed more than this (seconds). */
 const ATTEST_CLOCK_SKEW_SECONDS = 300;
 
-/** Minimum launcher build that speaks the signed-challenge protocol. */
+/** Minimum launcher build allowed to attest / stay in ranked. Older builds are rejected. */
 const MIN_CLIENT_VERSION =
-  process.env.AC_LAUNCHER_MIN_VERSION?.trim() || "0.3.2";
+  process.env.AC_LAUNCHER_MIN_VERSION?.trim() || "0.5.0";
 
 /**
  * SteamIDs that may queue / play Ranked without a live Windows launcher.
@@ -932,8 +932,10 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     if (LAUNCHER_EXEMPT_STEAM_IDS.has(String(steamId || "").trim())) {
       return true;
     }
-    const rows = await this.postgres.query<Array<{ id: string }>>(
-      `SELECT a.id::text
+    const rows = await this.postgres.query<
+      Array<{ id: string; client_version: string | null }>
+    >(
+      `SELECT a.id::text, d.client_version
        FROM public.ac_attestations a
        JOIN public.ac_devices d ON d.id = a.device_id
        WHERE a.steam_id = $1
@@ -945,7 +947,13 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
        LIMIT 1`,
       [steamId, String(DEVICE_ALIVE_SECONDS)],
     );
-    return rows.length > 0;
+    const row = rows.at(0);
+    if (!row) return false;
+    // Drop sessions still open on a launcher older than the enforced minimum.
+    return this.isVersionAtLeast(
+      String(row.client_version || "").trim(),
+      MIN_CLIENT_VERSION,
+    );
   }
 
   /**
