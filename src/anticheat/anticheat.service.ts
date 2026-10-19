@@ -804,13 +804,23 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
   } {
     // Advertise real latest so older clients get the update prompt.
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
+    // Keep version + download_url in lockstep — a mismatch (e.g. min 0.5.0 but
+    // URL still pointing at 0.4.8) causes an infinite auto-update loop.
     const version = process.env.AC_LAUNCHER_VERSION || "0.5.0";
+    const defaultUrl =
+      "https://github.com/kianPk/web/releases/download/client-v0.5.0/YGuardAC-0.5.0-client.zip";
+    let downloadUrl =
+      process.env.AC_LAUNCHER_DOWNLOAD_URL?.trim() || defaultUrl;
+    // Guard: if env URL still advertises an older client zip, ignore it.
+    if (/client-v0\.[0-4]\./i.test(downloadUrl) || /YGuardAC-0\.[0-4]\./i.test(downloadUrl)) {
+      this.logger.warn(
+        `AC_LAUNCHER_DOWNLOAD_URL looks stale (${downloadUrl}); using ${defaultUrl}`,
+      );
+      downloadUrl = defaultUrl;
+    }
     return {
       version,
-      download_url:
-        process.env.AC_LAUNCHER_DOWNLOAD_URL ||
-        "https://github.com/kianPk/web/releases/download/client-v0.5.0/YGuardAC-0.5.0-client.zip",
-      // Force upgrade past clients that still show the old pair-again 401 text.
+      download_url: downloadUrl,
       mandatory: true,
       min_version: MIN_CLIENT_VERSION,
     };
