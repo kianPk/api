@@ -43,6 +43,14 @@ export class ClubsController {
   }
 
   @HasuraAction()
+  public async createClubOfficialTeam(data: { user: User; club_id: string }) {
+    return this.clubs.createClubOfficialTeam(
+      data.club_id,
+      String(data.user.steam_id),
+    );
+  }
+
+  @HasuraAction()
   public async leaveClub(data: { user: User; club_id: string }) {
     return this.clubs.leaveClub(data.club_id, String(data.user.steam_id));
   }

@@ -72,6 +72,15 @@ export class ClubsService {
     await this.assertCanOwnClub(target);
     try {
       await this.postgres.query(
+        `UPDATE public.teams t
+         SET owner_steam_id = $2::bigint
+         FROM public.clubs c
+         WHERE c.id = $1::uuid
+           AND c.official_team_id = t.id
+           AND t.owner_steam_id IS DISTINCT FROM $2::bigint`,
+        [clubId, target],
+      );
+      await this.postgres.query(
         `UPDATE public.clubs SET owner_steam_id = $2::bigint WHERE id = $1::uuid`,
         [clubId, target],
       );
@@ -91,6 +100,53 @@ export class ClubsService {
       });
       this.invalidateClanTags();
       return { success: true };
+    } catch (err) {
+      this.rethrowClubRule(err);
+    }
+  }
+
+  public async createClubOfficialTeam(clubId: string, actorSteamId: string) {
+    const clubs = await this.postgres.query<
+      Array<{
+        owner_steam_id: string;
+        name: string;
+        short_name: string | null;
+        official_team_id: string | null;
+      }>
+    >(
+      `SELECT owner_steam_id::text, name, short_name, official_team_id::text
+       FROM public.clubs WHERE id = $1::uuid`,
+      [clubId],
+    );
+    const club = clubs.at(0);
+    if (!club) throw new BadRequestException("Club not found");
+    if (
+      club.owner_steam_id !== actorSteamId &&
+      !(await this.isSiteAdmin(actorSteamId))
+    ) {
+      throw new ForbiddenException("Only the club owner can set the official team");
+    }
+    if (club.official_team_id) {
+      return { success: true, team_id: club.official_team_id };
+    }
+    const shortName = (club.short_name || club.name).replace(/\s+/g, "").slice(0, 5);
+    try {
+      const teams = await this.postgres.query<Array<{ id: string }>>(
+        `INSERT INTO public.teams (name, short_name, owner_steam_id)
+         VALUES ($1, $2, $3::bigint)
+         RETURNING id::text`,
+        [club.name, shortName || "CLUB", club.owner_steam_id],
+      );
+      const teamId = teams.at(0)?.id;
+      if (!teamId) throw new BadRequestException("Could not create team");
+      await this.postgres.query(
+        `UPDATE public.clubs SET official_team_id = $2::uuid WHERE id = $1::uuid`,
+        [clubId, teamId],
+      );
+      await this.logActivity(clubId, actorSteamId, "official_team", {
+        team_id: teamId,
+      });
+      return { success: true, team_id: teamId };
     } catch (err) {
       this.rethrowClubRule(err);
     }

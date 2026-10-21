@@ -339,13 +339,29 @@ BEGIN
         END IF;
     END IF;
 
+    IF NEW.club_id IS NOT NULL THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.clubs c
+            WHERE c.id = NEW.club_id
+              AND c.owner_steam_id = NEW.organizer_steam_id
+        ) THEN
+            RAISE EXCEPTION 'Only the club owner can tag a tournament with that club'
+                USING ERRCODE = '42501';
+        END IF;
+    END IF;
+
+    IF NEW.participation_mode = 'in_person'
+       AND (NEW.location IS NULL OR btrim(NEW.location) = '') THEN
+        RAISE EXCEPTION 'In-person tournaments need a venue' USING ERRCODE = '22000';
+    END IF;
+
     RETURN NEW;
 END;
 $$;
 
 DROP TRIGGER IF EXISTS tbi_tournaments ON public.tournaments;
 CREATE TRIGGER tbi_tournaments
-    BEFORE INSERT ON public.tournaments
+    BEFORE INSERT OR UPDATE ON public.tournaments
     FOR EACH ROW
     EXECUTE FUNCTION public.tbi_tournaments();
 
@@ -376,6 +392,28 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION public.tai_tournaments_in_person_lan()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.participation_mode = 'in_person' AND NEW.match_options_id IS NOT NULL THEN
+    UPDATE public.match_options
+    SET region_veto = false,
+        regions = COALESCE(
+          (SELECT array_agg(value) FROM public.server_regions WHERE is_lan IS TRUE),
+          regions
+        )
+    WHERE id = NEW.match_options_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS tai_tournaments_in_person_lan ON public.tournaments;
+CREATE TRIGGER tai_tournaments_in_person_lan
+  AFTER INSERT OR UPDATE OF participation_mode, match_options_id ON public.tournaments
+  FOR EACH ROW
+  EXECUTE FUNCTION public.tai_tournaments_in_person_lan();
 
 DROP TRIGGER IF EXISTS tau_tournaments_trophies ON public.tournaments;
 DROP FUNCTION IF EXISTS public.tau_tournaments_trophies();

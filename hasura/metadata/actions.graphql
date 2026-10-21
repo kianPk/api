@@ -102,6 +102,10 @@ type Mutation {
 }
 
 type Mutation {
+  createClubOfficialTeam(club_id: uuid!): CreateClubOfficialTeamOutput
+}
+
+type Mutation {
   grantPlayerTag(steam_id: String!, tag: String!): SuccessOutput
 }
 
@@ -1100,6 +1104,11 @@ type CreateClubOutput {
   success: Boolean!
   id: uuid
   slug: String
+}
+
+type CreateClubOfficialTeamOutput {
+  success: Boolean!
+  team_id: uuid
 }
 
 type RedeemClubInviteLinkOutput {

@@ -5,6 +5,12 @@ object_relationships:
   - name: admin
     using:
       foreign_key_constraint_on: organizer_steam_id
+  - name: club
+    using:
+      foreign_key_constraint_on: club_id
+  - name: participation
+    using:
+      foreign_key_constraint_on: participation_mode
   - name: league_season_division
     using:
       manual_configuration:
@@ -227,16 +233,20 @@ insert_permissions:
   - role: user
     permission:
       check:
-        _exists:
-          _table:
-            name: v_role_permissions
-            schema: public
-          _where:
-            _and:
-              - role:
-                  _eq: X-Hasura-Role
-              - can_create_tournaments:
-                  _eq: true
+        _or:
+          - _exists:
+              _table:
+                name: v_role_permissions
+                schema: public
+              _where:
+                _and:
+                  - role:
+                      _eq: X-Hasura-Role
+                  - can_create_tournaments:
+                      _eq: true
+          - club:
+              owner_steam_id:
+                _eq: X-Hasura-User-Id
       set:
         organizer_steam_id: x-hasura-user-id
       columns:
@@ -262,20 +272,26 @@ insert_permissions:
         - min_elo
         - min_role
         - registration_type
+        - club_id
+        - participation_mode
     comment: ""
   - role: tournament_organizer
     permission:
       check:
-        _exists:
-          _table:
-            name: v_role_permissions
-            schema: public
-          _where:
-            _and:
-              - role:
-                  _eq: X-Hasura-Role
-              - can_create_tournaments:
-                  _eq: true
+        _or:
+          - _exists:
+              _table:
+                name: v_role_permissions
+                schema: public
+              _where:
+                _and:
+                  - role:
+                      _eq: X-Hasura-Role
+                  - can_create_tournaments:
+                      _eq: true
+          - club:
+              owner_steam_id:
+                _eq: X-Hasura-User-Id
       set:
         organizer_steam_id: x-hasura-user-id
       columns:
@@ -318,6 +334,8 @@ insert_permissions:
         - min_elo
         - min_role
         - registration_type
+        - club_id
+        - participation_mode
     comment: ""
 select_permissions:
   - role: guest
@@ -352,6 +370,8 @@ select_permissions:
         - min_elo
         - min_role
         - registration_type
+        - club_id
+        - participation_mode
       computed_fields:
         - can_cancel
         - can_close_registration
@@ -427,6 +447,8 @@ select_permissions:
         - min_elo
         - min_role
         - registration_type
+        - club_id
+        - participation_mode
       computed_fields:
         - can_cancel
         - can_close_registration
@@ -488,6 +510,8 @@ select_permissions:
         - min_elo
         - min_role
         - registration_type
+        - club_id
+        - participation_mode
       computed_fields:
         - can_cancel
         - can_close_registration
@@ -561,6 +585,8 @@ update_permissions:
         - min_elo
         - min_role
         - registration_type
+        - club_id
+        - participation_mode
       filter:
         is_organizer:
           _eq: true
@@ -594,6 +620,8 @@ update_permissions:
         - min_elo
         - min_role
         - registration_type
+        - club_id
+        - participation_mode
       filter:
         is_organizer:
           _eq: true

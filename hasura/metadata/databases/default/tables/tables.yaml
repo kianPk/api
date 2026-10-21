@@ -84,6 +84,7 @@
 - "!include public_e_timeout_settings.yaml"
 - "!include public_e_tournament_categories.yaml"
 - "!include public_e_tournament_free_agent_statuses.yaml"
+- "!include public_e_tournament_participation_modes.yaml"
 - "!include public_e_tournament_registration_types.yaml"
 - "!include public_e_tournament_stage_types.yaml"
 - "!include public_e_tournament_status.yaml"

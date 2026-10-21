@@ -5,6 +5,9 @@ object_relationships:
 - name: owner
   using:
     foreign_key_constraint_on: owner_steam_id
+- name: official_team
+  using:
+    foreign_key_constraint_on: official_team_id
 array_relationships:
 - name: members
   using:
@@ -75,6 +78,13 @@ array_relationships:
       column: club_id
       table:
         name: club_parties
+        schema: public
+- name: tournaments
+  using:
+    foreign_key_constraint_on:
+      column: club_id
+      table:
+        name: tournaments
         schema: public
 computed_fields:
 - name: role
@@ -149,6 +159,7 @@ select_permissions:
     - owner_steam_id
     - min_elo
     - min_faceit_level
+    - official_team_id
     - created_at
     - updated_at
     computed_fields:
@@ -170,6 +181,7 @@ update_permissions:
     - join_mode
     - min_elo
     - min_faceit_level
+    - official_team_id
     filter:
       _or:
       - owner_steam_id:
@@ -196,6 +208,7 @@ update_permissions:
     - join_mode
     - min_elo
     - min_faceit_level
+    - official_team_id
     filter: {}
     check: {}
 delete_permissions:
