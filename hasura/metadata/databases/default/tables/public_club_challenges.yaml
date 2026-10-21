@@ -1,0 +1,87 @@
+table:
+  name: club_challenges
+  schema: public
+object_relationships:
+- name: club
+  using:
+    foreign_key_constraint_on: club_id
+- name: catalog
+  using:
+    foreign_key_constraint_on: catalog_id
+- name: created_by
+  using:
+    foreign_key_constraint_on: created_by_steam_id
+insert_permissions:
+- role: user
+  permission:
+    check:
+      club:
+        owner_steam_id:
+          _eq: X-Hasura-User-Id
+    set:
+      created_by_steam_id: x-hasura-user-id
+    columns:
+    - club_id
+    - catalog_id
+    - ends_at
+    - prize_ypoints
+    - prize_other
+- role: administrator
+  permission:
+    check: {}
+    set:
+      created_by_steam_id: x-hasura-user-id
+    columns:
+    - club_id
+    - catalog_id
+    - ends_at
+    - prize_ypoints
+    - prize_other
+    - active
+select_permissions:
+- role: guest
+  permission:
+    columns: &id001
+    - id
+    - club_id
+    - catalog_id
+    - created_by_steam_id
+    - ends_at
+    - prize_ypoints
+    - prize_other
+    - active
+    - created_at
+    filter: {}
+    allow_aggregations: true
+update_permissions:
+- role: user
+  permission:
+    columns:
+    - ends_at
+    - prize_ypoints
+    - prize_other
+    - active
+    filter:
+      club:
+        owner_steam_id:
+          _eq: X-Hasura-User-Id
+    check: {}
+- role: administrator
+  permission:
+    columns:
+    - ends_at
+    - prize_ypoints
+    - prize_other
+    - active
+    filter: {}
+    check: {}
+delete_permissions:
+- role: user
+  permission:
+    filter:
+      club:
+        owner_steam_id:
+          _eq: X-Hasura-User-Id
+- role: administrator
+  permission:
+    filter: {}

@@ -1,0 +1,11 @@
+table:
+  name: e_club_challenge_difficulties
+  schema: public
+is_enum: true
+select_permissions:
+- role: guest
+  permission:
+    columns:
+    - value
+    - description
+    filter: {}

@@ -1,0 +1,26 @@
+table:
+  name: club_challenge_catalog
+  schema: public
+array_relationships:
+- name: activations
+  using:
+    foreign_key_constraint_on:
+      column: catalog_id
+      table:
+        name: club_challenges
+        schema: public
+select_permissions:
+- role: guest
+  permission:
+    columns:
+    - id
+    - code
+    - difficulty
+    - category
+    - title
+    - title_fa
+    - description
+    - description_fa
+    - sort_order
+    filter: {}
+    allow_aggregations: true
