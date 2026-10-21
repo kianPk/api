@@ -4,6 +4,7 @@ import { MatchAssistantService } from "../../match-assistant/match-assistant.ser
 import { ChatService } from "../../../chat/chat.service";
 import { NotificationsService } from "../../../notifications/notifications.service";
 import { AnticheatService } from "../../../anticheat/anticheat.service";
+import { ClubsService } from "../../../clubs/clubs.service";
 
 @Injectable({ scope: Scope.REQUEST })
 export default abstract class MatchEventProcessor<T> {
@@ -17,6 +18,7 @@ export default abstract class MatchEventProcessor<T> {
     protected readonly chat: ChatService,
     protected readonly notifications: NotificationsService,
     protected readonly anticheat: AnticheatService,
+    protected readonly clubs: ClubsService,
   ) {}
 
   public setData(matchId: string, data: T) {

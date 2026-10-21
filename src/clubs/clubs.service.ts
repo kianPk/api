@@ -36,11 +36,15 @@ export class ClubsService {
     const name = input.name.trim();
     if (name.length < 2) throw new BadRequestException("Club name is required");
     const shortName = (input.short_name || "").trim().slice(0, 5) || null;
-    const joinMode = ["open", "request", "invite_only"].includes(input.join_mode)
+    const joinMode = ["open", "request", "invite_only"].includes(
+      input.join_mode,
+    )
       ? input.join_mode
       : "open";
     try {
-      const rows = await this.postgres.query<Array<{ id: string; slug: string }>>(
+      const rows = await this.postgres.query<
+        Array<{ id: string; slug: string }>
+      >(
         `INSERT INTO public.clubs (name, short_name, description, join_mode, owner_steam_id)
          VALUES ($1, $2, $3, $4, $5::bigint)
          RETURNING id::text, slug`,
@@ -68,7 +72,10 @@ export class ClubsService {
     );
     const club = clubs.at(0);
     if (!club) throw new BadRequestException("Club not found");
-    if (club.owner_steam_id !== actorSteamId && !(await this.isSiteAdmin(actorSteamId))) {
+    if (
+      club.owner_steam_id !== actorSteamId &&
+      !(await this.isSiteAdmin(actorSteamId))
+    ) {
       throw new ForbiddenException("Only the club owner can transfer it");
     }
     await this.assertCanOwnClub(target);
@@ -126,12 +133,16 @@ export class ClubsService {
       club.owner_steam_id !== actorSteamId &&
       !(await this.isSiteAdmin(actorSteamId))
     ) {
-      throw new ForbiddenException("Only the club owner can set the official team");
+      throw new ForbiddenException(
+        "Only the club owner can set the official team",
+      );
     }
     if (club.official_team_id) {
       return { success: true, team_id: club.official_team_id };
     }
-    const shortName = (club.short_name || club.name).replace(/\s+/g, "").slice(0, 5);
+    const shortName = (club.short_name || club.name)
+      .replace(/\s+/g, "")
+      .slice(0, 5);
     try {
       const teams = await this.postgres.query<Array<{ id: string }>>(
         `INSERT INTO public.teams (name, short_name, owner_steam_id)
@@ -175,7 +186,11 @@ export class ClubsService {
     return { success: true };
   }
 
-  public async grantPlayerTag(actorSteamId: string, steamId: string, tag: string) {
+  public async grantPlayerTag(
+    actorSteamId: string,
+    steamId: string,
+    tag: string,
+  ) {
     await this.assertSiteAdmin(actorSteamId);
     const normalized = this.normalizeTag(tag);
     await this.postgres.query(
@@ -189,7 +204,11 @@ export class ClubsService {
     return { success: true };
   }
 
-  public async revokePlayerTag(actorSteamId: string, steamId: string, tag: string) {
+  public async revokePlayerTag(
+    actorSteamId: string,
+    steamId: string,
+    tag: string,
+  ) {
     await this.assertSiteAdmin(actorSteamId);
     await this.postgres.query(
       `DELETE FROM public.player_tags
@@ -231,9 +250,10 @@ export class ClubsService {
     await this.assertNotBanned(invite.club_id, steamId);
     await this.assertJoinAllowed(steamId);
     await this.insertMember(invite.club_id, steamId);
-    await this.postgres.query(`DELETE FROM public.club_invites WHERE id = $1::uuid`, [
-      inviteId,
-    ]);
+    await this.postgres.query(
+      `DELETE FROM public.club_invites WHERE id = $1::uuid`,
+      [inviteId],
+    );
     await this.logActivity(invite.club_id, steamId, "member_joined", {
       via: "invite",
     });
@@ -410,9 +430,10 @@ export class ClubsService {
   }
 
   public async joinClubOpen(clubId: string, steamId: string) {
-    const clubs = await this.postgres.query<
-      Array<{ join_mode: string }>
-    >(`SELECT join_mode FROM public.clubs WHERE id = $1::uuid`, [clubId]);
+    const clubs = await this.postgres.query<Array<{ join_mode: string }>>(
+      `SELECT join_mode FROM public.clubs WHERE id = $1::uuid`,
+      [clubId],
+    );
     const club = clubs.at(0);
     if (!club) throw new BadRequestException("Club not found");
     if (club.join_mode !== "open")
@@ -534,7 +555,9 @@ export class ClubsService {
         `Club queue ${queueId} started match ${match.id} with ${taken.length} players`,
       );
     } catch (err) {
-      this.logger.error(`Club queue match create failed queue=${queueId}: ${err}`);
+      this.logger.error(
+        `Club queue match create failed queue=${queueId}: ${err}`,
+      );
       for (const steamId of taken) {
         await this.postgres.query(
           `INSERT INTO public.club_queue_players (queue_id, steam_id)
@@ -594,7 +617,8 @@ export class ClubsService {
         lineup_2_id: true,
       },
     });
-    if (!match?.id) throw new BadRequestException("Failed to create club match");
+    if (!match?.id)
+      throw new BadRequestException("Failed to create club match");
 
     await this.hasura.mutation({
       insert_match_lineup_players: {
@@ -764,7 +788,9 @@ export class ClubsService {
     if (this.clanTagCache && now - this.clanTagCache.at < CLAN_TAG_CACHE_MS) {
       return this.clanTagCache.map;
     }
-    const rows = await this.postgres.query<Array<{ steam_id: string; tag: string }>>(
+    const rows = await this.postgres.query<
+      Array<{ steam_id: string; tag: string }>
+    >(
       `SELECT DISTINCT ON (m.steam_id)
          m.steam_id::text AS steam_id,
          public.club_clan_tag(c.short_name, c.name) AS tag
@@ -844,9 +870,7 @@ export class ClubsService {
     if (cooldown?.[1] || msg.includes("club_join_cooldown")) {
       const until = cooldown?.[1]?.trim() || "";
       throw new ForbiddenException(
-        until
-          ? `Cannot join a club until ${until}`
-          : "Cannot join a club yet",
+        until ? `Cannot join a club until ${until}` : "Cannot join a club yet",
       );
     }
     throw err;
@@ -923,8 +947,15 @@ export class ClubsService {
     const steamId = String(input.steam_id || "").trim();
     if (!steamId) throw new BadRequestException("steam_id is required");
     const mode = this.normalizeMode(input.mode);
-    const amount = Math.max(1, Math.floor(Number(input.amount) || 1));
     const extra = String(input.metric || "").trim();
+    const rawAmount = Number(input.amount);
+    const amount =
+      Number.isFinite(rawAmount) && rawAmount > 0
+        ? Math.floor(rawAmount)
+        : extra === "damage"
+          ? 0
+          : 1;
+    if (amount <= 0) return { progress: [] };
     const metrics = extra
       ? [extra]
       : [
@@ -932,6 +963,9 @@ export class ClubsService {
           ...(input.headshot ? ["headshots"] : []),
           ...(input.noscope ? ["noscope"] : []),
         ];
+    if (!(await this.hasLiveChallengeMetrics(mode, metrics))) {
+      return { progress: [] };
+    }
     const weapon = this.normalizeWeapon(input.weapon);
 
     const matches = await this.postgres.query<
@@ -1054,10 +1088,104 @@ export class ClubsService {
     return { progress };
   }
 
+  private matchChallengeMode = new Map<
+    string,
+    { mode: "competitive" | "scrim" | null; at: number }
+  >();
+  private liveMetricCache = new Map<string, { yes: boolean; at: number }>();
+
+  private async hasLiveChallengeMetrics(mode: string, metrics: string[]) {
+    const key = `${mode}:${metrics.slice().sort().join(",")}`;
+    const hit = this.liveMetricCache.get(key);
+    if (hit && Date.now() - hit.at < 15_000) return hit.yes;
+    const rows = await this.postgres.query<Array<{ ok: boolean }>>(
+      `SELECT true AS ok
+         FROM public.club_challenges ch
+         JOIN public.club_challenge_catalog cat ON cat.id = ch.catalog_id
+        WHERE ch.active
+          AND ch.ends_at > now()
+          AND cat.server_mode = $1
+          AND cat.metric = ANY($2::text[])
+        LIMIT 1`,
+      [mode, metrics],
+    );
+    const yes = rows.length > 0;
+    this.liveMetricCache.set(key, { yes, at: Date.now() });
+    return yes;
+  }
+
+  public async recordMatchChallengeEvent(
+    matchId: string,
+    input: {
+      steam_id: string;
+      weapon?: string | null;
+      noscope?: boolean;
+      headshot?: boolean;
+      metric?: string | null;
+      amount?: number;
+    },
+  ) {
+    const mode = await this.resolveMatchChallengeMode(matchId);
+    if (!mode) return { progress: [] };
+    const steamId = String(input.steam_id || "").trim();
+    if (!steamId) return { progress: [] };
+    try {
+      return await this.recordChallengeEvent({
+        ...input,
+        mode,
+        steam_id: steamId,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `club match challenge failed match=${matchId} steam=${steamId}: ${String(err)}`,
+      );
+      return { progress: [] };
+    }
+  }
+
+  private async resolveMatchChallengeMode(
+    matchId: string,
+  ): Promise<"competitive" | "scrim" | null> {
+    const id = String(matchId || "").trim();
+    if (!id) return null;
+    const hit = this.matchChallengeMode.get(id);
+    if (hit && Date.now() - hit.at < 60_000) return hit.mode;
+    const rows = await this.postgres.query<
+      Array<{ type: string | null; is_scrim: boolean }>
+    >(
+      `SELECT o.type,
+              EXISTS (
+                SELECT 1 FROM public.team_scrim_requests r
+                 WHERE r.match_id = m.id
+              ) AS is_scrim
+         FROM public.matches m
+         JOIN public.match_options o ON o.id = m.match_options_id
+        WHERE m.id = $1::uuid`,
+      [id],
+    );
+    const row = rows.at(0);
+    let mode: "competitive" | "scrim" | null = null;
+    if (row?.is_scrim) mode = "scrim";
+    else if (String(row?.type || "").toLowerCase() === "competitive") {
+      mode = "competitive";
+    }
+    this.matchChallengeMode.set(id, { mode, at: Date.now() });
+    return mode;
+  }
+
   private normalizeMode(mode: string) {
-    const value = String(mode || "").trim().toLowerCase();
+    const value = String(mode || "")
+      .trim()
+      .toLowerCase();
     if (value === "aim") return "dm";
-    if (["duels", "dm", "awp", "2x2", "bhop"].includes(value)) return value;
+    if (value === "comp") return "competitive";
+    if (
+      ["duels", "dm", "awp", "2x2", "bhop", "competitive", "scrim"].includes(
+        value,
+      )
+    ) {
+      return value;
+    }
     throw new BadRequestException("Unknown server mode");
   }
 

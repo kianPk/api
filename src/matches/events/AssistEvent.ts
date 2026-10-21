@@ -34,5 +34,18 @@ export default class AssistEvent extends MatchEventProcessor<{
         __typename: true,
       },
     });
+
+    const attacker = String(this.data.attacker_steam_id || "");
+    if (
+      attacker &&
+      attacker !== String(this.data.attacked_steam_id || "") &&
+      this.data.attacker_team !== this.data.attacked_team
+    ) {
+      void this.clubs.recordMatchChallengeEvent(this.matchId, {
+        steam_id: attacker,
+        metric: "assists",
+        amount: 1,
+      });
+    }
   }
 }

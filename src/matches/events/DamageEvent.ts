@@ -54,5 +54,23 @@ export default class DamageEvent extends MatchEventProcessor<{
         __typename: true,
       },
     });
+
+    const attacker = String(this.data.attacker_steam_id || "");
+    const victim = String(this.data.attacked_steam_id || "");
+    const damage = Math.floor(Number(this.data.damage) || 0);
+    if (
+      attacker &&
+      attacker !== victim &&
+      damage > 0 &&
+      this.data.attacker_team &&
+      this.data.attacker_team !== this.data.attacked_team
+    ) {
+      void this.clubs.recordMatchChallengeEvent(this.matchId, {
+        steam_id: attacker,
+        weapon: this.data.weapon,
+        metric: "damage",
+        amount: damage,
+      });
+    }
   }
 }

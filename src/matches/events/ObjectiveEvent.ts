@@ -24,5 +24,20 @@ export default class ObjectiveEvent extends MatchEventProcessor<{
         __typename: true,
       },
     });
+
+    const steamId = String(this.data.player_steam_id || "");
+    const metric =
+      this.data.type === "Planted"
+        ? "plants"
+        : this.data.type === "Defused"
+          ? "defuses"
+          : null;
+    if (steamId && metric) {
+      void this.clubs.recordMatchChallengeEvent(this.matchId, {
+        steam_id: steamId,
+        metric,
+        amount: 1,
+      });
+    }
   }
 }

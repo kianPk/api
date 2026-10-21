@@ -20,9 +20,17 @@ export default class MatchMapStatusEvent extends MatchEventProcessor<{
     chat: ChatService,
     notifications: NotificationsService,
     anticheat: AnticheatService,
-    private readonly clubs: ClubsService,
+    clubs: ClubsService,
   ) {
-    super(logger, hasura, matchAssistant, chat, notifications, anticheat);
+    super(
+      logger,
+      hasura,
+      matchAssistant,
+      chat,
+      notifications,
+      anticheat,
+      clubs,
+    );
   }
 
   public async process() {
@@ -242,8 +250,14 @@ export default class MatchMapStatusEvent extends MatchEventProcessor<{
           ? (matches_by_pk.lineup_2?.lineup_players ?? [])
           : (matches_by_pk.lineup_1?.lineup_players ?? []);
       for (const p of winSide) {
-        if (p?.steam_id)
+        if (p?.steam_id) {
           await this.clubs.applyMatchPoints(String(p.steam_id), true);
+          void this.clubs.recordMatchChallengeEvent(this.matchId, {
+            steam_id: String(p.steam_id),
+            metric: "wins",
+            amount: 1,
+          });
+        }
       }
       for (const p of loseSide) {
         if (p?.steam_id)
