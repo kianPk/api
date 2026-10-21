@@ -7,6 +7,7 @@ import { ChatService } from "../../chat/chat.service";
 import { NotificationsService } from "../../notifications/notifications.service";
 import { AnticheatService } from "../../anticheat/anticheat.service";
 import { ClubsService } from "../../clubs/clubs.service";
+import { SiteXpService } from "../../site-xp/site-xp.service";
 
 @Injectable({ scope: Scope.REQUEST })
 export default class MatchMapStatusEvent extends MatchEventProcessor<{
@@ -21,6 +22,7 @@ export default class MatchMapStatusEvent extends MatchEventProcessor<{
     notifications: NotificationsService,
     anticheat: AnticheatService,
     clubs: ClubsService,
+    siteXp: SiteXpService,
   ) {
     super(
       logger,
@@ -30,6 +32,7 @@ export default class MatchMapStatusEvent extends MatchEventProcessor<{
       notifications,
       anticheat,
       clubs,
+      siteXp,
     );
   }
 

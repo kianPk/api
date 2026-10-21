@@ -12,6 +12,7 @@ import { SectionRatingsService } from "./section-ratings.service";
 import { timingSafeStringEqual } from "../utilities/timingSafeStringEqual";
 import { DedicatedServersService } from "../dedicated-servers/dedicated-servers.service";
 import { isServerSectionMode } from "../game-plugins/server-section-modes";
+import { SiteXpService } from "../site-xp/site-xp.service";
 
 type Profile = {
   show_vips: boolean;
@@ -32,6 +33,7 @@ export class PublicServerDetailsService {
     private readonly ranks: PublicRanksService,
     private readonly sectionRatings: SectionRatingsService,
     private readonly dedicatedServers: DedicatedServersService,
+    private readonly siteXp: SiteXpService,
   ) {}
 
   /**
@@ -89,6 +91,9 @@ export class PublicServerDetailsService {
     );
     const byId = new Map(rows.map((r) => [r.steam_id, r]));
 
+    const siteById = new Map(
+      (await this.siteXp.get(steamIds)).map((row) => [row.steam_id, row]),
+    );
     const sectionById = new Map<string, { rating: number; level: number }>();
     if (sectionMode) {
       for (const row of await this.sectionRatings.get(sectionMode, steamIds)) {
@@ -105,12 +110,15 @@ export class PublicServerDetailsService {
         const row = byId.get(String(p.steam_id))!;
         const points = Number(row.points) || 0;
         const section = sectionById.get(String(p.steam_id));
+        const site = siteById.get(String(p.steam_id));
         return {
           steam_id: String(p.steam_id),
           name: row.name || p.name || null,
           avatar_url: row.custom_avatar_url || row.avatar_url || null,
           registered: row.name !== null,
           points,
+          site_xp: site?.xp ?? 0,
+          site_level: site?.level ?? 1,
           ...(points > 0 ? PublicRanksService.skillFromPoints(points) : {}),
           ...(section
             ? {

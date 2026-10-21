@@ -1,4 +1,5 @@
 import MatchEventProcessor from "./abstracts/MatchEventProcessor";
+import { isUtilityWeapon } from "../../site-xp/site-xp";
 
 export default class DamageEvent extends MatchEventProcessor<{
   time: string;
@@ -58,18 +59,39 @@ export default class DamageEvent extends MatchEventProcessor<{
     const attacker = String(this.data.attacker_steam_id || "");
     const victim = String(this.data.attacked_steam_id || "");
     const damage = Math.floor(Number(this.data.damage) || 0);
-    if (
+    const enemy =
       attacker &&
       attacker !== victim &&
       damage > 0 &&
       this.data.attacker_team &&
-      this.data.attacker_team !== this.data.attacked_team
-    ) {
+      this.data.attacker_team !== this.data.attacked_team;
+    if (enemy) {
       void this.clubs.recordMatchChallengeEvent(this.matchId, {
         steam_id: attacker,
         weapon: this.data.weapon,
         metric: "damage",
         amount: damage,
+      });
+      if (isUtilityWeapon(this.data.weapon)) {
+        void this.siteXp.apply({
+          steam_id: attacker,
+          victim_steam_id: victim,
+          kind: "utility_damage",
+          weapon: this.data.weapon,
+        });
+      }
+    } else if (
+      attacker &&
+      victim &&
+      attacker !== victim &&
+      damage > 0 &&
+      this.data.attacker_team &&
+      this.data.attacker_team === this.data.attacked_team
+    ) {
+      void this.siteXp.apply({
+        steam_id: attacker,
+        victim_steam_id: victim,
+        kind: "team_damage",
       });
     }
   }

@@ -69,18 +69,33 @@ export default class KillEvent extends MatchEventProcessor<{
 
     const attacker = String(this.data.attacker_steam_id || "");
     const victim = String(this.data.attacked_steam_id || "");
-    if (
+    const enemy =
       attacker &&
       attacker !== victim &&
       this.data.attacker_team &&
-      this.data.attacker_team !== this.data.attacked_team
-    ) {
+      this.data.attacker_team !== this.data.attacked_team;
+    if (enemy) {
       void this.clubs.recordMatchChallengeEvent(this.matchId, {
         steam_id: attacker,
         weapon: this.data.weapon,
         noscope: this.data.no_scope,
         headshot: this.data.headshot,
       });
+      void this.siteXp.apply({
+        steam_id: attacker,
+        kind: "kill",
+        weapon: this.data.weapon,
+        headshot: this.data.headshot,
+        noscope: this.data.no_scope,
+        wallbang: this.data.thru_wall,
+        thrusmoke: this.data.thru_smoke,
+        blinded: this.data.blinded,
+      });
+    } else if (attacker && attacker !== victim && this.data.attacker_team) {
+      void this.siteXp.apply({ steam_id: attacker, kind: "team_kill" });
+    }
+    if (victim && victim !== attacker) {
+      void this.siteXp.apply({ steam_id: victim, kind: "death" });
     }
   }
 }

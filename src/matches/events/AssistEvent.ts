@@ -46,6 +46,7 @@ export default class AssistEvent extends MatchEventProcessor<{
         metric: "assists",
         amount: 1,
       });
+      void this.siteXp.apply({ steam_id: attacker, kind: "assist" });
     }
   }
 }

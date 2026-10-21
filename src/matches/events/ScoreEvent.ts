@@ -58,6 +58,31 @@ export default class ScoreEvent extends MatchEventProcessor<{
         __typename: true,
       },
     });
+
+    void this.awardRoundWin();
+  }
+
+  private async awardRoundWin() {
+    if (!this.data.winning_side) return;
+    const wonFirst = this.data.winning_side === this.data.lineup_1_side;
+    const { matches_by_pk } = await this.hasura.query({
+      matches_by_pk: {
+        __args: { id: this.matchId },
+        lineup_1: { lineup_players: { steam_id: true } },
+        lineup_2: { lineup_players: { steam_id: true } },
+      },
+    });
+    const side = wonFirst
+      ? matches_by_pk?.lineup_1?.lineup_players
+      : matches_by_pk?.lineup_2?.lineup_players;
+    for (const player of side ?? []) {
+      if (player?.steam_id) {
+        void this.siteXp.apply({
+          steam_id: String(player.steam_id),
+          kind: "round_win",
+        });
+      }
+    }
   }
 
   private async cleanupData() {

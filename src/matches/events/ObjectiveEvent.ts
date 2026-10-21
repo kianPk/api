@@ -38,6 +38,10 @@ export default class ObjectiveEvent extends MatchEventProcessor<{
         metric,
         amount: 1,
       });
+      void this.siteXp.apply({
+        steam_id: steamId,
+        kind: metric === "plants" ? "plant" : "defuse",
+      });
     }
   }
 }

@@ -14,6 +14,8 @@ import { Request } from "express";
 import { User } from "../auth/types/User";
 import { PublicRanksService } from "./public-ranks.service";
 import { SectionRatingsService } from "./section-ratings.service";
+import { SiteXpService } from "../site-xp/site-xp.service";
+import { SiteXpInput } from "../site-xp/site-xp";
 
 // Under /hosted-servers because the API ingress does not route arbitrary paths.
 @Controller("hosted-servers")
@@ -21,6 +23,7 @@ export class PublicRanksController {
   constructor(
     private readonly ranks: PublicRanksService,
     private readonly sectionRatings: SectionRatingsService,
+    private readonly siteXp: SiteXpService,
   ) {}
 
   @Get("plugin/ranks/players")
@@ -147,6 +150,45 @@ export class PublicRanksController {
       .split(/[,\s]+/)
       .filter(Boolean);
     return { players: await this.sectionRatings.getExisting(key, ids) };
+  }
+
+  @Get("site-xp")
+  public async siteXpGet(@Query("steam_ids") steamIds: string) {
+    const ids = String(steamIds || "")
+      .split(/[,\s]+/)
+      .filter(Boolean);
+    return { players: await this.siteXp.get(ids) };
+  }
+
+  @Post("plugin/site-xp")
+  public async siteXpPost(
+    @Headers("authorization") authorization: string,
+    @Body()
+    body: {
+      server_id?: string;
+      events?: SiteXpInput[];
+    },
+  ) {
+    await this.ranks.authenticateServer(
+      String(body?.server_id || ""),
+      authorization,
+    );
+    if (!Array.isArray(body?.events)) {
+      throw new BadRequestException("events required");
+    }
+    return { players: await this.siteXp.applyMany(body.events) };
+  }
+
+  @Post("site-xp/admin-set")
+  public async siteXpAdminSet(
+    @Req() request: Request,
+    @Body() body: { steam_id?: string; level?: number },
+  ) {
+    const user = request.user as User | undefined;
+    if (!user?.steam_id) {
+      throw new UnauthorizedException("Authentication required");
+    }
+    return { player: await this.siteXp.adminSetLevel(user, body || {}) };
   }
 
   // Site admin: set Faceit-style level for a player on a Servers-section mode.

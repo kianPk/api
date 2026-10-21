@@ -27,5 +27,13 @@ export default class FlashEvent extends MatchEventProcessor<{
         __typename: true,
       },
     });
+
+    const attacker = String(this.data.attacker_steam_id || "");
+    if (!attacker || Number(this.data.duration) <= 0) return;
+    void this.siteXp.apply({
+      steam_id: attacker,
+      victim_steam_id: String(this.data.attacked_steam_id || ""),
+      kind: this.data.team_flash ? "flash_team" : "flash_enemy",
+    });
   }
 }

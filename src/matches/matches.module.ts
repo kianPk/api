@@ -82,6 +82,7 @@ import { CameraService } from "./camera/camera.service";
 import { CameraMonitorService } from "./camera/camera-monitor.service";
 import { AnticheatModule } from "../anticheat/anticheat.module";
 import { ClubsModule } from "../clubs/clubs.module";
+import { SiteXpModule } from "../site-xp/site-xp.module";
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { ClubsModule } from "../clubs/clubs.module";
     MediaMtxModule,
     AnticheatModule,
     ClubsModule,
+    SiteXpModule,
 
     forwardRef(() => RconModule),
     CacheModule,
