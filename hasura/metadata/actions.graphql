@@ -135,6 +135,14 @@ type Mutation {
 }
 
 type Mutation {
+  requestClubJoin(club_id: uuid!, message: String): SuccessOutput
+}
+
+type Mutation {
+  previewClubLeave(club_id: uuid!): PreviewClubLeaveOutput
+}
+
+type Mutation {
   setPrimaryClub(club_id: uuid!): SuccessOutput
 }
 
@@ -1109,6 +1117,11 @@ type CreateClubOutput {
 type CreateClubOfficialTeamOutput {
   success: Boolean!
   team_id: uuid
+}
+
+type PreviewClubLeaveOutput {
+  blocked_until: String!
+  leave_count: Int!
 }
 
 type RedeemClubInviteLinkOutput {

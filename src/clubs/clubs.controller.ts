@@ -129,6 +129,27 @@ export class ClubsController {
   }
 
   @HasuraAction()
+  public async requestClubJoin(data: {
+    user: User;
+    club_id: string;
+    message?: string | null;
+  }) {
+    return this.clubs.requestClubJoin(
+      data.club_id,
+      String(data.user.steam_id),
+      data.message,
+    );
+  }
+
+  @HasuraAction()
+  public async previewClubLeave(data: { user: User; club_id: string }) {
+    return this.clubs.previewClubLeave(
+      data.club_id,
+      String(data.user.steam_id),
+    );
+  }
+
+  @HasuraAction()
   public async setPrimaryClub(data: { user: User; club_id: string }) {
     return this.clubs.setPrimaryClub(data.club_id, String(data.user.steam_id));
   }

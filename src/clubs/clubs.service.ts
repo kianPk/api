@@ -347,6 +347,66 @@ export class ClubsService {
     return { success: true };
   }
 
+  public async requestClubJoin(
+    clubId: string,
+    steamId: string,
+    message?: string | null,
+  ) {
+    const clubs = await this.postgres.query<Array<{ join_mode: string }>>(
+      `SELECT join_mode FROM public.clubs WHERE id = $1::uuid`,
+      [clubId],
+    );
+    const club = clubs.at(0);
+    if (!club) throw new BadRequestException("Club not found");
+    if (club.join_mode !== "request") {
+      throw new BadRequestException("Club does not take join requests");
+    }
+    if (await this.isMember(clubId, steamId)) {
+      throw new BadRequestException("Already a club member");
+    }
+    await this.assertNotBanned(clubId, steamId);
+    await this.assertJoinAllowed(steamId);
+    await this.assertJoinRequirements(clubId, steamId);
+    try {
+      await this.postgres.query(
+        `INSERT INTO public.club_join_requests (club_id, steam_id, message, status)
+         VALUES ($1::uuid, $2::bigint, $3, 'pending')
+         ON CONFLICT (club_id, steam_id) DO UPDATE SET
+           message = EXCLUDED.message,
+           status = 'pending',
+           reviewed_by_steam_id = NULL,
+           reviewed_at = NULL,
+           created_at = CASE
+             WHEN public.club_join_requests.status = 'pending'
+             THEN public.club_join_requests.created_at
+             ELSE now()
+           END`,
+        [clubId, steamId, (message || "").trim()],
+      );
+    } catch (err) {
+      this.rethrowClubRule(err);
+    }
+    return { success: true };
+  }
+
+  public async previewClubLeave(clubId: string, steamId: string) {
+    if (!(await this.isMember(clubId, steamId))) {
+      throw new BadRequestException("Not a club member");
+    }
+    const rows = await this.postgres.query<
+      Array<{ blocked_until: string; leave_count: number }>
+    >(
+      `SELECT public.preview_club_leave_block($1::bigint)::text AS blocked_until,
+              public.club_leave_next_count($1::bigint) AS leave_count`,
+      [steamId],
+    );
+    const row = rows.at(0);
+    return {
+      blocked_until: row?.blocked_until || "",
+      leave_count: row?.leave_count ?? 1,
+    };
+  }
+
   public async joinClubOpen(clubId: string, steamId: string) {
     const clubs = await this.postgres.query<
       Array<{ join_mode: string }>
