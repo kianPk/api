@@ -129,6 +129,9 @@ insert_permissions:
     - cover_url
     - telegram_url
     - instagram_url
+    - bale_url
+    - rubika_url
+    - soroush_url
     - description
     - join_mode
     - min_elo
@@ -145,6 +148,9 @@ insert_permissions:
     - cover_url
     - telegram_url
     - instagram_url
+    - bale_url
+    - rubika_url
+    - soroush_url
     - description
     - join_mode
     - min_elo
@@ -161,6 +167,9 @@ select_permissions:
     - cover_url
     - telegram_url
     - instagram_url
+    - bale_url
+    - rubika_url
+    - soroush_url
     - description
     - join_mode
     - owner_steam_id
@@ -184,6 +193,9 @@ update_permissions:
     - cover_url
     - telegram_url
     - instagram_url
+    - bale_url
+    - rubika_url
+    - soroush_url
     - description
     - join_mode
     - min_elo
@@ -211,6 +223,9 @@ update_permissions:
     - cover_url
     - telegram_url
     - instagram_url
+    - bale_url
+    - rubika_url
+    - soroush_url
     - description
     - join_mode
     - min_elo
