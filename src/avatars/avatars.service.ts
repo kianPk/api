@@ -758,14 +758,54 @@ export class AvatarsService {
     this.logger.log(`Removed club ${clubId} banner`);
   }
 
+  async uploadClubAvatar(
+    clubId: string,
+    user: User,
+    buffer: Buffer,
+    mimetype: string,
+  ): Promise<string> {
+    const club = await this.assertClubManager(clubId, user);
+    const path = this.buildPath("clubs", clubId, mimetype);
+    await this.s3.put(path, buffer);
+    if (club.avatar_url && club.avatar_url !== path) {
+      await this.s3.remove(club.avatar_url);
+    }
+    await this.postgres.query(
+      `UPDATE public.clubs SET avatar_url = $2, updated_at = now() WHERE id = $1::uuid`,
+      [clubId, path],
+    );
+    this.logger.log(`Uploaded club ${clubId} profile to ${path}`);
+    return path;
+  }
+
+  async removeClubAvatar(clubId: string, user: User): Promise<void> {
+    const club = await this.assertClubManager(clubId, user);
+    if (club.avatar_url) {
+      await this.s3.remove(club.avatar_url);
+    }
+    await this.postgres.query(
+      `UPDATE public.clubs SET avatar_url = NULL, updated_at = now() WHERE id = $1::uuid`,
+      [clubId],
+    );
+    this.logger.log(`Removed club ${clubId} profile`);
+  }
+
   private async assertClubManager(
     clubId: string,
     user: User,
-  ): Promise<{ owner_steam_id: string; cover_url: string | null }> {
+  ): Promise<{
+    owner_steam_id: string;
+    cover_url: string | null;
+    avatar_url: string | null;
+  }> {
     const clubs = await this.postgres.query<
-      Array<{ owner_steam_id: string; cover_url: string | null }>
+      Array<{
+        owner_steam_id: string;
+        cover_url: string | null;
+        avatar_url: string | null;
+      }>
     >(
-      `SELECT owner_steam_id::text AS owner_steam_id, cover_url
+      `SELECT owner_steam_id::text AS owner_steam_id, cover_url, avatar_url
        FROM public.clubs WHERE id = $1::uuid`,
       [clubId],
     );

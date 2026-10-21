@@ -14,6 +14,13 @@ object_relationships:
         remote_table:
           name: player_stats
           schema: public
+  - name: club_leave_cooldown
+    using:
+      foreign_key_constraint_on:
+        column: steam_id
+        table:
+          name: club_leave_cooldowns
+          schema: public
 array_relationships:
   - name: club_memberships
     using:
@@ -28,13 +35,6 @@ array_relationships:
         column: steam_id
         table:
           name: player_tags
-          schema: public
-  - name: club_leave_cooldown
-    using:
-      foreign_key_constraint_on:
-        column: steam_id
-        table:
-          name: club_leave_cooldowns
           schema: public
   - name: abandoned_matches
     using:

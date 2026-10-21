@@ -110,6 +110,8 @@ insert_permissions:
     - short_name
     - avatar_url
     - cover_url
+    - telegram_url
+    - instagram_url
     - description
     - join_mode
     - min_elo
@@ -124,6 +126,8 @@ insert_permissions:
     - short_name
     - avatar_url
     - cover_url
+    - telegram_url
+    - instagram_url
     - description
     - join_mode
     - min_elo
@@ -138,6 +142,8 @@ select_permissions:
     - short_name
     - avatar_url
     - cover_url
+    - telegram_url
+    - instagram_url
     - description
     - join_mode
     - owner_steam_id
@@ -158,6 +164,8 @@ update_permissions:
     - short_name
     - avatar_url
     - cover_url
+    - telegram_url
+    - instagram_url
     - description
     - join_mode
     - min_elo
@@ -174,6 +182,21 @@ update_permissions:
               _in:
               - owner
               - admin
+    check: {}
+- role: administrator
+  permission:
+    columns:
+    - name
+    - short_name
+    - avatar_url
+    - cover_url
+    - telegram_url
+    - instagram_url
+    - description
+    - join_mode
+    - min_elo
+    - min_faceit_level
+    filter: {}
     check: {}
 delete_permissions:
 - role: user

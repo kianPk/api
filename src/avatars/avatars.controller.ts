@@ -327,6 +327,41 @@ export class AvatarsController {
     return this.serve("tournaments", filename, res);
   }
 
+  @Post("clubs/:clubId/avatar")
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadClubAvatar(
+    @Req() request: Request,
+    @Param("clubId") clubId: string,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }),
+          new FileTypeValidator({ fileType: /image\/(png|jpeg|webp)/ }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    const user = this.requireUser(request);
+    const path = await this.avatarsService.uploadClubAvatar(
+      clubId,
+      user,
+      file.buffer,
+      file.mimetype,
+    );
+    return { success: true, path };
+  }
+
+  @Delete("clubs/:clubId/avatar")
+  async removeClubAvatar(
+    @Req() request: Request,
+    @Param("clubId") clubId: string,
+  ) {
+    const user = this.requireUser(request);
+    await this.avatarsService.removeClubAvatar(clubId, user);
+    return { success: true };
+  }
+
   @Post("clubs/:clubId/banner")
   @UseInterceptors(FileInterceptor("file"))
   async uploadClubBanner(
