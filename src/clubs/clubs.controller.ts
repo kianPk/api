@@ -34,7 +34,9 @@ export class ClubsController {
       amount?: number;
     },
   ) {
-    return this.clubs.recordChallengeEvent(body || {});
+    return this.clubs.recordChallengeEvent(
+      body ?? { mode: "", steam_id: "" },
+    );
   }
 
   @HasuraAction()
