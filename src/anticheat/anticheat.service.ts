@@ -45,7 +45,7 @@ const ATTEST_CLOCK_SKEW_SECONDS = 300;
 
 /** Minimum launcher build allowed to attest / stay in ranked. Older builds are rejected. */
 const MIN_CLIENT_VERSION =
-  process.env.AC_LAUNCHER_MIN_VERSION?.trim() || "0.5.0";
+  process.env.AC_LAUNCHER_MIN_VERSION?.trim() || "0.5.1";
 
 /**
  * SteamIDs that may queue / play Ranked without a live Windows launcher.
@@ -806,13 +806,18 @@ export class AnticheatService implements OnModuleInit, OnModuleDestroy {
     // Override with AC_LAUNCHER_VERSION / AC_LAUNCHER_DOWNLOAD_URL if needed.
     // Keep version + download_url in lockstep — a mismatch (e.g. min 0.5.0 but
     // URL still pointing at 0.4.8) causes an infinite auto-update loop.
-    const version = process.env.AC_LAUNCHER_VERSION || "0.5.0";
+    const version = process.env.AC_LAUNCHER_VERSION || "0.5.1";
     const defaultUrl =
-      "https://github.com/kianPk/web/releases/download/client-v0.5.0/YGuardAC-0.5.0-client.zip";
+      "https://github.com/kianPk/web/releases/download/client-v0.5.1/YGuardAC-0.5.1-client.zip";
     let downloadUrl =
       process.env.AC_LAUNCHER_DOWNLOAD_URL?.trim() || defaultUrl;
     // Guard: if env URL still advertises an older client zip, ignore it.
-    if (/client-v0\.[0-4]\./i.test(downloadUrl) || /YGuardAC-0\.[0-4]\./i.test(downloadUrl)) {
+    if (
+      /client-v0\.[0-4]\./i.test(downloadUrl) ||
+      /YGuardAC-0\.[0-4]\./i.test(downloadUrl) ||
+      /client-v0\.5\.0/i.test(downloadUrl) ||
+      /YGuardAC-0\.5\.0/i.test(downloadUrl)
+    ) {
       this.logger.warn(
         `AC_LAUNCHER_DOWNLOAD_URL looks stale (${downloadUrl}); using ${defaultUrl}`,
       );
