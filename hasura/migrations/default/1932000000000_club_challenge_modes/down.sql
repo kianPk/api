@@ -1,0 +1,10 @@
+DROP FUNCTION IF EXISTS public.club_challenge_is_visible(public.club_challenges, json);
+DROP TABLE IF EXISTS public.club_challenge_progress;
+DROP TABLE IF EXISTS public.club_challenge_targets;
+ALTER TABLE public.club_members DROP COLUMN IF EXISTS is_vip;
+ALTER TABLE public.club_challenges DROP COLUMN IF EXISTS prize_scope;
+ALTER TABLE public.club_challenges DROP COLUMN IF EXISTS audience;
+ALTER TABLE public.club_challenge_catalog DROP COLUMN IF EXISTS server_mode;
+ALTER TABLE public.club_challenge_catalog DROP COLUMN IF EXISTS weapon;
+ALTER TABLE public.club_challenge_catalog DROP COLUMN IF EXISTS metric;
+ALTER TABLE public.club_challenge_catalog DROP COLUMN IF EXISTS target;

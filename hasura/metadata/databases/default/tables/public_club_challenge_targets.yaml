@@ -1,0 +1,58 @@
+table:
+  name: club_challenge_targets
+  schema: public
+object_relationships:
+- name: challenge
+  using:
+    foreign_key_constraint_on: challenge_id
+- name: player
+  using:
+    foreign_key_constraint_on: steam_id
+insert_permissions:
+- role: user
+  permission:
+    check:
+      challenge:
+        club:
+          owner_steam_id:
+            _eq: X-Hasura-User-Id
+    columns:
+    - challenge_id
+    - steam_id
+- role: administrator
+  permission:
+    check: {}
+    columns:
+    - challenge_id
+    - steam_id
+select_permissions:
+- role: user
+  permission:
+    columns:
+    - challenge_id
+    - steam_id
+    filter:
+      _or:
+      - steam_id:
+          _eq: X-Hasura-User-Id
+      - challenge:
+          club:
+            owner_steam_id:
+              _eq: X-Hasura-User-Id
+- role: administrator
+  permission:
+    columns:
+    - challenge_id
+    - steam_id
+    filter: {}
+delete_permissions:
+- role: user
+  permission:
+    filter:
+      challenge:
+        club:
+          owner_steam_id:
+            _eq: X-Hasura-User-Id
+- role: administrator
+  permission:
+    filter: {}

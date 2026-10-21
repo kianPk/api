@@ -1,4 +1,4 @@
-import { Controller, Get } from "@nestjs/common";
+import { Body, Controller, Get, Post, Query } from "@nestjs/common";
 import { HasuraAction } from "../hasura/hasura.controller";
 import { User } from "../auth/types/User";
 import { ClubsService } from "./clubs.service";
@@ -11,6 +11,30 @@ export class ClubsController {
   @Get("clan-tags")
   public async clanTags() {
     return this.clubs.clanTagsPayload();
+  }
+
+  @Get("challenges/live")
+  public async liveChallenges(
+    @Query("mode") mode: string,
+    @Query("steam_id") steamId?: string,
+  ) {
+    return this.clubs.liveChallenges(mode, steamId);
+  }
+
+  @Post("challenges/events")
+  public async challengeEvent(
+    @Body()
+    body: {
+      mode: string;
+      steam_id: string;
+      weapon?: string | null;
+      noscope?: boolean;
+      headshot?: boolean;
+      metric?: string | null;
+      amount?: number;
+    },
+  ) {
+    return this.clubs.recordChallengeEvent(body || {});
   }
 
   @HasuraAction()
@@ -146,6 +170,21 @@ export class ClubsController {
     return this.clubs.previewClubLeave(
       data.club_id,
       String(data.user.steam_id),
+    );
+  }
+
+  @HasuraAction()
+  public async setClubMemberVip(data: {
+    user: User;
+    club_id: string;
+    steam_id: string;
+    is_vip: boolean;
+  }) {
+    return this.clubs.setClubMemberVip(
+      data.club_id,
+      String(data.user.steam_id),
+      String(data.steam_id),
+      !!data.is_vip,
     );
   }
 

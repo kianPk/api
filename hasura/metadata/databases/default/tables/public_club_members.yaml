@@ -42,6 +42,7 @@ select_permissions:
     - steam_id
     - role
     - is_primary
+    - is_vip
     - joined_at
     filter: {}
     allow_aggregations: true

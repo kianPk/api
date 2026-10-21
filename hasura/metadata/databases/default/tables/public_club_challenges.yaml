@@ -11,6 +11,28 @@ object_relationships:
 - name: created_by
   using:
     foreign_key_constraint_on: created_by_steam_id
+computed_fields:
+- name: is_visible
+  definition:
+    function:
+      name: club_challenge_is_visible
+      schema: public
+    session_argument: hasura_session
+array_relationships:
+- name: progress
+  using:
+    foreign_key_constraint_on:
+      column: challenge_id
+      table:
+        name: club_challenge_progress
+        schema: public
+- name: targets
+  using:
+    foreign_key_constraint_on:
+      column: challenge_id
+      table:
+        name: club_challenge_targets
+        schema: public
 insert_permissions:
 - role: user
   permission:
@@ -26,6 +48,8 @@ insert_permissions:
     - ends_at
     - prize_ypoints
     - prize_other
+    - prize_scope
+    - audience
 - role: administrator
   permission:
     check: {}
@@ -37,6 +61,8 @@ insert_permissions:
     - ends_at
     - prize_ypoints
     - prize_other
+    - prize_scope
+    - audience
     - active
 select_permissions:
 - role: guest
@@ -49,10 +75,23 @@ select_permissions:
     - ends_at
     - prize_ypoints
     - prize_other
+    - prize_scope
+    - audience
     - active
     - created_at
+    filter:
+      is_visible:
+        _eq: true
+    allow_aggregations: true
+    computed_fields:
+    - is_visible
+- role: administrator
+  permission:
+    columns: *id001
     filter: {}
     allow_aggregations: true
+    computed_fields:
+    - is_visible
 update_permissions:
 - role: user
   permission:
@@ -60,6 +99,8 @@ update_permissions:
     - ends_at
     - prize_ypoints
     - prize_other
+    - prize_scope
+    - audience
     - active
     filter:
       club:
@@ -72,6 +113,8 @@ update_permissions:
     - ends_at
     - prize_ypoints
     - prize_other
+    - prize_scope
+    - audience
     - active
     filter: {}
     check: {}

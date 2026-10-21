@@ -22,5 +22,9 @@ select_permissions:
     - description
     - description_fa
     - sort_order
+    - server_mode
+    - weapon
+    - metric
+    - target
     filter: {}
     allow_aggregations: true

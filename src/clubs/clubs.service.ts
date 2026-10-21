@@ -7,6 +7,7 @@ import {
 import { randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
 import { HasuraService } from "../hasura/hasura.service";
+import { YpointService } from "../ypoint/ypoint.service";
 
 const OWN_CLUB_TAG = "OwnClub";
 const CLAN_TAG_CACHE_MS = 15_000;
@@ -19,6 +20,7 @@ export class ClubsService {
     private readonly postgres: PostgresService,
     private readonly logger: Logger,
     private readonly hasura: HasuraService,
+    private readonly ypoint: YpointService,
   ) {}
 
   public async createClub(
@@ -848,6 +850,222 @@ export class ClubsService {
       );
     }
     throw err;
+  }
+
+  public async setClubMemberVip(
+    clubId: string,
+    actorSteamId: string,
+    targetSteamId: string,
+    isVip: boolean,
+  ) {
+    await this.assertCanManage(clubId, actorSteamId);
+    const updated = await this.postgres.query<Array<{ steam_id: string }>>(
+      `UPDATE public.club_members
+          SET is_vip = $3
+        WHERE club_id = $1::uuid AND steam_id = $2::bigint
+        RETURNING steam_id::text`,
+      [clubId, targetSteamId, isVip],
+    );
+    if (!updated.length) throw new BadRequestException("Member not found");
+    return { success: true };
+  }
+
+  public async liveChallenges(mode: string, steamId?: string) {
+    const section = this.normalizeMode(mode);
+    const rows = await this.postgres.query<Array<Record<string, unknown>>>(
+      `SELECT ch.id::text AS id,
+              ch.club_id::text AS club_id,
+              ch.prize_ypoints,
+              ch.prize_other,
+              ch.prize_scope,
+              ch.audience,
+              ch.ends_at,
+              cat.title,
+              cat.title_fa,
+              cat.weapon,
+              cat.metric,
+              cat.target,
+              cat.server_mode,
+              cat.difficulty,
+              c.slug,
+              c.name,
+              c.short_name,
+              COALESCE(p.progress, 0) AS progress,
+              p.completed_at
+         FROM public.club_challenges ch
+         JOIN public.club_challenge_catalog cat ON cat.id = ch.catalog_id
+         JOIN public.clubs c ON c.id = ch.club_id
+         LEFT JOIN public.club_challenge_progress p
+           ON p.challenge_id = ch.id AND p.steam_id = NULLIF($2, '')::bigint
+        WHERE ch.active
+          AND ch.ends_at > now()
+          AND cat.server_mode = $1
+          AND public.club_challenge_is_visible(
+            ch,
+            json_build_object('x-hasura-user-id', NULLIF($2, ''))
+          )
+        ORDER BY cat.sort_order ASC
+        LIMIT 80`,
+      [section, steamId || ""],
+    );
+    return { challenges: rows };
+  }
+
+  public async recordChallengeEvent(input: {
+    mode: string;
+    steam_id: string;
+    weapon?: string | null;
+    noscope?: boolean;
+    headshot?: boolean;
+    metric?: string | null;
+    amount?: number;
+  }) {
+    const steamId = String(input.steam_id || "").trim();
+    if (!steamId) throw new BadRequestException("steam_id is required");
+    const mode = this.normalizeMode(input.mode);
+    const amount = Math.max(1, Math.floor(Number(input.amount) || 1));
+    const extra = String(input.metric || "").trim();
+    const metrics = extra
+      ? [extra]
+      : [
+          "kills",
+          ...(input.headshot ? ["headshots"] : []),
+          ...(input.noscope ? ["noscope"] : []),
+        ];
+    const weapon = this.normalizeWeapon(input.weapon);
+
+    const matches = await this.postgres.query<
+      Array<{
+        id: string;
+        club_id: string;
+        prize_ypoints: number | null;
+        prize_scope: string;
+        audience: string;
+        title: string;
+        title_fa: string;
+        target: number;
+        metric: string;
+      }>
+    >(
+      `SELECT ch.id::text AS id,
+              ch.club_id::text AS club_id,
+              ch.prize_ypoints,
+              ch.prize_scope,
+              ch.audience,
+              cat.title,
+              cat.title_fa,
+              cat.target,
+              cat.metric
+         FROM public.club_challenges ch
+         JOIN public.club_challenge_catalog cat ON cat.id = ch.catalog_id
+        WHERE ch.active
+          AND ch.ends_at > now()
+          AND cat.server_mode = $1
+          AND cat.metric = ANY($2::text[])
+          AND (cat.weapon = '' OR regexp_replace(cat.weapon, '^weapon_', '') = $3)
+          AND public.club_challenge_is_visible(
+            ch,
+            json_build_object('x-hasura-user-id', $4)
+          )`,
+      [mode, metrics, weapon, steamId],
+    );
+
+    const progress: Array<{
+      id: string;
+      title: string;
+      title_fa: string;
+      current: number;
+      target: number;
+      completed: boolean;
+      just_completed: boolean;
+    }> = [];
+
+    for (const row of matches) {
+      const before = await this.postgres.query<
+        Array<{ progress: number; completed_at: string | null }>
+      >(
+        `SELECT progress, completed_at::text
+           FROM public.club_challenge_progress
+          WHERE challenge_id = $1::uuid AND steam_id = $2::bigint`,
+        [row.id, steamId],
+      );
+      const alreadyDone = !!before.at(0)?.completed_at;
+      const updated = await this.postgres.query<
+        Array<{ progress: number; completed_at: string | null }>
+      >(
+        `INSERT INTO public.club_challenge_progress
+           (challenge_id, steam_id, progress, completed_at, updated_at)
+         VALUES (
+           $1::uuid, $2::bigint, LEAST($3, $4),
+           CASE WHEN $4 >= $3 THEN now() ELSE NULL END, now()
+         )
+         ON CONFLICT (challenge_id, steam_id) DO UPDATE SET
+           progress = CASE
+             WHEN club_challenge_progress.completed_at IS NOT NULL
+             THEN club_challenge_progress.progress
+             ELSE LEAST($3, club_challenge_progress.progress + EXCLUDED.progress)
+           END,
+           completed_at = CASE
+             WHEN club_challenge_progress.completed_at IS NOT NULL
+             THEN club_challenge_progress.completed_at
+             WHEN club_challenge_progress.progress + EXCLUDED.progress >= $3
+             THEN now()
+             ELSE NULL
+           END,
+           updated_at = now()
+         RETURNING progress, completed_at::text`,
+        [row.id, steamId, row.target, amount],
+      );
+      const after = updated.at(0);
+      const current = Number(after?.progress ?? 0);
+      const completed = !!after?.completed_at;
+      const justCompleted = completed && !alreadyDone;
+      if (justCompleted && row.prize_ypoints && row.prize_ypoints > 0) {
+        const canPrize =
+          row.prize_scope === "site" ||
+          (await this.isMember(row.club_id, steamId));
+        if (canPrize) {
+          try {
+            await this.ypoint.credit({
+              steamId,
+              amount: row.prize_ypoints,
+              reason: `Club challenge: ${row.title}`,
+              refType: "club_challenge",
+              refId: row.id,
+            });
+          } catch (err) {
+            this.logger.warn(
+              `club challenge prize failed id=${row.id} steam=${steamId}: ${String(err)}`,
+            );
+          }
+        }
+      }
+      progress.push({
+        id: row.id,
+        title: row.title,
+        title_fa: row.title_fa,
+        current,
+        target: row.target,
+        completed,
+        just_completed: justCompleted && current >= row.target,
+      });
+    }
+
+    return { progress };
+  }
+
+  private normalizeMode(mode: string) {
+    const value = String(mode || "").trim().toLowerCase();
+    if (value === "aim") return "dm";
+    if (["duels", "dm", "awp", "2x2", "bhop"].includes(value)) return value;
+    throw new BadRequestException("Unknown server mode");
+  }
+
+  private normalizeWeapon(weapon?: string | null) {
+    return String(weapon || "")
+      .trim()
+      .toLowerCase()
+      .replace(/^weapon_/, "");
   }
 
   private async assertCanManage(clubId: string, steamId: string) {

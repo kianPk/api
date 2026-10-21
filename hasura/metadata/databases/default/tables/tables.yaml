@@ -11,6 +11,8 @@
 - "!include public_club_activity.yaml"
 - "!include public_club_bans.yaml"
 - "!include public_club_challenge_catalog.yaml"
+- "!include public_club_challenge_progress.yaml"
+- "!include public_club_challenge_targets.yaml"
 - "!include public_club_challenges.yaml"
 - "!include public_club_channels.yaml"
 - "!include public_club_clash_entries.yaml"

@@ -147,6 +147,10 @@ type Mutation {
 }
 
 type Mutation {
+  setClubMemberVip(club_id: uuid!, steam_id: String!, is_vip: Boolean!): SuccessOutput
+}
+
+type Mutation {
   joinClubQueue(queue_id: uuid!): ClubQueueJoinOutput
 }
 
