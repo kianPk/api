@@ -18,7 +18,8 @@ export type AvatarKind =
   | "players"
   | "roster-players"
   | "roster-teams"
-  | "tournaments";
+  | "tournaments"
+  | "clubs";
 
 const EXTENSION_BY_MIMETYPE: Record<string, string> = {
   "image/png": "png",
@@ -723,6 +724,66 @@ export class AvatarsService {
     });
 
     this.logger.log(`Removed tournament ${tournamentId} banner`);
+  }
+
+  async uploadClubBanner(
+    clubId: string,
+    user: User,
+    buffer: Buffer,
+    mimetype: string,
+  ): Promise<string> {
+    const club = await this.assertClubManager(clubId, user);
+    const path = this.buildPath("clubs", clubId, mimetype);
+    await this.s3.put(path, buffer);
+    if (club.cover_url && club.cover_url !== path) {
+      await this.s3.remove(club.cover_url);
+    }
+    await this.postgres.query(
+      `UPDATE public.clubs SET cover_url = $2, updated_at = now() WHERE id = $1::uuid`,
+      [clubId, path],
+    );
+    this.logger.log(`Uploaded club ${clubId} banner to ${path}`);
+    return path;
+  }
+
+  async removeClubBanner(clubId: string, user: User): Promise<void> {
+    const club = await this.assertClubManager(clubId, user);
+    if (club.cover_url) {
+      await this.s3.remove(club.cover_url);
+    }
+    await this.postgres.query(
+      `UPDATE public.clubs SET cover_url = NULL, updated_at = now() WHERE id = $1::uuid`,
+      [clubId],
+    );
+    this.logger.log(`Removed club ${clubId} banner`);
+  }
+
+  private async assertClubManager(
+    clubId: string,
+    user: User,
+  ): Promise<{ owner_steam_id: string; cover_url: string | null }> {
+    const clubs = await this.postgres.query<
+      Array<{ owner_steam_id: string; cover_url: string | null }>
+    >(
+      `SELECT owner_steam_id::text AS owner_steam_id, cover_url
+       FROM public.clubs WHERE id = $1::uuid`,
+      [clubId],
+    );
+    const club = clubs.at(0);
+    if (!club) throw new ForbiddenException("Club not found");
+    if (user.role === "administrator") return club;
+    if (String(club.owner_steam_id) === String(user.steam_id)) return club;
+
+    const members = await this.postgres.query<Array<{ role: string }>>(
+      `SELECT role::text AS role
+       FROM public.club_members
+       WHERE club_id = $1::uuid AND steam_id = $2::bigint
+       LIMIT 1`,
+      [clubId, String(user.steam_id)],
+    );
+    const role = members.at(0)?.role;
+    if (role === "owner" || role === "admin") return club;
+    throw new ForbiddenException("You cannot edit this club");
   }
 
   // Returns the existing logo/banner paths when the caller may manage the tournament.
