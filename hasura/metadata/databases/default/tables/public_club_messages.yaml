@@ -17,16 +17,22 @@ insert_permissions:
     check:
       club:
         members:
-          steam_id:
-            _eq: X-Hasura-User-Id
+          _and:
+          - steam_id:
+              _eq: X-Hasura-User-Id
+          - role:
+              _in:
+              - owner
+              - admin
     set:
       author_steam_id: x-hasura-user-id
     columns:
     - channel_id
     - club_id
     - body
+    - image_url
 select_permissions:
-- role: user
+- role: guest
   permission:
     columns:
     - id
@@ -34,13 +40,10 @@ select_permissions:
     - club_id
     - author_steam_id
     - body
+    - image_url
     - created_at
     - deleted_at
-    filter:
-      club:
-        members:
-          steam_id:
-            _eq: X-Hasura-User-Id
+    filter: {}
 update_permissions:
 - role: user
   permission:
@@ -48,17 +51,14 @@ update_permissions:
     - deleted_at
     - body
     filter:
-      _or:
-      - author_steam_id:
-          _eq: X-Hasura-User-Id
-      - club:
-          members:
-            _and:
-            - steam_id:
-                _eq: X-Hasura-User-Id
-            - role:
-                _in:
-                - owner
-                - admin
-                - moderator
+      club:
+        members:
+          _and:
+          - steam_id:
+              _eq: X-Hasura-User-Id
+          - role:
+              _in:
+              - owner
+              - admin
+              - moderator
     check: {}

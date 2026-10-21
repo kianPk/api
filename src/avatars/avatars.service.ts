@@ -758,6 +758,19 @@ export class AvatarsService {
     this.logger.log(`Removed club ${clubId} banner`);
   }
 
+  async uploadClubNewsImage(
+    clubId: string,
+    user: User,
+    buffer: Buffer,
+    mimetype: string,
+  ): Promise<string> {
+    await this.assertClubNewsAuthor(clubId, user);
+    const path = this.buildPath("clubs", clubId, mimetype);
+    await this.s3.put(path, buffer);
+    this.logger.log(`Uploaded club ${clubId} news image to ${path}`);
+    return path;
+  }
+
   async uploadClubAvatar(
     clubId: string,
     user: User,
@@ -788,6 +801,20 @@ export class AvatarsService {
       [clubId],
     );
     this.logger.log(`Removed club ${clubId} profile`);
+  }
+
+  private async assertClubNewsAuthor(clubId: string, user: User): Promise<void> {
+    if (!user?.steam_id) throw new ForbiddenException("You cannot post club news");
+    const members = await this.postgres.query<Array<{ role: string }>>(
+      `SELECT role::text AS role
+         FROM public.club_members
+        WHERE club_id = $1::uuid AND steam_id = $2::bigint
+        LIMIT 1`,
+      [clubId, String(user.steam_id)],
+    );
+    const role = members.at(0)?.role;
+    if (role === "owner" || role === "admin") return;
+    throw new ForbiddenException("Only the club owner or an admin can post news");
   }
 
   private async assertClubManager(
