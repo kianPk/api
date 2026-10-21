@@ -67,5 +67,14 @@ delete_permissions:
 - role: user
   permission:
     filter:
-      leader_steam_id:
-        _eq: X-Hasura-User-Id
+      _or:
+      - leader_steam_id:
+          _eq: X-Hasura-User-Id
+      - club:
+          members:
+            steam_id:
+              _eq: X-Hasura-User-Id
+            role:
+              _in:
+              - owner
+              - admin
