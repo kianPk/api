@@ -25,7 +25,10 @@ CREATE OR REPLACE FUNCTION public.tbi_tournaments() RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    IF NEW.status = 'Finished' AND NEW.finished_at IS NULL THEN
+    -- Stamp finished_at only on INSERT. On UPDATE, tbu_tournaments owns the
+    -- status-driven stamp; overwriting a NULL here would block the chat-window
+    -- backfill and the "finished before it was stamped" path.
+    IF TG_OP = 'INSERT' AND NEW.status = 'Finished' AND NEW.finished_at IS NULL THEN
         NEW.finished_at := now();
     END IF;
 
