@@ -22,6 +22,20 @@ array_relationships:
         table:
           name: club_members
           schema: public
+  - name: player_tags
+    using:
+      foreign_key_constraint_on:
+        column: steam_id
+        table:
+          name: player_tags
+          schema: public
+  - name: club_leave_cooldown
+    using:
+      foreign_key_constraint_on:
+        column: steam_id
+        table:
+          name: club_leave_cooldowns
+          schema: public
   - name: abandoned_matches
     using:
       foreign_key_constraint_on:

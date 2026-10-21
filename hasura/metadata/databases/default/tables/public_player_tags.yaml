@@ -1,0 +1,41 @@
+table:
+  name: player_tags
+  schema: public
+object_relationships:
+- name: player
+  using:
+    foreign_key_constraint_on: steam_id
+- name: granted_by
+  using:
+    foreign_key_constraint_on: granted_by_steam_id
+insert_permissions:
+- role: administrator
+  permission:
+    check: {}
+    set:
+      granted_by_steam_id: x-hasura-user-id
+    columns:
+    - steam_id
+    - tag
+select_permissions:
+- role: user
+  permission:
+    columns:
+    - steam_id
+    - tag
+    - granted_at
+    filter:
+      steam_id:
+        _eq: X-Hasura-User-Id
+- role: administrator
+  permission:
+    columns:
+    - steam_id
+    - tag
+    - granted_by_steam_id
+    - granted_at
+    filter: {}
+delete_permissions:
+- role: administrator
+  permission:
+    filter: {}

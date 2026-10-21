@@ -92,6 +92,30 @@ computed_fields:
 insert_permissions:
 - role: user
   permission:
+    check:
+      _exists:
+        _table:
+          name: player_tags
+          schema: public
+        _where:
+          _and:
+          - steam_id:
+              _eq: X-Hasura-User-Id
+          - tag:
+              _eq: OwnClub
+    set:
+      owner_steam_id: x-hasura-user-id
+    columns:
+    - name
+    - short_name
+    - avatar_url
+    - cover_url
+    - description
+    - join_mode
+    - min_elo
+    - min_faceit_level
+- role: administrator
+  permission:
     check: {}
     set:
       owner_steam_id: x-hasura-user-id
@@ -138,7 +162,6 @@ update_permissions:
     - join_mode
     - min_elo
     - min_faceit_level
-    - owner_steam_id
     filter:
       _or:
       - owner_steam_id:

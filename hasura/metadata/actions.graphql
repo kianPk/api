@@ -85,6 +85,31 @@ type Mutation {
 }
 
 type Mutation {
+  createClub(
+    name: String!
+    short_name: String
+    description: String!
+    join_mode: String!
+  ): CreateClubOutput
+}
+
+type Mutation {
+  transferClub(club_id: uuid!, steam_id: String!): SuccessOutput
+}
+
+type Mutation {
+  leaveClub(club_id: uuid!): SuccessOutput
+}
+
+type Mutation {
+  grantPlayerTag(steam_id: String!, tag: String!): SuccessOutput
+}
+
+type Mutation {
+  revokePlayerTag(steam_id: String!, tag: String!): SuccessOutput
+}
+
+type Mutation {
   redeemClubInviteLink(code: String!): RedeemClubInviteLinkOutput
 }
 
@@ -1069,6 +1094,12 @@ type MeResponse {
 
 type SuccessOutput {
   success: Boolean!
+}
+
+type CreateClubOutput {
+  success: Boolean!
+  id: uuid
+  slug: String
 }
 
 type RedeemClubInviteLinkOutput {

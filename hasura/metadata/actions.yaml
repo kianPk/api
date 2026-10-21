@@ -166,6 +166,45 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
+  - name: createClub
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+      - role: administrator
+  - name: transferClub
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+      - role: administrator
+  - name: leaveClub
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+      - role: administrator
+  - name: grantPlayerTag
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: administrator
+  - name: revokePlayerTag
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: administrator
   - name: redeemClubInviteLink
     definition:
       kind: synchronous
@@ -173,6 +212,7 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
   - name: createClubInviteLink
     definition:
       kind: synchronous
@@ -180,6 +220,7 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
   - name: reviewClubJoinRequest
     definition:
       kind: synchronous
@@ -187,6 +228,7 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
   - name: joinClubOpen
     definition:
       kind: synchronous
@@ -194,6 +236,7 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
   - name: setPrimaryClub
     definition:
       kind: synchronous
@@ -201,6 +244,7 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
   - name: joinClubQueue
     definition:
       kind: synchronous
@@ -208,6 +252,7 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
   - name: leaveClubQueue
     definition:
       kind: synchronous
@@ -215,6 +260,7 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
   - name: registerClubClash
     definition:
       kind: synchronous
@@ -222,6 +268,7 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
   - name: addClubPartyGuest
     definition:
       kind: synchronous
@@ -229,6 +276,7 @@ actions:
       forward_client_headers: true
     permissions:
       - role: user
+      - role: administrator
   - name: approveNameChange
     definition:
       kind: synchronous
@@ -2175,6 +2223,7 @@ custom_types:
           source: default
           type: object
     - name: SuccessOutput
+    - name: CreateClubOutput
     - name: RedeemClubInviteLinkOutput
     - name: CreateClubInviteLinkOutput
     - name: ClubQueueJoinOutput

@@ -1,4 +1,4 @@
-import { Controller } from "@nestjs/common";
+import { Controller, Get } from "@nestjs/common";
 import { HasuraAction } from "../hasura/hasura.controller";
 import { User } from "../auth/types/User";
 import { ClubsService } from "./clubs.service";
@@ -6,6 +6,72 @@ import { ClubsService } from "./clubs.service";
 @Controller("clubs")
 export class ClubsController {
   constructor(private readonly clubs: ClubsService) {}
+
+  // Read by dedicated-server plugins (no auth). Steam IDs are strings.
+  @Get("clan-tags")
+  public async clanTags() {
+    return this.clubs.clanTagsPayload();
+  }
+
+  @HasuraAction()
+  public async createClub(data: {
+    user: User;
+    name: string;
+    short_name?: string | null;
+    description: string;
+    join_mode: string;
+  }) {
+    return this.clubs.createClub(String(data.user.steam_id), {
+      name: data.name,
+      short_name: data.short_name,
+      description: data.description,
+      join_mode: data.join_mode,
+    });
+  }
+
+  @HasuraAction()
+  public async transferClub(data: {
+    user: User;
+    club_id: string;
+    steam_id: string;
+  }) {
+    return this.clubs.transferClub(
+      data.club_id,
+      String(data.user.steam_id),
+      String(data.steam_id),
+    );
+  }
+
+  @HasuraAction()
+  public async leaveClub(data: { user: User; club_id: string }) {
+    return this.clubs.leaveClub(data.club_id, String(data.user.steam_id));
+  }
+
+  @HasuraAction()
+  public async grantPlayerTag(data: {
+    user: User;
+    steam_id: string;
+    tag: string;
+  }) {
+    return this.clubs.grantPlayerTag(
+      String(data.user.steam_id),
+      String(data.steam_id),
+      data.tag,
+    );
+  }
+
+  @HasuraAction()
+  public async revokePlayerTag(data: {
+    user: User;
+    steam_id: string;
+    tag: string;
+  }) {
+    return this.clubs.revokePlayerTag(
+      String(data.user.steam_id),
+      String(data.steam_id),
+      data.tag,
+    );
+  }
 
   @HasuraAction()
   public async acceptClubInvite(data: { user: User; invite_id: string }) {

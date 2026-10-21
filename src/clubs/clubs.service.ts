@@ -8,13 +8,154 @@ import { randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
 import { HasuraService } from "../hasura/hasura.service";
 
+const OWN_CLUB_TAG = "OwnClub";
+const CLAN_TAG_CACHE_MS = 15_000;
+
 @Injectable()
 export class ClubsService {
+  private clanTagCache: { at: number; map: Map<string, string> } | null = null;
+
   constructor(
     private readonly postgres: PostgresService,
     private readonly logger: Logger,
     private readonly hasura: HasuraService,
   ) {}
+
+  public async createClub(
+    steamId: string,
+    input: {
+      name: string;
+      short_name?: string | null;
+      description: string;
+      join_mode: string;
+    },
+  ) {
+    await this.assertCanOwnClub(steamId);
+    const name = input.name.trim();
+    if (name.length < 2) throw new BadRequestException("Club name is required");
+    const shortName = (input.short_name || "").trim().slice(0, 5) || null;
+    const joinMode = ["open", "request", "invite_only"].includes(input.join_mode)
+      ? input.join_mode
+      : "open";
+    try {
+      const rows = await this.postgres.query<Array<{ id: string; slug: string }>>(
+        `INSERT INTO public.clubs (name, short_name, description, join_mode, owner_steam_id)
+         VALUES ($1, $2, $3, $4, $5::bigint)
+         RETURNING id::text, slug`,
+        [name, shortName, input.description ?? "", joinMode, steamId],
+      );
+      const club = rows.at(0);
+      if (!club) throw new BadRequestException("Could not create club");
+      this.invalidateClanTags();
+      return { success: true, ...club };
+    } catch (err) {
+      this.rethrowClubRule(err);
+    }
+  }
+
+  public async transferClub(
+    clubId: string,
+    actorSteamId: string,
+    newOwnerSteamId: string,
+  ) {
+    const target = String(newOwnerSteamId || "").trim();
+    if (!target) throw new BadRequestException("New owner is required");
+    const clubs = await this.postgres.query<Array<{ owner_steam_id: string }>>(
+      `SELECT owner_steam_id::text FROM public.clubs WHERE id = $1::uuid`,
+      [clubId],
+    );
+    const club = clubs.at(0);
+    if (!club) throw new BadRequestException("Club not found");
+    if (club.owner_steam_id !== actorSteamId && !(await this.isSiteAdmin(actorSteamId))) {
+      throw new ForbiddenException("Only the club owner can transfer it");
+    }
+    await this.assertCanOwnClub(target);
+    try {
+      await this.postgres.query(
+        `UPDATE public.clubs SET owner_steam_id = $2::bigint WHERE id = $1::uuid`,
+        [clubId, target],
+      );
+      await this.postgres.query(
+        `UPDATE public.club_members SET role = 'admin'
+         WHERE club_id = $1::uuid AND steam_id = $2::bigint AND role = 'owner'`,
+        [clubId, club.owner_steam_id],
+      );
+      await this.postgres.query(
+        `INSERT INTO public.club_members (club_id, steam_id, role)
+         VALUES ($1::uuid, $2::bigint, 'owner')
+         ON CONFLICT (club_id, steam_id) DO UPDATE SET role = 'owner'`,
+        [clubId, target],
+      );
+      await this.logActivity(clubId, actorSteamId, "owner_transferred", {
+        to: target,
+      });
+      this.invalidateClanTags();
+      return { success: true };
+    } catch (err) {
+      this.rethrowClubRule(err);
+    }
+  }
+
+  public async leaveClub(clubId: string, steamId: string) {
+    const rows = await this.postgres.query<Array<{ role: string }>>(
+      `SELECT role FROM public.club_members
+       WHERE club_id = $1::uuid AND steam_id = $2::bigint`,
+      [clubId, steamId],
+    );
+    const membership = rows.at(0);
+    if (!membership) throw new BadRequestException("Not a club member");
+    if (membership.role === "owner") {
+      throw new ForbiddenException("Transfer the club before leaving");
+    }
+    await this.postgres.query(
+      `DELETE FROM public.club_members
+       WHERE club_id = $1::uuid AND steam_id = $2::bigint`,
+      [clubId, steamId],
+    );
+    await this.logActivity(clubId, steamId, "member_left", {});
+    this.invalidateClanTags();
+    return { success: true };
+  }
+
+  public async grantPlayerTag(actorSteamId: string, steamId: string, tag: string) {
+    await this.assertSiteAdmin(actorSteamId);
+    const normalized = this.normalizeTag(tag);
+    await this.postgres.query(
+      `INSERT INTO public.player_tags (steam_id, tag, granted_by_steam_id)
+       VALUES ($1::bigint, $2, $3::bigint)
+       ON CONFLICT (steam_id, tag) DO UPDATE SET
+         granted_by_steam_id = EXCLUDED.granted_by_steam_id,
+         granted_at = now()`,
+      [steamId, normalized, actorSteamId],
+    );
+    return { success: true };
+  }
+
+  public async revokePlayerTag(actorSteamId: string, steamId: string, tag: string) {
+    await this.assertSiteAdmin(actorSteamId);
+    await this.postgres.query(
+      `DELETE FROM public.player_tags
+       WHERE steam_id = $1::bigint AND tag = $2`,
+      [steamId, this.normalizeTag(tag)],
+    );
+    return { success: true };
+  }
+
+  public async clanTagMap(steamIds?: string[]): Promise<Map<string, string>> {
+    const all = await this.allClanTags();
+    if (!steamIds?.length) return all;
+    const filtered = new Map<string, string>();
+    for (const id of steamIds) {
+      const tag = all.get(String(id));
+      if (tag) filtered.set(String(id), tag);
+    }
+    return filtered;
+  }
+
+  public async clanTagsPayload() {
+    const map = await this.allClanTags();
+    return { tags: Object.fromEntries(map) };
+  }
 
   public async acceptClubInvite(inviteId: string, steamId: string) {
     const rows = await this.postgres.query<
@@ -30,12 +171,8 @@ export class ClubsService {
       throw new ForbiddenException("Invite is for another player");
 
     await this.assertNotBanned(invite.club_id, steamId);
-    await this.postgres.query(
-      `INSERT INTO public.club_members (club_id, steam_id, role)
-       VALUES ($1::uuid, $2::bigint, 'member')
-       ON CONFLICT DO NOTHING`,
-      [invite.club_id, steamId],
-    );
+    await this.assertJoinAllowed(steamId);
+    await this.insertMember(invite.club_id, steamId);
     await this.postgres.query(`DELETE FROM public.club_invites WHERE id = $1::uuid`, [
       inviteId,
     ]);
@@ -71,15 +208,11 @@ export class ClubsService {
       throw new BadRequestException("Invite link exhausted");
 
     await this.assertNotBanned(link.club_id, steamId);
+    await this.assertJoinAllowed(steamId);
     if (!link.bypass_requirements)
       await this.assertJoinRequirements(link.club_id, steamId);
 
-    await this.postgres.query(
-      `INSERT INTO public.club_members (club_id, steam_id, role)
-       VALUES ($1::uuid, $2::bigint, 'member')
-       ON CONFLICT DO NOTHING`,
-      [link.club_id, steamId],
-    );
+    await this.insertMember(link.club_id, steamId);
     await this.postgres.query(
       `UPDATE public.club_invite_links SET uses = uses + 1 WHERE id = $1::uuid`,
       [link.id],
@@ -142,12 +275,8 @@ export class ClubsService {
 
     if (accept) {
       await this.assertNotBanned(req.club_id, req.steam_id);
-      await this.postgres.query(
-        `INSERT INTO public.club_members (club_id, steam_id, role)
-         VALUES ($1::uuid, $2::bigint, 'member')
-         ON CONFLICT DO NOTHING`,
-        [req.club_id, req.steam_id],
-      );
+      await this.assertJoinAllowed(req.steam_id);
+      await this.insertMember(req.club_id, req.steam_id);
       await this.logActivity(req.club_id, req.steam_id, "member_joined", {
         via: "request",
       });
@@ -171,13 +300,9 @@ export class ClubsService {
     if (club.join_mode !== "open")
       throw new BadRequestException("Club is not open join");
     await this.assertNotBanned(clubId, steamId);
+    await this.assertJoinAllowed(steamId);
     await this.assertJoinRequirements(clubId, steamId);
-    await this.postgres.query(
-      `INSERT INTO public.club_members (club_id, steam_id, role)
-       VALUES ($1::uuid, $2::bigint, 'member')
-       ON CONFLICT DO NOTHING`,
-      [clubId, steamId],
-    );
+    await this.insertMember(clubId, steamId);
     await this.logActivity(clubId, steamId, "member_joined", { via: "open" });
     return { success: true };
   }
@@ -500,6 +625,113 @@ export class ClubsService {
         `club leaderboard points failed steam=${steamId}: ${err}`,
       );
     }
+  }
+
+  private async insertMember(clubId: string, steamId: string) {
+    try {
+      await this.postgres.query(
+        `INSERT INTO public.club_members (club_id, steam_id, role)
+         VALUES ($1::uuid, $2::bigint, 'member')
+         ON CONFLICT DO NOTHING`,
+        [clubId, steamId],
+      );
+      this.invalidateClanTags();
+    } catch (err) {
+      this.rethrowClubRule(err);
+    }
+  }
+
+  private async allClanTags(): Promise<Map<string, string>> {
+    const now = Date.now();
+    if (this.clanTagCache && now - this.clanTagCache.at < CLAN_TAG_CACHE_MS) {
+      return this.clanTagCache.map;
+    }
+    const rows = await this.postgres.query<Array<{ steam_id: string; tag: string }>>(
+      `SELECT DISTINCT ON (m.steam_id)
+         m.steam_id::text AS steam_id,
+         public.club_clan_tag(c.short_name, c.name) AS tag
+       FROM public.club_members m
+       JOIN public.clubs c ON c.id = m.club_id
+       WHERE public.club_clan_tag(c.short_name, c.name) <> ''
+       ORDER BY m.steam_id, m.is_primary DESC, m.joined_at ASC`,
+    );
+    const map = new Map<string, string>();
+    for (const row of rows) {
+      if (row.tag) map.set(row.steam_id, row.tag);
+    }
+    this.clanTagCache = { at: now, map };
+    return map;
+  }
+
+  private invalidateClanTags() {
+    this.clanTagCache = null;
+  }
+
+  private async assertJoinAllowed(steamId: string) {
+    const rows = await this.postgres.query<Array<{ blocked_until: string }>>(
+      `SELECT blocked_until::text
+       FROM public.club_leave_cooldowns
+       WHERE steam_id = $1::bigint AND blocked_until > now()`,
+      [steamId],
+    );
+    const until = rows.at(0)?.blocked_until;
+    if (until) {
+      throw new ForbiddenException(`Cannot join a club until ${until}`);
+    }
+  }
+
+  private async assertCanOwnClub(steamId: string) {
+    const rows = await this.postgres.query<Array<{ ok: boolean }>>(
+      `SELECT true AS ok WHERE public.player_can_own_club($1::bigint)`,
+      [steamId],
+    );
+    if (!rows.length) {
+      throw new ForbiddenException(
+        "OwnClub tag required to create or own a club",
+      );
+    }
+  }
+
+  private async isSiteAdmin(steamId: string) {
+    const rows = await this.postgres.query<Array<{ role: string }>>(
+      `SELECT role FROM public.players WHERE steam_id = $1::bigint`,
+      [steamId],
+    );
+    return rows.at(0)?.role === "administrator";
+  }
+
+  private async assertSiteAdmin(steamId: string) {
+    if (!(await this.isSiteAdmin(steamId))) {
+      throw new ForbiddenException("Site administrator required");
+    }
+  }
+
+  private normalizeTag(tag: string) {
+    const value = (tag || "").trim();
+    if (!value) throw new BadRequestException("Tag is required");
+    if (value !== OWN_CLUB_TAG) {
+      throw new BadRequestException("Unsupported player tag");
+    }
+    return value;
+  }
+
+  private rethrowClubRule(err: unknown): never {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("own_club_tag_required")) {
+      throw new ForbiddenException(
+        "OwnClub tag required to create or own a club",
+      );
+    }
+    const cooldown = msg.match(/club_join_cooldown:([^\s]+(?:\s[^\s]+)?)/);
+    if (cooldown?.[1] || msg.includes("club_join_cooldown")) {
+      const until = cooldown?.[1]?.trim() || "";
+      throw new ForbiddenException(
+        until
+          ? `Cannot join a club until ${until}`
+          : "Cannot join a club yet",
+      );
+    }
+    throw err;
   }
 
   private async assertCanManage(clubId: string, steamId: string) {

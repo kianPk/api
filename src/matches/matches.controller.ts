@@ -19,6 +19,7 @@ import {
   RequiredPluginMissing,
 } from "../game-plugins/game-modes.service";
 import { AnticheatService } from "../anticheat/anticheat.service";
+import { ClubsService } from "../clubs/clubs.service";
 import { MatchAssistantService } from "./match-assistant/match-assistant.service";
 import { DiscordBotOverviewService } from "../discord-bot/discord-bot-overview/discord-bot-overview.service";
 import { DiscordBotMessagingService } from "../discord-bot/discord-bot-messaging/discord-bot-messaging.service";
@@ -142,6 +143,7 @@ export class MatchesController {
     private readonly utilityPractice: UtilityPracticeService,
     private readonly gameModesService: GameModesService,
     private readonly anticheat: AnticheatService,
+    private readonly clubs: ClubsService,
   ) {
     this.appConfig = this.configService.get<AppConfig>("app");
   }
@@ -525,6 +527,15 @@ export class MatchesController {
     match.lineup_1.tag =
       lineup1TournamentTag || match.lineup_1.team?.short_name;
     delete match.lineup_1.team;
+    const clubTags = await this.clubs.clanTagMap(
+      [
+        ...match.lineup_1.lineup_players,
+        ...match.lineup_2.lineup_players,
+      ]
+        .map((player) => String(player.steam_id || ""))
+        .filter(Boolean),
+    );
+
     match.lineup_1.lineup_players = match.lineup_1.lineup_players.map(
       (player) => ({
         ...player,
@@ -534,6 +545,7 @@ export class MatchesController {
         is_gagged: player.player?.is_gagged || false,
         is_muted: player.player?.is_muted || false,
         elo: getPlayerElo(player.player?.elo as Record<string, unknown>),
+        club_tag: clubTags.get(String(player.steam_id || "")) || null,
         roster_image_url:
           (lineup1TeamId &&
             player.player?.team_members?.find(
@@ -558,6 +570,7 @@ export class MatchesController {
         is_gagged: player.player?.is_gagged || false,
         is_muted: player.player?.is_muted || false,
         elo: getPlayerElo(player.player?.elo as Record<string, unknown>),
+        club_tag: clubTags.get(String(player.steam_id || "")) || null,
         roster_image_url:
           (lineup2TeamId &&
             player.player?.team_members?.find(
