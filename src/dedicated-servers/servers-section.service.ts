@@ -39,6 +39,46 @@ export class ServersSectionService {
 
   public static readonly RESERVE_SETTING = "servers_section_reserve_slots";
 
+  // A club server uses the pool its owner saved. Anything else, including a
+  // club that has not saved one yet, keeps the site-wide pool.
+  public async mapsForServer(
+    serverId: string,
+    mode: ServerSectionMode,
+  ): Promise<Array<ServerSectionMap> | null> {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        serverId,
+      )
+    ) {
+      return null;
+    }
+    try {
+      const [row] = await this.postgres.query<
+        Array<{ server_modes: Record<string, { maps?: unknown }> | null }>
+      >(
+        `SELECT c.server_modes
+           FROM public.servers s
+           JOIN public.clubs c ON c.id = s.club_id
+          WHERE s.id = $1::uuid
+            AND s.section_mode = $2`,
+        [serverId, mode.key],
+      );
+      const saved = row?.server_modes?.[mode.key]?.maps;
+      if (!Array.isArray(saved) || saved.length === 0) return null;
+      const maps = sectionMapsFrom(mode, JSON.stringify(saved));
+      const usedSaved = maps.some((map) =>
+        saved.some(
+          (entry) => String((entry as { id?: string })?.id || "") === map.id,
+        ),
+      );
+      return usedSaved ? maps : null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`club map pool lookup failed: ${message}`);
+      return null;
+    }
+  }
+
   public async maps(mode: ServerSectionMode): Promise<Array<ServerSectionMap>> {
     const [row] = await this.postgres.query<Array<{ value: string }>>(
       `SELECT value FROM settings WHERE name = $1`,

@@ -12,11 +12,16 @@ import { YpointService } from "../ypoint/ypoint.service";
 import { User } from "../auth/types/User";
 import {
   isServerSectionMode,
+  SECTION_MAP_ID,
+  sectionMapsFrom,
   SERVER_SECTION_MODES,
+  type ServerSectionModeKey,
 } from "../game-plugins/server-section-modes";
 
 const OWN_CLUB_TAG = "OwnClub";
 const CLAN_TAG_CACHE_MS = 15_000;
+const CLUB_MAX_PER_MODE = 10;
+const CLUB_NODE_RESERVE = 2;
 
 @Injectable()
 export class ClubsService {
@@ -902,23 +907,53 @@ export class ClubsService {
 
   public async listClubServers(clubId: string, user?: User | null) {
     this.assertUuid(clubId);
-    let servers = await this.clubServerRows(clubId);
+    const servers = await this.clubServerRows(clubId);
     const manage = await this.canManageClubServers(clubId, user);
-    let provisionError: string | null = null;
-    if (servers.length === 0 && (await this.isClubStaff(clubId, user))) {
-      try {
-        await this.ensureClubServer(clubId);
-        servers = await this.clubServerRows(clubId);
-      } catch (error) {
-        provisionError = error instanceof Error ? error.message : String(error);
-      }
-    }
     return {
       servers,
       manage,
       modes: Object.keys(SERVER_SECTION_MODES),
-      provision_error: provisionError,
+      config: manage ? await this.clubModeConfig(clubId, servers) : undefined,
+      provision_error: null as string | null,
     };
+  }
+
+  public async saveClubServerSettings(
+    clubId: string,
+    user: User,
+    input: {
+      mode?: string;
+      count?: number;
+      maps?: Array<{ id?: string; name?: string }>;
+    },
+  ) {
+    await this.assertClubServerStaff(clubId, user);
+    const mode = String(input?.mode || "");
+    if (!isServerSectionMode(mode)) {
+      throw new BadRequestException("Unknown server mode");
+    }
+    const count = Math.min(
+      CLUB_MAX_PER_MODE,
+      Math.max(0, Math.floor(Number(input?.count) || 0)),
+    );
+    const maps = this.cleanClubMaps(input?.maps);
+    if (maps.length === 0) {
+      throw new BadRequestException("Add at least one map");
+    }
+    const current = await this.readServerModes(clubId);
+    current[mode] = { count, maps };
+    await this.postgres.query(
+      `UPDATE public.clubs SET server_modes = $2::jsonb WHERE id = $1::uuid`,
+      [clubId, JSON.stringify(current)],
+    );
+    let provisionError: string | null = null;
+    try {
+      await this.reconcileClubMode(clubId, mode, count);
+    } catch (error) {
+      provisionError = error instanceof Error ? error.message : String(error);
+    }
+    const listed = await this.listClubServers(clubId, user);
+    return { ...listed, provision_error: provisionError };
   }
 
   public async setClubServerMode(clubId: string, mode: string, user: User) {
@@ -989,8 +1024,78 @@ export class ClubsService {
       .slice(0, 24);
   }
 
-  private async ensureClubServer(clubId: string) {
-    const prefix = await this.clubServerPrefix(clubId);
+  private async readServerModes(
+    clubId: string,
+  ): Promise<Record<string, { count?: number; maps?: unknown }>> {
+    const [row] = await this.postgres.query<
+      Array<{ server_modes: Record<string, { count?: number; maps?: unknown }> | null }>
+    >(
+      `SELECT server_modes FROM public.clubs WHERE id = $1::uuid`,
+      [clubId],
+    );
+    const raw = row?.server_modes;
+    return raw && typeof raw === "object" ? raw : {};
+  }
+
+  private cleanClubMaps(
+    input: unknown,
+  ): Array<{ id: string; name: string }> {
+    const maps: Array<{ id: string; name: string }> = [];
+    for (const entry of Array.isArray(input) ? input : []) {
+      const id = String(entry?.id ?? "").trim();
+      const name = String(entry?.name ?? "")
+        .replace(/[\x00-\x1f";]/g, "")
+        .trim()
+        .slice(0, 48);
+      if (
+        SECTION_MAP_ID.test(id) &&
+        name &&
+        !maps.some((map) => map.id === id) &&
+        maps.length < 30
+      ) {
+        maps.push({ id, name });
+      }
+    }
+    return maps;
+  }
+
+  private async clubModeConfig(
+    clubId: string,
+    servers: Array<{ section_mode: string | null }>,
+  ) {
+    const saved = await this.readServerModes(clubId);
+    const config: Record<
+      string,
+      { count: number; maps: Array<{ id: string; name: string }> }
+    > = {};
+    for (const mode of Object.values(SERVER_SECTION_MODES)) {
+      const entry = saved[mode.key] || {};
+      const hasCount = Object.prototype.hasOwnProperty.call(entry, "count");
+      const count = hasCount
+        ? Math.min(
+            CLUB_MAX_PER_MODE,
+            Math.max(0, Math.floor(Number(entry.count) || 0)),
+          )
+        : servers.filter((server) => server.section_mode === mode.key).length;
+      let maps = this.cleanClubMaps(entry.maps);
+      if (maps.length === 0) {
+        const [row] = await this.postgres.query<Array<{ value: string }>>(
+          `SELECT value FROM settings WHERE name = $1`,
+          [`servers_section_${mode.key}_maps`],
+        );
+        maps = sectionMapsFrom(mode, row?.value);
+      }
+      config[mode.key] = { count, maps };
+    }
+    return config;
+  }
+
+  private clubServerNumber(label: string | null) {
+    const match = /#(\d+)\s*$/.exec(label || "");
+    return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
+  }
+
+  private async pickClubNode(): Promise<string | null> {
     const [node] = await this.postgres.query<Array<{ id: string }>>(
       `SELECT n.id
          FROM game_server_nodes n
@@ -1004,11 +1109,88 @@ export class ClubsService {
          ) slots
         WHERE n.enabled = true
           AND n.status = 'Online'
-          AND slots.free > 2
+          AND slots.free > $1
         ORDER BY slots.free DESC, n.id
         LIMIT 1`,
+      [CLUB_NODE_RESERVE],
     );
-    if (!node) {
+    return node?.id ?? null;
+  }
+
+  private async reconcileClubMode(
+    clubId: string,
+    modeKey: ServerSectionModeKey,
+    desired: number,
+  ) {
+    const mode = SERVER_SECTION_MODES[modeKey];
+    const ranked = (
+      await this.postgres.query<Array<{ id: string; label: string | null }>>(
+        `SELECT id::text, label
+           FROM public.servers
+          WHERE club_id = $1::uuid
+            AND section_mode = $2`,
+        [clubId, mode.key],
+      )
+    )
+      .map((server) => ({
+        ...server,
+        number: this.clubServerNumber(server.label),
+      }))
+      .sort((a, b) => a.number - b.number);
+
+    for (const extra of ranked.slice(desired)) {
+      await this.postgres.query(
+        `DELETE FROM public.servers WHERE id = $1::uuid AND club_id = $2::uuid`,
+        [extra.id, clubId],
+      );
+    }
+
+    const kept = ranked.slice(0, desired);
+    for (let index = 0; index < kept.length; index++) {
+      const label = `${mode.label} #${index + 1}`;
+      if (kept[index].label === label) continue;
+      await this.postgres.query(
+        `UPDATE public.servers SET label = $1 WHERE id = $2::uuid AND club_id = $3::uuid`,
+        [label, kept[index].id, clubId],
+      );
+    }
+
+    let missing = desired - kept.length;
+    const taken = new Set(kept.map((_, index) => index + 1));
+    for (let number = 1; missing > 0 && number < 100; number++) {
+      if (taken.has(number)) continue;
+      const nodeId = await this.pickClubNode();
+      if (!nodeId) {
+        throw new BadRequestException("No free game server slot");
+      }
+      await this.postgres.query(
+        `INSERT INTO public.servers (
+            label, section_mode, club_id, is_dedicated, enabled, game,
+            game_server_node_id, host, port, tv_port, region,
+            rcon_password, type, max_players
+         ) VALUES (
+            $1, $2, $3::uuid, true, true, 'cs2',
+            $4, '127.0.0.1', 27015, 27020, '',
+            gen_random_uuid()::text::bytea, $5, $6
+         )`,
+        [
+          `${mode.label} #${number}`,
+          mode.key,
+          clubId,
+          nodeId,
+          mode.type,
+          mode.maxPlayers,
+        ],
+      );
+      taken.add(number);
+      missing--;
+    }
+  }
+
+  private async ensureClubServer(clubId: string) {
+    const prefix = await this.clubServerPrefix(clubId);
+    const nodeId = await this.pickClubNode();
+    if (!nodeId) {
       throw new BadRequestException("No free game server slot");
     }
     await this.postgres.query(
@@ -1023,7 +1205,7 @@ export class ClubsService {
         WHERE NOT EXISTS (
           SELECT 1 FROM public.servers WHERE club_id = $2::uuid
         )`,
-      [`${prefix} · Duels`, clubId, node.id],
+      [`${prefix} · Duels`, clubId, nodeId],
     );
   }
 

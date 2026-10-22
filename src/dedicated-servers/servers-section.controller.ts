@@ -1,4 +1,10 @@
-import { Controller, Get, NotFoundException, Param } from "@nestjs/common";
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Query,
+} from "@nestjs/common";
 import { ServersSectionService } from "./servers-section.service";
 import {
   SERVER_SECTION_MODES,
@@ -13,12 +19,23 @@ export class ServersSectionController {
 
   // Read by each mode's plugin on every map start, and by the Servers page.
   @Get("section-maps/:mode")
-  public async sectionMaps(@Param("mode") mode: string) {
+  public async sectionMaps(
+    @Param("mode") mode: string,
+    @Query("server_id") serverId?: string,
+  ) {
     if (!isServerSectionMode(mode)) {
       throw new NotFoundException();
     }
+    const section = SERVER_SECTION_MODES[mode];
+    if (serverId) {
+      const clubMaps = await this.serversSection.mapsForServer(
+        serverId,
+        section,
+      );
+      if (clubMaps?.length) return { maps: clubMaps };
+    }
     return {
-      maps: await this.serversSection.maps(SERVER_SECTION_MODES[mode]),
+      maps: await this.serversSection.maps(section),
     };
   }
 }

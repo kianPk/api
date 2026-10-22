@@ -22,6 +22,22 @@ export class ClubServersHttpController {
     return this.clubs.listClubServers(clubId, request.user as User | undefined);
   }
 
+  @Post("clubs/:clubId/servers/settings")
+  public async saveSettings(
+    @Param("clubId") clubId: string,
+    @Body()
+    body: {
+      mode?: string;
+      count?: number;
+      maps?: Array<{ id?: string; name?: string }>;
+    },
+    @Req() request: Request,
+  ) {
+    const user = request.user as User | undefined;
+    if (!user) throw new ForbiddenException("Authentication required");
+    return this.clubs.saveClubServerSettings(clubId, user, body || {});
+  }
+
   @Post("clubs/:clubId/servers/mode")
   public async setMode(
     @Param("clubId") clubId: string,
