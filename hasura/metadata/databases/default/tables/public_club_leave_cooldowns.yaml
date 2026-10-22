@@ -24,14 +24,6 @@ select_permissions:
     - last_left_at
     - blocked_until
     filter: {}
-- role: administrator
-  permission:
-    columns:
-    - steam_id
-    - leave_count
-    - last_left_at
-    - blocked_until
-    filter: {}
 update_permissions:
 - role: administrator
   permission:
