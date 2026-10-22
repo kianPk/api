@@ -924,7 +924,7 @@ export class ClubsService {
     const manage = await this.canManageClubServers(clubId, user);
     if (!manage) return { servers, manage: false, available: [] };
 
-    const siteAdmin = this.isSiteAdmin(user);
+    const siteAdmin = this.callerIsSiteAdmin(user);
     const available = siteAdmin
       ? await this.postgres.query<
           Array<{
@@ -980,7 +980,7 @@ export class ClubsService {
             )
           )
         RETURNING s.id::text`,
-      [clubId, serverId, this.isSiteAdmin(user), String(user.steam_id)],
+      [clubId, serverId, this.callerIsSiteAdmin(user), String(user.steam_id)],
     );
     if (!updated.length) {
       throw new ForbiddenException("That server cannot be added to this club");
@@ -1335,13 +1335,13 @@ export class ClubsService {
     }
   }
 
-  private isSiteAdmin(user?: User | null) {
+  private callerIsSiteAdmin(user?: User | null) {
     return String(user?.role || "") === "administrator";
   }
 
   private async canManageClubServers(clubId: string, user?: User | null) {
     if (!user?.steam_id) return false;
-    if (this.isSiteAdmin(user)) return true;
+    if (this.callerIsSiteAdmin(user)) return true;
     const rows = await this.postgres.query<Array<{ ok: boolean }>>(
       `SELECT true AS ok FROM public.club_members
         WHERE club_id = $1::uuid AND steam_id = $2::bigint
