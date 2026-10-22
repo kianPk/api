@@ -8,6 +8,7 @@ import { randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
 import { HasuraService } from "../hasura/hasura.service";
 import { YpointService } from "../ypoint/ypoint.service";
+import { User } from "../auth/types/User";
 
 const OWN_CLUB_TAG = "OwnClub";
 const CLAN_TAG_CACHE_MS = 15_000;
@@ -894,7 +895,139 @@ export class ClubsService {
     return { success: true };
   }
 
-  public async liveChallenges(mode: string, steamId?: string) {
+  public async listClubServers(clubId: string, user?: User | null) {
+    this.assertUuid(clubId);
+    const servers = await this.postgres.query<
+      Array<{
+        id: string;
+        label: string | null;
+        section_mode: string | null;
+        connected: boolean;
+        enabled: boolean;
+        link: string | null;
+      }>
+    >(
+      `SELECT s.id::text AS id,
+              s.label,
+              s.section_mode,
+              s.connected,
+              s.enabled,
+              public.get_server_connection_link(
+                s, '{"x-hasura-role":"guest"}'::json
+              ) AS link
+         FROM public.servers s
+        WHERE s.club_id = $1::uuid
+        ORDER BY s.label ASC NULLS LAST`,
+      [clubId],
+    );
+
+    const manage = await this.canManageClubServers(clubId, user);
+    if (!manage) return { servers, manage: false, available: [] };
+
+    const siteAdmin = this.isSiteAdmin(user);
+    const available = siteAdmin
+      ? await this.postgres.query<
+          Array<{
+            id: string;
+            label: string | null;
+            section_mode: string | null;
+          }>
+        >(
+          `SELECT s.id::text AS id, s.label, s.section_mode
+             FROM public.servers s
+            WHERE s.section_mode IS NOT NULL
+              AND s.club_id IS NULL
+            ORDER BY s.label ASC NULLS LAST
+            LIMIT 100`,
+        )
+      : await this.postgres.query<
+          Array<{
+            id: string;
+            label: string | null;
+            section_mode: string | null;
+          }>
+        >(
+          `SELECT s.id::text AS id,
+                  COALESCE(NULLIF(h.label, ''), s.label) AS label,
+                  s.section_mode
+             FROM public.hosted_servers h
+             JOIN public.servers s ON s.id = h.server_id
+            WHERE h.owner_steam_id = $1::bigint
+              AND s.club_id IS NULL
+              AND s.section_mode IS NOT NULL
+            ORDER BY label ASC NULLS LAST`,
+          [String(user?.steam_id || "")],
+        );
+
+    return { servers, manage: true, available };
+  }
+
+  public async attachClubServer(clubId: string, serverId: string, user: User) {
+    await this.assertClubServerStaff(clubId, user);
+    this.assertUuid(serverId);
+    const updated = await this.postgres.query<Array<{ id: string }>>(
+      `UPDATE public.servers s
+          SET club_id = $1::uuid
+        WHERE s.id = $2::uuid
+          AND s.club_id IS NULL
+          AND s.section_mode IS NOT NULL
+          AND (
+            $3::boolean
+            OR EXISTS (
+              SELECT 1 FROM public.hosted_servers h
+               WHERE h.server_id = s.id
+                 AND h.owner_steam_id = $4::bigint
+            )
+          )
+        RETURNING s.id::text`,
+      [clubId, serverId, this.isSiteAdmin(user), String(user.steam_id)],
+    );
+    if (!updated.length) {
+      throw new ForbiddenException("That server cannot be added to this club");
+    }
+    return { success: true };
+  }
+
+  public async detachClubServer(clubId: string, serverId: string, user: User) {
+    await this.assertClubServerStaff(clubId, user);
+    this.assertUuid(serverId);
+    const updated = await this.postgres.query<Array<{ id: string }>>(
+      `UPDATE public.servers
+          SET club_id = NULL
+        WHERE id = $2::uuid
+          AND club_id = $1::uuid
+        RETURNING id::text`,
+      [clubId, serverId],
+    );
+    if (!updated.length)
+      throw new ForbiddenException("Server is not on this club");
+    return { success: true };
+  }
+
+  public async assertClubServerMap(
+    clubId: string,
+    serverId: string,
+    user: User,
+  ) {
+    await this.assertClubServerStaff(clubId, user);
+    this.assertUuid(serverId);
+    const rows = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id::text FROM public.servers
+        WHERE id = $2::uuid AND club_id = $1::uuid`,
+      [clubId, serverId],
+    );
+    if (!rows.length) {
+      throw new ForbiddenException("Server is not on this club");
+    }
+  }
+
+  public async liveChallenges(
+    mode: string,
+    steamId?: string,
+    serverId?: string,
+  ) {
+    const clubId = await this.clubIdForServer(serverId);
+    if (!clubId) return { challenges: [] };
     const section = this.normalizeMode(mode);
     const rows = await this.postgres.query<Array<Record<string, unknown>>>(
       `SELECT ch.id::text AS id,
@@ -924,13 +1057,14 @@ export class ClubsService {
         WHERE ch.active
           AND ch.ends_at > now()
           AND cat.server_mode = $1
+          AND ch.club_id = $3::uuid
           AND public.club_challenge_is_visible(
             ch,
             json_build_object('x-hasura-user-id', NULLIF($2, ''))
           )
         ORDER BY cat.sort_order ASC
         LIMIT 80`,
-      [section, steamId || ""],
+      [section, steamId || "", clubId],
     );
     return { challenges: rows };
   }
@@ -938,6 +1072,7 @@ export class ClubsService {
   public async recordChallengeEvent(input: {
     mode: string;
     steam_id: string;
+    server_id?: string | null;
     weapon?: string | null;
     noscope?: boolean;
     headshot?: boolean;
@@ -946,6 +1081,8 @@ export class ClubsService {
   }) {
     const steamId = String(input.steam_id || "").trim();
     if (!steamId) throw new BadRequestException("steam_id is required");
+    const clubId = await this.clubIdForServer(input.server_id);
+    if (!clubId) return { progress: [] };
     const mode = this.normalizeMode(input.mode);
     const extra = String(input.metric || "").trim();
     const rawAmount = Number(input.amount);
@@ -963,7 +1100,7 @@ export class ClubsService {
           ...(input.headshot ? ["headshots"] : []),
           ...(input.noscope ? ["noscope"] : []),
         ];
-    if (!(await this.hasLiveChallengeMetrics(mode, metrics))) {
+    if (!(await this.hasLiveChallengeMetrics(mode, metrics, clubId))) {
       return { progress: [] };
     }
     const weapon = this.normalizeWeapon(input.weapon);
@@ -997,11 +1134,12 @@ export class ClubsService {
           AND cat.server_mode = $1
           AND cat.metric = ANY($2::text[])
           AND (cat.weapon = '' OR regexp_replace(cat.weapon, '^weapon_', '') = $3)
+          AND ch.club_id = $5::uuid
           AND public.club_challenge_is_visible(
             ch,
             json_build_object('x-hasura-user-id', $4)
           )`,
-      [mode, metrics, weapon, steamId],
+      [mode, metrics, weapon, steamId, clubId],
     );
 
     const progress: Array<{
@@ -1094,8 +1232,12 @@ export class ClubsService {
   >();
   private liveMetricCache = new Map<string, { yes: boolean; at: number }>();
 
-  private async hasLiveChallengeMetrics(mode: string, metrics: string[]) {
-    const key = `${mode}:${metrics.slice().sort().join(",")}`;
+  private async hasLiveChallengeMetrics(
+    mode: string,
+    metrics: string[],
+    clubId: string,
+  ) {
+    const key = `${clubId}:${mode}:${metrics.slice().sort().join(",")}`;
     const hit = this.liveMetricCache.get(key);
     if (hit && Date.now() - hit.at < 15_000) return hit.yes;
     const rows = await this.postgres.query<Array<{ ok: boolean }>>(
@@ -1104,10 +1246,11 @@ export class ClubsService {
          JOIN public.club_challenge_catalog cat ON cat.id = ch.catalog_id
         WHERE ch.active
           AND ch.ends_at > now()
+          AND ch.club_id = $3::uuid
           AND cat.server_mode = $1
           AND cat.metric = ANY($2::text[])
         LIMIT 1`,
-      [mode, metrics],
+      [mode, metrics, clubId],
     );
     const yes = rows.length > 0;
     this.liveMetricCache.set(key, { yes, at: Date.now() });
@@ -1127,6 +1270,8 @@ export class ClubsService {
   ) {
     const mode = await this.resolveMatchChallengeMode(matchId);
     if (!mode) return { progress: [] };
+    const serverId = await this.serverIdForMatch(matchId);
+    if (!serverId) return { progress: [] };
     const steamId = String(input.steam_id || "").trim();
     if (!steamId) return { progress: [] };
     try {
@@ -1134,6 +1279,7 @@ export class ClubsService {
         ...input,
         mode,
         steam_id: steamId,
+        server_id: serverId,
       });
     } catch (err) {
       this.logger.warn(
@@ -1194,6 +1340,73 @@ export class ClubsService {
       .trim()
       .toLowerCase()
       .replace(/^weapon_/, "");
+  }
+
+  private assertUuid(value: string) {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        String(value || ""),
+      )
+    ) {
+      throw new BadRequestException("Invalid id");
+    }
+  }
+
+  private isSiteAdmin(user?: User | null) {
+    return String(user?.role || "") === "administrator";
+  }
+
+  private async canManageClubServers(clubId: string, user?: User | null) {
+    if (!user?.steam_id) return false;
+    if (this.isSiteAdmin(user)) return true;
+    const rows = await this.postgres.query<Array<{ ok: boolean }>>(
+      `SELECT true AS ok FROM public.club_members
+        WHERE club_id = $1::uuid AND steam_id = $2::bigint
+          AND role IN ('owner', 'admin')`,
+      [clubId, String(user.steam_id)],
+    );
+    return rows.length > 0;
+  }
+
+  private async assertClubServerStaff(clubId: string, user: User) {
+    this.assertUuid(clubId);
+    if (!(await this.canManageClubServers(clubId, user))) {
+      throw new ForbiddenException("Club admin required");
+    }
+  }
+
+  private async clubIdForServer(serverId?: string | null) {
+    const id = String(serverId || "").trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        id,
+      )
+    ) {
+      return null;
+    }
+    const rows = await this.postgres.query<Array<{ club_id: string | null }>>(
+      `SELECT club_id::text FROM public.servers WHERE id = $1::uuid`,
+      [id],
+    );
+    return rows[0]?.club_id ?? null;
+  }
+
+  private async serverIdForMatch(matchId: string) {
+    const id = String(matchId || "").trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        id,
+      )
+    ) {
+      return null;
+    }
+    const rows = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id::text FROM public.servers
+        WHERE reserved_by_match_id = $1::uuid
+        LIMIT 1`,
+      [id],
+    );
+    return rows[0]?.id ?? null;
   }
 
   private async assertCanManage(clubId: string, steamId: string) {

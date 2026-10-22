@@ -14,6 +14,9 @@ object_relationships:
   - name: game_mode
     using:
       foreign_key_constraint_on: game_mode_id
+  - name: club
+    using:
+      foreign_key_constraint_on: club_id
   - name: game_server_node
     using:
       foreign_key_constraint_on: game_server_node_id
@@ -99,6 +102,7 @@ select_permissions:
         - game_mode_id
         - section_mode
         - hosted_section
+        - club_id
       computed_fields:
         - connection_link
         - connection_string
@@ -128,6 +132,7 @@ select_permissions:
         - game_mode_id
         - section_mode
         - hosted_section
+        - club_id
       computed_fields:
         - connection_link
         - connection_string
@@ -162,6 +167,7 @@ select_permissions:
         - game_mode_id
         - section_mode
         - hosted_section
+        - club_id
       computed_fields:
         - connection_link
         - connection_string

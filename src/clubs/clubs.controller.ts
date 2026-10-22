@@ -1,11 +1,26 @@
-import { Body, Controller, Get, Post, Query } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+} from "@nestjs/common";
+import { Request } from "express";
 import { HasuraAction } from "../hasura/hasura.controller";
 import { User } from "../auth/types/User";
 import { ClubsService } from "./clubs.service";
+import { DedicatedServersService } from "../dedicated-servers/dedicated-servers.service";
 
 @Controller("clubs")
 export class ClubsController {
-  constructor(private readonly clubs: ClubsService) {}
+  constructor(
+    private readonly clubs: ClubsService,
+    private readonly dedicatedServers: DedicatedServersService,
+  ) {}
 
   // Read by dedicated-server plugins (no auth). Steam IDs are strings.
   @Get("clan-tags")
@@ -17,8 +32,9 @@ export class ClubsController {
   public async liveChallenges(
     @Query("mode") mode: string,
     @Query("steam_id") steamId?: string,
+    @Query("server_id") serverId?: string,
   ) {
-    return this.clubs.liveChallenges(mode, steamId);
+    return this.clubs.liveChallenges(mode, steamId, serverId);
   }
 
   @Post("challenges/events")
@@ -27,6 +43,7 @@ export class ClubsController {
     body: {
       mode: string;
       steam_id: string;
+      server_id?: string | null;
       weapon?: string | null;
       noscope?: boolean;
       headshot?: boolean;
@@ -34,9 +51,68 @@ export class ClubsController {
       amount?: number;
     },
   ) {
-    return this.clubs.recordChallengeEvent(
-      body ?? { mode: "", steam_id: "" },
+    return this.clubs.recordChallengeEvent(body ?? { mode: "", steam_id: "" });
+  }
+
+  @Get(":clubId/servers")
+  public async clubServers(
+    @Param("clubId") clubId: string,
+    @Req() request: Request,
+  ) {
+    return this.clubs.listClubServers(clubId, request.user as User | undefined);
+  }
+
+  @Post(":clubId/servers")
+  public async attachClubServer(
+    @Param("clubId") clubId: string,
+    @Body() body: { server_id?: string },
+    @Req() request: Request,
+  ) {
+    return this.clubs.attachClubServer(
+      clubId,
+      String(body?.server_id || ""),
+      this.requireUser(request),
     );
+  }
+
+  @Delete(":clubId/servers/:serverId")
+  public async detachClubServer(
+    @Param("clubId") clubId: string,
+    @Param("serverId") serverId: string,
+    @Req() request: Request,
+  ) {
+    return this.clubs.detachClubServer(
+      clubId,
+      serverId,
+      this.requireUser(request),
+    );
+  }
+
+  @Post(":clubId/servers/:serverId/map")
+  public async changeClubServerMap(
+    @Param("clubId") clubId: string,
+    @Param("serverId") serverId: string,
+    @Body() body: { map?: string },
+    @Req() request: Request,
+  ) {
+    await this.clubs.assertClubServerMap(
+      clubId,
+      serverId,
+      this.requireUser(request),
+    );
+    await this.dedicatedServers.changeSectionServerMap(
+      serverId,
+      String(body?.map || ""),
+    );
+    return { success: true };
+  }
+
+  private requireUser(request: Request): User {
+    const user = request.user as User | undefined;
+    if (!user) {
+      throw new ForbiddenException("Authentication required");
+    }
+    return user;
   }
 
   @HasuraAction()
@@ -109,12 +185,18 @@ export class ClubsController {
 
   @HasuraAction()
   public async acceptClubInvite(data: { user: User; invite_id: string }) {
-    return this.clubs.acceptClubInvite(data.invite_id, String(data.user.steam_id));
+    return this.clubs.acceptClubInvite(
+      data.invite_id,
+      String(data.user.steam_id),
+    );
   }
 
   @HasuraAction()
   public async redeemClubInviteLink(data: { user: User; code: string }) {
-    return this.clubs.redeemClubInviteLink(data.code, String(data.user.steam_id));
+    return this.clubs.redeemClubInviteLink(
+      data.code,
+      String(data.user.steam_id),
+    );
   }
 
   @HasuraAction()
