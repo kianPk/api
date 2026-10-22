@@ -1,15 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  ForbiddenException,
-  Get,
-  Param,
-  Post,
-  Query,
-  Req,
-} from "@nestjs/common";
-import { Request } from "express";
+import { Body, Controller, Get, Post, Query } from "@nestjs/common";
 import { HasuraAction } from "../hasura/hasura.controller";
 import { User } from "../auth/types/User";
 import { ClubsService } from "./clubs.service";
@@ -48,48 +37,6 @@ export class ClubsController {
     },
   ) {
     return this.clubs.recordChallengeEvent(body ?? { mode: "", steam_id: "" });
-  }
-
-  @Get(":clubId/servers")
-  public async clubServers(
-    @Param("clubId") clubId: string,
-    @Req() request: Request,
-  ) {
-    return this.clubs.listClubServers(clubId, request.user as User | undefined);
-  }
-
-  @Post(":clubId/servers")
-  public async attachClubServer(
-    @Param("clubId") clubId: string,
-    @Body() body: { server_id?: string },
-    @Req() request: Request,
-  ) {
-    return this.clubs.attachClubServer(
-      clubId,
-      String(body?.server_id || ""),
-      this.requireUser(request),
-    );
-  }
-
-  @Delete(":clubId/servers/:serverId")
-  public async detachClubServer(
-    @Param("clubId") clubId: string,
-    @Param("serverId") serverId: string,
-    @Req() request: Request,
-  ) {
-    return this.clubs.detachClubServer(
-      clubId,
-      serverId,
-      this.requireUser(request),
-    );
-  }
-
-  private requireUser(request: Request): User {
-    const user = request.user as User | undefined;
-    if (!user) {
-      throw new ForbiddenException("Authentication required");
-    }
-    return user;
   }
 
   @HasuraAction()

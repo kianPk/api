@@ -116,6 +116,7 @@ export class ServersSectionService {
       await this.postgres.query<Array<{ id: string; label: string | null }>>(
         `SELECT id, label FROM servers
           WHERE section_mode = $1
+            AND club_id IS NULL
             AND COALESCE(hosted_section, false) = false`,
         [mode.key],
       )

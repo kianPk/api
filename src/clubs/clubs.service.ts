@@ -3,12 +3,17 @@ import {
   ForbiddenException,
   Injectable,
   Logger,
+  NotFoundException,
 } from "@nestjs/common";
 import { randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
 import { HasuraService } from "../hasura/hasura.service";
 import { YpointService } from "../ypoint/ypoint.service";
 import { User } from "../auth/types/User";
+import {
+  isServerSectionMode,
+  SERVER_SECTION_MODES,
+} from "../game-plugins/server-section-modes";
 
 const OWN_CLUB_TAG = "OwnClub";
 const CLAN_TAG_CACHE_MS = 15_000;
@@ -897,7 +902,56 @@ export class ClubsService {
 
   public async listClubServers(clubId: string, user?: User | null) {
     this.assertUuid(clubId);
-    const servers = await this.postgres.query<
+    let servers = await this.clubServerRows(clubId);
+    const manage = await this.canManageClubServers(clubId, user);
+    let provisionError: string | null = null;
+    if (servers.length === 0 && (await this.isClubStaff(clubId, user))) {
+      try {
+        await this.ensureClubServer(clubId);
+        servers = await this.clubServerRows(clubId);
+      } catch (error) {
+        provisionError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    return {
+      servers,
+      manage,
+      modes: Object.keys(SERVER_SECTION_MODES),
+      provision_error: provisionError,
+    };
+  }
+
+  public async setClubServerMode(clubId: string, mode: string, user: User) {
+    await this.assertClubServerStaff(clubId, user);
+    if (!isServerSectionMode(mode)) {
+      throw new BadRequestException("Unknown server mode");
+    }
+    if ((await this.clubServerRows(clubId)).length === 0) {
+      await this.ensureClubServer(clubId);
+    }
+    const section = SERVER_SECTION_MODES[mode];
+    const prefix = await this.clubServerPrefix(clubId);
+    const updated = await this.postgres.query<Array<{ id: string }>>(
+      `UPDATE public.servers
+          SET section_mode = $2,
+              label = $3
+        WHERE id = (
+          SELECT id FROM public.servers
+           WHERE club_id = $1::uuid
+           ORDER BY id
+           LIMIT 1
+        )
+        RETURNING id::text`,
+      [clubId, mode, `${prefix} · ${section.label}`],
+    );
+    if (!updated.length) {
+      throw new NotFoundException("This club has no server");
+    }
+    return { success: true, server_id: updated[0].id, mode };
+  }
+
+  private async clubServerRows(clubId: string) {
+    return this.postgres.query<
       Array<{
         id: string;
         label: string | null;
@@ -920,46 +974,57 @@ export class ClubsService {
         ORDER BY s.label ASC NULLS LAST`,
       [clubId],
     );
+  }
 
-    const manage = await this.canManageClubServers(clubId, user);
-    if (!manage) return { servers, manage: false, available: [] };
+  private async clubServerPrefix(clubId: string) {
+    const [club] = await this.postgres.query<Array<{ name: string | null }>>(
+      `SELECT COALESCE(NULLIF(short_name, ''), name) AS name
+         FROM public.clubs WHERE id = $1::uuid`,
+      [clubId],
+    );
+    if (!club) throw new NotFoundException("Club not found");
+    return String(club.name || "Club")
+      .replace(/[\x00-\x1f]/g, "")
+      .trim()
+      .slice(0, 24);
+  }
 
-    const siteAdmin = this.callerIsSiteAdmin(user);
-    const available = siteAdmin
-      ? await this.postgres.query<
-          Array<{
-            id: string;
-            label: string | null;
-            section_mode: string | null;
-          }>
-        >(
-          `SELECT s.id::text AS id, s.label, s.section_mode
-             FROM public.servers s
-            WHERE s.section_mode IS NOT NULL
-              AND s.club_id IS NULL
-            ORDER BY s.label ASC NULLS LAST
-            LIMIT 100`,
-        )
-      : await this.postgres.query<
-          Array<{
-            id: string;
-            label: string | null;
-            section_mode: string | null;
-          }>
-        >(
-          `SELECT s.id::text AS id,
-                  COALESCE(NULLIF(h.label, ''), s.label) AS label,
-                  s.section_mode
-             FROM public.hosted_servers h
-             JOIN public.servers s ON s.id = h.server_id
-            WHERE h.owner_steam_id = $1::bigint
-              AND s.club_id IS NULL
-              AND s.section_mode IS NOT NULL
-            ORDER BY label ASC NULLS LAST`,
-          [String(user?.steam_id || "")],
-        );
-
-    return { servers, manage: true, available };
+  private async ensureClubServer(clubId: string) {
+    const prefix = await this.clubServerPrefix(clubId);
+    const [node] = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT n.id
+         FROM game_server_nodes n
+         CROSS JOIN LATERAL (
+           SELECT count(*)::int AS free
+             FROM servers s
+            WHERE s.game_server_node_id = n.id
+              AND s.is_dedicated = false
+              AND s.reserved_by_match_id IS NULL
+              AND s.enabled = true
+         ) slots
+        WHERE n.enabled = true
+          AND n.status = 'Online'
+          AND slots.free > 2
+        ORDER BY slots.free DESC, n.id
+        LIMIT 1`,
+    );
+    if (!node) {
+      throw new BadRequestException("No free game server slot");
+    }
+    await this.postgres.query(
+      `INSERT INTO public.servers (
+          label, section_mode, club_id, is_dedicated, enabled, game,
+          game_server_node_id, host, port, tv_port, region,
+          rcon_password, type, max_players
+       )
+       SELECT $1, 'duels', $2::uuid, true, true, 'cs2',
+              $3, '127.0.0.1', 27015, 27020, '',
+              gen_random_uuid()::text::bytea, 'Deathmatch', 18
+        WHERE NOT EXISTS (
+          SELECT 1 FROM public.servers WHERE club_id = $2::uuid
+        )`,
+      [`${prefix} · Duels`, clubId, node.id],
+    );
   }
 
   public async attachClubServer(clubId: string, serverId: string, user: User) {
@@ -1333,6 +1398,17 @@ export class ClubsService {
     ) {
       throw new BadRequestException("Invalid id");
     }
+  }
+
+  private async isClubStaff(clubId: string, user?: User | null) {
+    if (!user?.steam_id) return false;
+    const rows = await this.postgres.query<Array<{ ok: boolean }>>(
+      `SELECT true AS ok FROM public.club_members
+        WHERE club_id = $1::uuid AND steam_id = $2::bigint
+          AND role IN ('owner', 'admin')`,
+      [clubId, String(user.steam_id)],
+    );
+    return rows.length > 0;
   }
 
   private callerIsSiteAdmin(user?: User | null) {

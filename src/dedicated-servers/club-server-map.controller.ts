@@ -10,11 +10,11 @@ import { Request } from "express";
 import { User } from "../auth/types/User";
 import { DedicatedServersService } from "./dedicated-servers.service";
 
-@Controller("clubs")
+@Controller("hosted-servers")
 export class ClubServerMapController {
   constructor(private readonly dedicatedServers: DedicatedServersService) {}
 
-  @Post(":clubId/servers/:serverId/map")
+  @Post("clubs/:clubId/servers/:serverId/map")
   public async changeClubServerMap(
     @Param("clubId") clubId: string,
     @Param("serverId") serverId: string,
