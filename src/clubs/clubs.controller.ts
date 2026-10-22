@@ -13,14 +13,10 @@ import { Request } from "express";
 import { HasuraAction } from "../hasura/hasura.controller";
 import { User } from "../auth/types/User";
 import { ClubsService } from "./clubs.service";
-import { DedicatedServersService } from "../dedicated-servers/dedicated-servers.service";
 
 @Controller("clubs")
 export class ClubsController {
-  constructor(
-    private readonly clubs: ClubsService,
-    private readonly dedicatedServers: DedicatedServersService,
-  ) {}
+  constructor(private readonly clubs: ClubsService) {}
 
   // Read by dedicated-server plugins (no auth). Steam IDs are strings.
   @Get("clan-tags")
@@ -86,25 +82,6 @@ export class ClubsController {
       serverId,
       this.requireUser(request),
     );
-  }
-
-  @Post(":clubId/servers/:serverId/map")
-  public async changeClubServerMap(
-    @Param("clubId") clubId: string,
-    @Param("serverId") serverId: string,
-    @Body() body: { map?: string },
-    @Req() request: Request,
-  ) {
-    await this.clubs.assertClubServerMap(
-      clubId,
-      serverId,
-      this.requireUser(request),
-    );
-    await this.dedicatedServers.changeSectionServerMap(
-      serverId,
-      String(body?.map || ""),
-    );
-    return { success: true };
   }
 
   private requireUser(request: Request): User {

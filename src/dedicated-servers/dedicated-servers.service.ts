@@ -1,4 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+} from "@nestjs/common";
 import { CoreV1Api, AppsV1Api, KubeConfig } from "@kubernetes/client-node";
 import { ConfigService } from "@nestjs/config";
 import { AppConfig } from "src/configs/types/AppConfig";
@@ -17,6 +22,7 @@ import {
   SECTION_MAP_ID,
   isServerSectionMode,
 } from "../game-plugins/server-section-modes";
+import { User } from "../auth/types/User";
 
 @Injectable()
 export class DedicatedServersService {
@@ -627,6 +633,42 @@ export class DedicatedServersService {
     } finally {
       await this.RconService.disconnect(serverId);
     }
+  }
+
+  public async changeClubServerMap(
+    clubId: string,
+    serverId: string,
+    mapId: string,
+    user: User,
+  ) {
+    if (!this.isUuid(clubId) || !this.isUuid(serverId)) {
+      throw new BadRequestException("Invalid id");
+    }
+    if (String(user.role) !== "administrator") {
+      const staff = await this.postgres.query<Array<{ ok: boolean }>>(
+        `SELECT true AS ok FROM public.club_members
+          WHERE club_id = $1::uuid AND steam_id = $2::bigint
+            AND role IN ('owner', 'admin')`,
+        [clubId, String(user.steam_id)],
+      );
+      if (!staff.length) throw new ForbiddenException("Club admin required");
+    }
+    const owned = await this.postgres.query<Array<{ id: string }>>(
+      `SELECT id::text FROM public.servers
+        WHERE id = $2::uuid AND club_id = $1::uuid`,
+      [clubId, serverId],
+    );
+    if (!owned.length) {
+      throw new ForbiddenException("Server is not on this club");
+    }
+    await this.changeSectionServerMap(serverId, mapId);
+    return { success: true };
+  }
+
+  private isUuid(value: string) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value,
+    );
   }
 
   public async getServerPlayerList(

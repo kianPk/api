@@ -3,6 +3,7 @@ import { DedicatedServersService } from "./dedicated-servers.service";
 import { ServersSectionService } from "./servers-section.service";
 import { DedicatedServersController } from "./dedicated-servers.controller";
 import { ServersSectionController } from "./servers-section.controller";
+import { ClubServerMapController } from "./club-server-map.controller";
 import { HasuraModule } from "src/hasura/hasura.module";
 import { loggerFactory } from "src/utilities/LoggerFactory";
 import { EncryptionModule } from "src/encryption/encryption.module";
@@ -46,7 +47,11 @@ import { PostgresModule } from "../postgres/postgres.module";
     loggerFactory(),
   ],
   exports: [DedicatedServersService],
-  controllers: [DedicatedServersController, ServersSectionController],
+  controllers: [
+    DedicatedServersController,
+    ServersSectionController,
+    ClubServerMapController,
+  ],
 })
 export class DedicatedServersModule {
   constructor(

@@ -1004,23 +1004,6 @@ export class ClubsService {
     return { success: true };
   }
 
-  public async assertClubServerMap(
-    clubId: string,
-    serverId: string,
-    user: User,
-  ) {
-    await this.assertClubServerStaff(clubId, user);
-    this.assertUuid(serverId);
-    const rows = await this.postgres.query<Array<{ id: string }>>(
-      `SELECT id::text FROM public.servers
-        WHERE id = $2::uuid AND club_id = $1::uuid`,
-      [clubId, serverId],
-    );
-    if (!rows.length) {
-      throw new ForbiddenException("Server is not on this club");
-    }
-  }
-
   public async liveChallenges(
     mode: string,
     steamId?: string,
