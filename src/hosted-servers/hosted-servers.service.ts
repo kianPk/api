@@ -102,6 +102,8 @@ type HostedRow = {
   reminded_at: string | null;
   created_at: string;
   section_mode: string | null;
+  /** Club fleet panel — never billed / expired by rental lifecycle. */
+  club_id: string | null;
   chat_ads_enabled?: boolean;
   chat_ads_interval_seconds?: number;
   chat_ads_messages?: unknown;
@@ -157,7 +159,8 @@ export class HostedServersService {
         await this.postgres.query(
           `ALTER TABLE public.hosted_servers
              ADD COLUMN IF NOT EXISTS extra_slots integer NOT NULL DEFAULT 0,
-             ADD COLUMN IF NOT EXISTS section_mode text`,
+             ADD COLUMN IF NOT EXISTS section_mode text,
+             ADD COLUMN IF NOT EXISTS club_id uuid`,
         );
         await this.postgres.query(
           `ALTER TABLE public.servers
@@ -452,7 +455,8 @@ export class HostedServersService {
     const settings = await this.getSettings();
     const [{ used }] = await this.postgres.query<Array<{ used: number }>>(
       `SELECT count(*)::int AS used FROM hosted_servers
-       WHERE status = ANY($1::text[])`,
+       WHERE status = ANY($1::text[])
+         AND club_id IS NULL`,
       [HOSTED_STATUSES_HOLDING_SLOT],
     );
     const freeNodeSlots = settings.nodeId
@@ -743,6 +747,7 @@ export class HostedServersService {
     if (!hosted || String(hosted.owner_steam_id) !== String(steamId)) {
       throw new NotFoundException("Server not found");
     }
+    this.assertNotClubRental(hosted);
     if (hosted.status === "failed" || hosted.status === "suspended") {
       throw new BadRequestException(`Server is ${hosted.status}`);
     }
@@ -1019,6 +1024,7 @@ export class HostedServersService {
   }
 
   private async renew(hosted: HostedRow, durationMs: number) {
+    this.assertNotClubRental(hosted);
     const [updated] = await this.postgres.query<HostedRow[]>(
       `UPDATE hosted_servers
        SET expires_at = GREATEST(expires_at, now()) + ($2::double precision * interval '1 millisecond'),
@@ -1307,6 +1313,7 @@ export class HostedServersService {
     const stalled = await this.postgres.query<Array<{ id: string }>>(
       `SELECT h.id FROM hosted_servers h
        WHERE h.status = 'provisioning'
+         AND h.club_id IS NULL
          AND h.server_id IS NULL
          AND h.updated_at < now() - interval '3 minutes'
          AND h.created_at > now() - interval '7 days'
@@ -1340,6 +1347,7 @@ export class HostedServersService {
     const expiring = await this.postgres.query<HostedRow[]>(
       `UPDATE hosted_servers SET reminded_at = now()
        WHERE status = 'active'
+         AND club_id IS NULL
          AND reminded_at IS NULL
          AND expires_at > now()
          AND expires_at < now() + interval '24 hours'
@@ -1357,7 +1365,9 @@ export class HostedServersService {
 
     const expired = await this.postgres.query<HostedRow[]>(
       `UPDATE hosted_servers SET status = 'expired', updated_at = now()
-       WHERE status = 'active' AND expires_at <= now()
+       WHERE status = 'active'
+         AND club_id IS NULL
+         AND expires_at <= now()
        RETURNING *`,
     );
     const { graceDays } = await this.getSettings();
@@ -1377,6 +1387,7 @@ export class HostedServersService {
     const stale = await this.postgres.query<HostedRow[]>(
       `SELECT * FROM hosted_servers
        WHERE status = 'expired'
+         AND club_id IS NULL
          AND expires_at <= now() - ($1::int * interval '1 day')`,
       [graceDays],
     );
@@ -1450,7 +1461,7 @@ export class HostedServersService {
     const [row] = await this.postgres.query<HostedRow[]>(
       `SELECT id, server_id, owner_steam_id::text, product_id, slots, extra_slots, label,
               status, status_detail, expires_at, gslt_steam_id, reminded_at,
-              created_at, section_mode
+              created_at, section_mode, club_id::text AS club_id
        FROM hosted_servers WHERE id = $1`,
       [id],
     );
@@ -1471,6 +1482,12 @@ export class HostedServersService {
     if (await this.isHostedAdmin(hosted.id, String(user.steam_id))) {
       return hosted;
     }
+    if (
+      hosted.club_id &&
+      (await this.isClubServerStaff(hosted.club_id, String(user.steam_id)))
+    ) {
+      return hosted;
+    }
     throw new ForbiddenException("Not your server");
   }
 
@@ -1480,6 +1497,15 @@ export class HostedServersService {
     if (!hosted) {
       throw new NotFoundException("Server not found");
     }
+    if (hosted.club_id) {
+      if (user.role === "administrator") return hosted;
+      if (
+        await this.isClubServerStaff(hosted.club_id, String(user.steam_id))
+      ) {
+        return hosted;
+      }
+      throw new ForbiddenException("Only club staff can do this");
+    }
     if (
       user.role !== "administrator" &&
       String(hosted.owner_steam_id) !== String(user.steam_id)
@@ -1487,6 +1513,31 @@ export class HostedServersService {
       throw new ForbiddenException("Only the server owner can do this");
     }
     return hosted;
+  }
+
+  private async isClubServerStaff(
+    clubId: string,
+    steamId: string,
+  ): Promise<boolean> {
+    if (!/^[0-9a-f-]{36}$/i.test(clubId || "")) return false;
+    const [row] = await this.postgres.query<Array<{ ok: number }>>(
+      `SELECT 1 AS ok
+         FROM public.club_members
+        WHERE club_id = $1::uuid
+          AND steam_id = $2::bigint
+          AND role IN ('owner', 'admin')
+        LIMIT 1`,
+      [clubId, steamId],
+    );
+    return !!row;
+  }
+
+  public assertNotClubRental(hosted: HostedRow) {
+    if (hosted.club_id) {
+      throw new BadRequestException(
+        "Club servers are managed from the club page and do not renew",
+      );
+    }
   }
 
   /** True when steamId owns the hosted public server backing this game server id. */
@@ -1519,6 +1570,7 @@ export class HostedServersService {
     const rows = await this.postgres.query<Array<{ id: string }>>(
       `SELECT h.id FROM hosted_servers h
        WHERE h.status <> 'deleted'
+         AND h.club_id IS NULL
          AND (
            h.owner_steam_id = $1::bigint
            OR EXISTS (
@@ -1537,6 +1589,7 @@ export class HostedServersService {
     const rows = await this.postgres.query<Array<{ id: string }>>(
       `SELECT id FROM hosted_servers
        WHERE status <> 'deleted'
+         AND club_id IS NULL
        ORDER BY created_at DESC
        LIMIT 500`,
     );
@@ -1546,6 +1599,7 @@ export class HostedServersService {
   public async listAll() {
     const rows = await this.postgres.query<Array<{ id: string }>>(
       `SELECT id FROM hosted_servers
+       WHERE club_id IS NULL
        ORDER BY (status = 'deleted') ASC, created_at DESC
        LIMIT 500`,
     );
@@ -1592,7 +1646,7 @@ export class HostedServersService {
     >(
       `SELECT h.id, h.server_id, h.owner_steam_id::text, h.product_id, h.slots, h.extra_slots,
               h.label, h.status, h.status_detail, h.expires_at, h.created_at,
-              h.section_mode,
+              h.section_mode, h.club_id::text AS club_id,
               h.chat_ads_enabled, h.chat_ads_interval_seconds, h.chat_ads_messages,
               h.chat_ads_color,
               COALESCE(h.friendly_fire, false) AS friendly_fire,
@@ -1635,6 +1689,7 @@ export class HostedServersService {
         product_id: row.product_id,
         type: row.type,
         section_mode: row.section_mode,
+        club_id: row.club_id ?? null,
         host: row.host,
         port: row.port,
         connect_password: row.connect_password,

@@ -788,6 +788,7 @@ export class StoreService {
     if (!hosted || String(hosted.owner_steam_id) !== String(buyerSteamId)) {
       throw new NotFoundException("Server not found");
     }
+    this.hostedServers.assertNotClubRental(hosted);
     const quote = await this.hostedServers.quoteExtraSlots(hosted, opts.count);
     if (payWithYpoint && quote.price_ypoint <= 0) {
       throw new BadRequestException(

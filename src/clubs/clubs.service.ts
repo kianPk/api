@@ -105,6 +105,12 @@ export class ClubsService {
         [clubId, target],
       );
       await this.postgres.query(
+        `UPDATE public.hosted_servers
+            SET owner_steam_id = $2::bigint, updated_at = now()
+          WHERE club_id = $1::uuid AND status <> 'deleted'`,
+        [clubId, target],
+      );
+      await this.postgres.query(
         `UPDATE public.club_members SET role = 'admin'
          WHERE club_id = $1::uuid AND steam_id = $2::bigint AND role = 'owner'`,
         [clubId, club.owner_steam_id],
@@ -907,8 +913,11 @@ export class ClubsService {
 
   public async listClubServers(clubId: string, user?: User | null) {
     this.assertUuid(clubId);
-    const servers = await this.clubServerRows(clubId);
     const manage = await this.canManageClubServers(clubId, user);
+    if (manage) {
+      await this.ensureClubHostedPanels(clubId);
+    }
+    const servers = await this.clubServerRows(clubId);
     return {
       servers,
       manage,
@@ -994,6 +1003,7 @@ export class ClubsService {
         connected: boolean;
         enabled: boolean;
         link: string | null;
+        hosted_id: string | null;
       }>
     >(
       `SELECT s.id::text AS id,
@@ -1003,10 +1013,62 @@ export class ClubsService {
               s.enabled,
               public.get_server_connection_link(
                 s, '{"x-hasura-role":"guest"}'::json
-              ) AS link
+              ) AS link,
+              (
+                SELECT h.id::text
+                  FROM public.hosted_servers h
+                 WHERE h.server_id = s.id
+                   AND h.status <> 'deleted'
+                 ORDER BY (h.club_id IS NOT NULL) DESC, h.created_at DESC
+                 LIMIT 1
+              ) AS hosted_id
          FROM public.servers s
         WHERE s.club_id = $1::uuid
         ORDER BY s.label ASC NULLS LAST`,
+      [clubId],
+    );
+  }
+
+  /** Give each club fleet server the same hosted control panel as rented hosts. */
+  private async ensureClubHostedPanels(clubId: string) {
+    await this.postgres.query(
+      `INSERT INTO public.hosted_servers (
+          server_id, owner_steam_id, slots, label, status, expires_at,
+          section_mode, club_id
+       )
+       SELECT s.id,
+              c.owner_steam_id,
+              COALESCE(NULLIF(s.max_players, 0), 16),
+              COALESCE(NULLIF(s.label, ''), 'Club server'),
+              'active',
+              TIMESTAMPTZ '2099-01-01 00:00:00+00',
+              s.section_mode,
+              c.id
+         FROM public.servers s
+         JOIN public.clubs c ON c.id = s.club_id
+        WHERE s.club_id = $1::uuid
+          AND NOT EXISTS (
+            SELECT 1 FROM public.hosted_servers h WHERE h.server_id = s.id
+          )`,
+      [clubId],
+    );
+    await this.postgres.query(
+      `UPDATE public.hosted_servers h
+          SET club_id = s.club_id,
+              status = 'active',
+              expires_at = GREATEST(
+                h.expires_at,
+                TIMESTAMPTZ '2099-01-01 00:00:00+00'
+              ),
+              section_mode = COALESCE(s.section_mode, h.section_mode),
+              label = COALESCE(NULLIF(s.label, ''), h.label),
+              slots = COALESCE(NULLIF(s.max_players, 0), h.slots),
+              owner_steam_id = c.owner_steam_id,
+              updated_at = now()
+         FROM public.servers s
+         JOIN public.clubs c ON c.id = s.club_id
+        WHERE h.server_id = s.id
+          AND s.club_id = $1::uuid`,
       [clubId],
     );
   }
@@ -1140,6 +1202,11 @@ export class ClubsService {
 
     for (const extra of ranked.slice(desired)) {
       await this.postgres.query(
+        `DELETE FROM public.hosted_servers
+          WHERE server_id = $1::uuid AND club_id = $2::uuid`,
+        [extra.id, clubId],
+      );
+      await this.postgres.query(
         `DELETE FROM public.servers WHERE id = $1::uuid AND club_id = $2::uuid`,
         [extra.id, clubId],
       );
@@ -1163,7 +1230,7 @@ export class ClubsService {
       if (!nodeId) {
         throw new BadRequestException("No free game server slot");
       }
-      await this.postgres.query(
+      const inserted = await this.postgres.query<Array<{ id: string }>>(
         `INSERT INTO public.servers (
             label, section_mode, club_id, is_dedicated, enabled, game,
             game_server_node_id, host, port, tv_port, region,
@@ -1172,7 +1239,8 @@ export class ClubsService {
             $1, $2, $3::uuid, true, true, 'cs2',
             $4, '127.0.0.1', 27015, 27020, '',
             gen_random_uuid()::text::bytea, $5, $6
-         )`,
+         )
+         RETURNING id::text`,
         [
           `${mode.label} #${number}`,
           mode.key,
@@ -1182,6 +1250,9 @@ export class ClubsService {
           mode.maxPlayers,
         ],
       );
+      if (inserted[0]?.id) {
+        await this.ensureClubHostedPanels(clubId);
+      }
       taken.add(number);
       missing--;
     }
@@ -1207,6 +1278,7 @@ export class ClubsService {
         )`,
       [`${prefix} · Duels`, clubId, nodeId],
     );
+    await this.ensureClubHostedPanels(clubId);
   }
 
   public async attachClubServer(clubId: string, serverId: string, user: User) {
