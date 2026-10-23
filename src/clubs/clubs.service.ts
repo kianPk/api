@@ -1252,13 +1252,15 @@ export class ClubsService {
       CLUB_MAX_PER_MODE,
       Math.max(0, Math.floor(Number(current[mode]?.count) || 0)),
     );
-    // Only site admins can grow/shrink fleet size; club staff may edit maps.
-    const count = this.callerIsSiteAdmin(user)
-      ? Math.min(
-          CLUB_MAX_PER_MODE,
-          Math.max(0, Math.floor(Number(input?.count) || 0)),
-        )
-      : existingCount;
+    // Only site admins can grow/shrink fleet size when count is sent.
+    // Omitting count (map-pool edits from the hosting panel) keeps the fleet size.
+    const count =
+      this.callerIsSiteAdmin(user) && input?.count != null
+        ? Math.min(
+            CLUB_MAX_PER_MODE,
+            Math.max(0, Math.floor(Number(input.count) || 0)),
+          )
+        : existingCount;
     current[mode] = { count, maps };
     await this.postgres.query(
       `UPDATE public.clubs SET server_modes = $2::jsonb WHERE id = $1::uuid`,
