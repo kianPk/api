@@ -1218,6 +1218,9 @@ export class ClubsService {
     const manage = await this.canManageClubServers(clubId, user);
     if (manage) {
       await this.ensureClubHostedPanels(clubId);
+      // Renames "Duels #1" → "Club · Duels #1" and redeploys any box that was
+      // built with the Host rental plugin path before the club_id isHosted fix.
+      await this.relabelClubServers(clubId);
     }
     const servers = await this.clubServerRows(clubId);
     return {
@@ -1490,12 +1493,53 @@ export class ClubsService {
     return node?.id ?? null;
   }
 
+  private clubModeLabel(
+    prefix: string,
+    mode: (typeof SERVER_SECTION_MODES)[ServerSectionModeKey],
+    number: number,
+  ) {
+    // Distinct from the site fleet's "Duels #1" so a club box can never be
+    // mistaken for the public one if it briefly appears in a shared query.
+    return `${prefix} · ${mode.label} #${number}`;
+  }
+
+  private async relabelClubServers(clubId: string) {
+    const prefix = await this.clubServerPrefix(clubId);
+    for (const mode of Object.values(SERVER_SECTION_MODES)) {
+      const ranked = (
+        await this.postgres.query<Array<{ id: string; label: string | null }>>(
+          `SELECT id::text, label
+             FROM public.servers
+            WHERE club_id = $1::uuid
+              AND section_mode = $2
+            ORDER BY label ASC NULLS LAST, id ASC`,
+          [clubId, mode.key],
+        )
+      )
+        .map((server) => ({
+          ...server,
+          number: this.clubServerNumber(server.label),
+        }))
+        .sort((a, b) => a.number - b.number || a.id.localeCompare(b.id));
+
+      for (let index = 0; index < ranked.length; index++) {
+        const label = this.clubModeLabel(prefix, mode, index + 1);
+        if (ranked[index].label === label) continue;
+        await this.postgres.query(
+          `UPDATE public.servers SET label = $1 WHERE id = $2::uuid AND club_id = $3::uuid`,
+          [label, ranked[index].id, clubId],
+        );
+      }
+    }
+  }
+
   private async reconcileClubMode(
     clubId: string,
     modeKey: ServerSectionModeKey,
     desired: number,
   ) {
     const mode = SERVER_SECTION_MODES[modeKey];
+    const prefix = await this.clubServerPrefix(clubId);
     const ranked = (
       await this.postgres.query<Array<{ id: string; label: string | null }>>(
         `SELECT id::text, label
@@ -1525,8 +1569,10 @@ export class ClubsService {
 
     const kept = ranked.slice(0, desired);
     for (let index = 0; index < kept.length; index++) {
-      const label = `${mode.label} #${index + 1}`;
+      const label = this.clubModeLabel(prefix, mode, index + 1);
       if (kept[index].label === label) continue;
+      // Label is on the servers event update columns, so renaming also
+      // redeploys boxes that were wrongly created with the Host rental path.
       await this.postgres.query(
         `UPDATE public.servers SET label = $1 WHERE id = $2::uuid AND club_id = $3::uuid`,
         [label, kept[index].id, clubId],
@@ -1553,7 +1599,7 @@ export class ClubsService {
          )
          RETURNING id::text`,
         [
-          `${mode.label} #${number}`,
+          this.clubModeLabel(prefix, mode, number),
           mode.key,
           clubId,
           nodeId,

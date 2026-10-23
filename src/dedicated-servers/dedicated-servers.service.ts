@@ -1137,13 +1137,22 @@ export class DedicatedServersService {
     serverId: string,
   ): Promise<{ steamAccountToken: string | null; isHosted: boolean }> {
     try {
+      // Club fleet rows get a hosted_servers panel for the admin UI, but they
+      // must deploy like public section boxes — not like paid Host rentals.
+      // Treating those panel rows as isHosted strips the section plugin set and
+      // the box never connects; the public fleet also used to show the same
+      // "Duels #N" label and looked like the site server went offline.
       const [row] = await this.postgres.query<
         Array<{ steam_account_token: string | null; is_hosted: boolean }>
       >(
         `SELECT s.steam_account_token,
-                EXISTS (
-                  SELECT 1 FROM hosted_servers h
-                  WHERE h.server_id = s.id OR h.pending_server_id = s.id
+                (
+                  s.club_id IS NULL
+                  AND EXISTS (
+                    SELECT 1 FROM hosted_servers h
+                    WHERE (h.server_id = s.id OR h.pending_server_id = s.id)
+                      AND h.club_id IS NULL
+                  )
                 ) AS is_hosted
          FROM servers s WHERE s.id = $1`,
         [serverId],
