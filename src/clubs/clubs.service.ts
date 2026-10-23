@@ -1024,15 +1024,21 @@ export class ClubsService {
     const cleaned: Record<string, { min?: number; levels?: Record<string, boolean> }> =
       {};
     for (const key of CLUB_PERM_KEYS) {
-      const raw = permissions?.[key] ?? DEFAULT_LEVEL_PERMISSIONS[key];
+      const raw = permissions?.[key] as
+        | { min?: number; levels?: Record<string, boolean> }
+        | undefined;
       const min = Math.min(
         10,
-        Math.max(1, Math.floor(Number(raw?.min ?? DEFAULT_LEVEL_PERMISSIONS[key].min))),
+        Math.max(
+          1,
+          Math.floor(Number(raw?.min ?? DEFAULT_LEVEL_PERMISSIONS[key].min)),
+        ),
       );
       const levels: Record<string, boolean> = {};
-      if (raw?.levels && typeof raw.levels === "object") {
-        for (const [lvl, allowed] of Object.entries(raw.levels)) {
-          if (/^[1-9]|10$/.test(lvl)) levels[lvl] = !!allowed;
+      const rawLevels = raw?.levels;
+      if (rawLevels && typeof rawLevels === "object") {
+        for (const [lvl, allowed] of Object.entries(rawLevels)) {
+          if (/^(?:[1-9]|10)$/.test(lvl)) levels[lvl] = !!allowed;
         }
       }
       cleaned[key] = Object.keys(levels).length

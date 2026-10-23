@@ -130,13 +130,15 @@ export function permissionAllowed(opts: {
   if (opts.override === true) return true;
   if (opts.override === false) return false;
 
-  const configured = opts.clubPermissions?.[opts.perm];
+  const configured = opts.clubPermissions?.[opts.perm] as LevelPermRule | undefined;
   const fallback = DEFAULT_LEVEL_PERMISSIONS[opts.perm];
-  const rule = configured ?? fallback;
-
-  if (rule?.levels && Object.prototype.hasOwnProperty.call(rule.levels, String(opts.level))) {
-    return !!rule.levels[String(opts.level)];
+  const levelMap = configured?.levels;
+  if (
+    levelMap &&
+    Object.prototype.hasOwnProperty.call(levelMap, String(opts.level))
+  ) {
+    return !!levelMap[String(opts.level)];
   }
-  const min = Number(rule?.min ?? fallback.min);
+  const min = Number(configured?.min ?? fallback.min);
   return opts.level >= min;
 }
