@@ -140,6 +140,8 @@ insert_permissions:
     - rubika_url
     - soroush_url
     - description
+    - promo_text
+    - join_benefits
     - join_mode
     - min_elo
     - min_faceit_level
@@ -159,6 +161,8 @@ insert_permissions:
     - rubika_url
     - soroush_url
     - description
+    - promo_text
+    - join_benefits
     - join_mode
     - min_elo
     - min_faceit_level
@@ -178,6 +182,8 @@ select_permissions:
     - rubika_url
     - soroush_url
     - description
+    - promo_text
+    - join_benefits
     - join_mode
     - owner_steam_id
     - min_elo
@@ -204,6 +210,8 @@ update_permissions:
     - rubika_url
     - soroush_url
     - description
+    - promo_text
+    - join_benefits
     - join_mode
     - min_elo
     - min_faceit_level
@@ -234,6 +242,8 @@ update_permissions:
     - rubika_url
     - soroush_url
     - description
+    - promo_text
+    - join_benefits
     - join_mode
     - min_elo
     - min_faceit_level
