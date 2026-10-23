@@ -100,6 +100,13 @@ array_relationships:
       table:
         name: club_challenges
         schema: public
+- name: perm_overrides
+  using:
+    foreign_key_constraint_on:
+      column: club_id
+      table:
+        name: club_member_perm_overrides
+        schema: public
 computed_fields:
 - name: role
   definition:
@@ -142,6 +149,7 @@ insert_permissions:
     - description
     - promo_text
     - join_benefits
+    - level_permissions
     - join_mode
     - min_elo
     - min_faceit_level
@@ -163,6 +171,7 @@ insert_permissions:
     - description
     - promo_text
     - join_benefits
+    - level_permissions
     - join_mode
     - min_elo
     - min_faceit_level
@@ -184,6 +193,7 @@ select_permissions:
     - description
     - promo_text
     - join_benefits
+    - level_permissions
     - join_mode
     - owner_steam_id
     - min_elo
@@ -212,6 +222,7 @@ update_permissions:
     - description
     - promo_text
     - join_benefits
+    - level_permissions
     - join_mode
     - min_elo
     - min_faceit_level
@@ -224,10 +235,14 @@ update_permissions:
           _and:
           - steam_id:
               _eq: X-Hasura-User-Id
-          - role:
-              _in:
-              - owner
-              - admin
+          - _or:
+            - role:
+                _in:
+                - owner
+                - co_owner
+                - admin
+            - level:
+                _gte: 8
     check: {}
 - role: administrator
   permission:
@@ -244,6 +259,7 @@ update_permissions:
     - description
     - promo_text
     - join_benefits
+    - level_permissions
     - join_mode
     - min_elo
     - min_faceit_level

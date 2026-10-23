@@ -24,15 +24,20 @@ insert_permissions:
             _and:
             - steam_id:
                 _eq: X-Hasura-User-Id
-            - role:
-                _in:
-                - owner
-                - admin
+            - _or:
+              - role:
+                  _in:
+                  - owner
+                  - co_owner
+                  - admin
+              - level:
+                  _gte: 8
     set:
       steam_id: x-hasura-user-id
     columns:
     - club_id
     - role
+    - level
     - is_primary
 select_permissions:
 - role: guest
@@ -41,6 +46,11 @@ select_permissions:
     - club_id
     - steam_id
     - role
+    - level
+    - xp
+    - title
+    - staff_level
+    - club_vip_until
     - is_primary
     - is_vip
     - joined_at
@@ -50,7 +60,6 @@ update_permissions:
 - role: user
   permission:
     columns:
-    - role
     - is_primary
     filter:
       _or:
@@ -61,10 +70,14 @@ update_permissions:
             _and:
             - steam_id:
                 _eq: X-Hasura-User-Id
-            - role:
-                _in:
-                - owner
-                - admin
+            - _or:
+              - role:
+                  _in:
+                  - owner
+                  - co_owner
+                  - admin
+              - level:
+                  _gte: 8
     check: {}
 delete_permissions:
 - role: user
@@ -78,7 +91,11 @@ delete_permissions:
             _and:
             - steam_id:
                 _eq: X-Hasura-User-Id
-            - role:
-                _in:
-                - owner
-                - admin
+            - _or:
+              - role:
+                  _in:
+                  - owner
+                  - co_owner
+                  - admin
+              - level:
+                  _gte: 8

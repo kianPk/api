@@ -197,6 +197,68 @@ export class ClubsController {
   }
 
   @HasuraAction()
+  public async setClubMemberStaffLevel(data: {
+    user: User;
+    club_id: string;
+    steam_id: string;
+    staff_level?: number | null;
+    title?: string | null;
+  }) {
+    return this.clubs.setClubMemberStaffLevel(
+      data.club_id,
+      String(data.user.steam_id),
+      String(data.steam_id),
+      data.staff_level == null ? null : Number(data.staff_level),
+      data.title,
+    );
+  }
+
+  @HasuraAction()
+  public async setClubMemberTitle(data: {
+    user: User;
+    club_id: string;
+    steam_id: string;
+    title?: string | null;
+  }) {
+    return this.clubs.setClubMemberTitle(
+      data.club_id,
+      String(data.user.steam_id),
+      String(data.steam_id),
+      data.title ?? null,
+    );
+  }
+
+  @HasuraAction()
+  public async saveClubLevelPermissions(data: {
+    user: User;
+    club_id: string;
+    permissions: Record<string, { min?: number; levels?: Record<string, boolean> }>;
+  }) {
+    return this.clubs.saveClubLevelPermissions(
+      data.club_id,
+      String(data.user.steam_id),
+      data.permissions || {},
+    );
+  }
+
+  @HasuraAction()
+  public async setClubMemberPermOverride(data: {
+    user: User;
+    club_id: string;
+    steam_id: string;
+    perm_key: string;
+    allowed?: boolean | null;
+  }) {
+    return this.clubs.setClubMemberPermOverride(
+      data.club_id,
+      String(data.user.steam_id),
+      String(data.steam_id),
+      String(data.perm_key || ""),
+      data.allowed === undefined ? null : data.allowed,
+    );
+  }
+
+  @HasuraAction()
   public async setPrimaryClub(data: { user: User; club_id: string }) {
     return this.clubs.setPrimaryClub(data.club_id, String(data.user.steam_id));
   }

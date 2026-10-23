@@ -13,6 +13,7 @@ import { RconModule } from "../rcon/rcon.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { ChallengesModule } from "../challenges/challenges.module";
 import { HostedServersModule } from "../hosted-servers/hosted-servers.module";
+import { ClubsModule } from "../clubs/clubs.module";
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { HostedServersModule } from "../hosted-servers/hosted-servers.module";
     NotificationsModule,
     ChallengesModule,
     forwardRef(() => HostedServersModule),
+    forwardRef(() => ClubsModule),
   ],
   controllers: [
     StoreController,

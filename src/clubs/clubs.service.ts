@@ -17,6 +17,17 @@ import {
   SERVER_SECTION_MODES,
   type ServerSectionModeKey,
 } from "../game-plugins/server-section-modes";
+import {
+  autoLevelFromVipAndXp,
+  challengeXpForDifficulty,
+  CLUB_PERM_KEYS,
+  CLUB_STAFF_LEVEL_MIN,
+  DEFAULT_LEVEL_PERMISSIONS,
+  effectiveLevel,
+  permissionAllowed,
+  roleFromLevel,
+  type ClubPermKey,
+} from "./club-levels";
 
 const OWN_CLUB_TAG = "OwnClub";
 const CLAN_TAG_CACHE_MS = 15_000;
@@ -111,14 +122,16 @@ export class ClubsService {
         [clubId, target],
       );
       await this.postgres.query(
-        `UPDATE public.club_members SET role = 'admin'
-         WHERE club_id = $1::uuid AND steam_id = $2::bigint AND role = 'owner'`,
+        `UPDATE public.club_members
+            SET staff_level = 8, level = 8, role = 'admin', title = COALESCE(NULLIF(title, ''), 'Admin')
+          WHERE club_id = $1::uuid AND steam_id = $2::bigint`,
         [clubId, club.owner_steam_id],
       );
       await this.postgres.query(
-        `INSERT INTO public.club_members (club_id, steam_id, role)
-         VALUES ($1::uuid, $2::bigint, 'owner')
-         ON CONFLICT (club_id, steam_id) DO UPDATE SET role = 'owner'`,
+        `INSERT INTO public.club_members (club_id, steam_id, role, level, staff_level, is_vip)
+         VALUES ($1::uuid, $2::bigint, 'owner', 10, 10, true)
+         ON CONFLICT (club_id, steam_id) DO UPDATE
+           SET role = 'owner', level = 10, staff_level = 10, is_vip = true`,
         [clubId, target],
       );
       await this.logActivity(clubId, actorSteamId, "owner_transferred", {
@@ -779,6 +792,27 @@ export class ClubsService {
            updated_at = now()`,
         [steamId, won],
       );
+
+      // Active Clash events: award points to the player's primary club entry.
+      await this.postgres.query(
+        `WITH primary_club AS (
+           SELECT club_id FROM public.club_members
+           WHERE steam_id = $1::bigint AND is_primary = true
+           LIMIT 1
+         )
+         UPDATE public.club_clash_entries e
+            SET points = e.points + CASE WHEN $2 THEN 3 ELSE 1 END
+           FROM primary_club pc, public.club_clash_events ev, public.club_clash_players p
+          WHERE e.event_id = ev.id
+            AND e.club_id = pc.club_id
+            AND p.event_id = ev.id
+            AND p.steam_id = $1::bigint
+            AND p.club_id = pc.club_id
+            AND ev.locked = false
+            AND ev.starts_at <= now()
+            AND ev.ends_at > now()`,
+        [steamId, won],
+      );
     } catch (err) {
       this.logger.warn(
         `club leaderboard points failed steam=${steamId}: ${err}`,
@@ -789,12 +823,13 @@ export class ClubsService {
   private async insertMember(clubId: string, steamId: string) {
     try {
       await this.postgres.query(
-        `INSERT INTO public.club_members (club_id, steam_id, role)
-         VALUES ($1::uuid, $2::bigint, 'member')
+        `INSERT INTO public.club_members (club_id, steam_id, role, level)
+         VALUES ($1::uuid, $2::bigint, 'member', 1)
          ON CONFLICT DO NOTHING`,
         [clubId, steamId],
       );
       this.invalidateClanTags();
+      await this.recalculateMemberLevel(clubId, steamId);
     } catch (err) {
       this.rethrowClubRule(err);
     }
@@ -899,16 +934,277 @@ export class ClubsService {
     targetSteamId: string,
     isVip: boolean,
   ) {
-    await this.assertCanManage(clubId, actorSteamId);
+    await this.assertClubPerm(clubId, actorSteamId, "manage_members");
     const updated = await this.postgres.query<Array<{ steam_id: string }>>(
       `UPDATE public.club_members
-          SET is_vip = $3
+          SET is_vip = $3,
+              club_vip_until = CASE
+                WHEN $3 THEN GREATEST(COALESCE(club_vip_until, now()), now() + interval '30 days')
+                ELSE NULL
+              END
         WHERE club_id = $1::uuid AND steam_id = $2::bigint
         RETURNING steam_id::text`,
       [clubId, targetSteamId, isVip],
     );
     if (!updated.length) throw new BadRequestException("Member not found");
+    await this.recalculateMemberLevel(clubId, targetSteamId);
     return { success: true };
+  }
+
+  public async setClubMemberStaffLevel(
+    clubId: string,
+    actorSteamId: string,
+    targetSteamId: string,
+    staffLevel: number | null,
+    title?: string | null,
+  ) {
+    await this.assertClubPerm(clubId, actorSteamId, "set_staff_level");
+    const target = String(targetSteamId || "").trim();
+    if (!target) throw new BadRequestException("Member required");
+
+    const owner = await this.postgres.query<Array<{ owner_steam_id: string }>>(
+      `SELECT owner_steam_id::text FROM public.clubs WHERE id = $1::uuid`,
+      [clubId],
+    );
+    if (!owner.at(0)) throw new BadRequestException("Club not found");
+    if (owner[0].owner_steam_id === target) {
+      throw new BadRequestException("Cannot change the owner's staff level");
+    }
+
+    let nextStaff: number | null = null;
+    if (staffLevel != null) {
+      const n = Math.floor(Number(staffLevel));
+      if (n < CLUB_STAFF_LEVEL_MIN || n > 9) {
+        throw new BadRequestException("Staff level must be 7, 8, or 9");
+      }
+      nextStaff = n;
+    }
+
+    const titleTrim =
+      title == null ? undefined : String(title).trim().slice(0, 48) || null;
+
+    const updated = await this.postgres.query<Array<{ steam_id: string }>>(
+      `UPDATE public.club_members
+          SET staff_level = $3,
+              title = COALESCE($4, title)
+        WHERE club_id = $1::uuid AND steam_id = $2::bigint
+        RETURNING steam_id::text`,
+      [clubId, target, nextStaff, titleTrim ?? null],
+    );
+    if (!updated.length) throw new BadRequestException("Member not found");
+    await this.recalculateMemberLevel(clubId, target);
+    return { success: true };
+  }
+
+  public async setClubMemberTitle(
+    clubId: string,
+    actorSteamId: string,
+    targetSteamId: string,
+    title: string | null,
+  ) {
+    await this.assertClubPerm(clubId, actorSteamId, "set_titles");
+    const trimmed = title == null ? null : String(title).trim().slice(0, 48) || null;
+    const updated = await this.postgres.query<Array<{ steam_id: string }>>(
+      `UPDATE public.club_members
+          SET title = $3
+        WHERE club_id = $1::uuid AND steam_id = $2::bigint
+        RETURNING steam_id::text`,
+      [clubId, targetSteamId, trimmed],
+    );
+    if (!updated.length) throw new BadRequestException("Member not found");
+    return { success: true };
+  }
+
+  public async saveClubLevelPermissions(
+    clubId: string,
+    actorSteamId: string,
+    permissions: Record<string, { min?: number; levels?: Record<string, boolean> }>,
+  ) {
+    await this.assertClubPerm(clubId, actorSteamId, "manage_levels");
+    const cleaned: Record<string, { min?: number; levels?: Record<string, boolean> }> =
+      {};
+    for (const key of CLUB_PERM_KEYS) {
+      const raw = permissions?.[key] ?? DEFAULT_LEVEL_PERMISSIONS[key];
+      const min = Math.min(
+        10,
+        Math.max(1, Math.floor(Number(raw?.min ?? DEFAULT_LEVEL_PERMISSIONS[key].min))),
+      );
+      const levels: Record<string, boolean> = {};
+      if (raw?.levels && typeof raw.levels === "object") {
+        for (const [lvl, allowed] of Object.entries(raw.levels)) {
+          if (/^[1-9]|10$/.test(lvl)) levels[lvl] = !!allowed;
+        }
+      }
+      cleaned[key] = Object.keys(levels).length
+        ? { min, levels }
+        : { min };
+    }
+    await this.postgres.query(
+      `UPDATE public.clubs SET level_permissions = $2::jsonb WHERE id = $1::uuid`,
+      [clubId, JSON.stringify(cleaned)],
+    );
+    return { success: true, level_permissions: cleaned };
+  }
+
+  public async setClubMemberPermOverride(
+    clubId: string,
+    actorSteamId: string,
+    targetSteamId: string,
+    permKey: string,
+    allowed: boolean | null,
+  ) {
+    await this.assertClubPerm(clubId, actorSteamId, "manage_levels");
+    if (!CLUB_PERM_KEYS.includes(permKey as ClubPermKey)) {
+      throw new BadRequestException("Unknown permission");
+    }
+    const target = String(targetSteamId || "").trim();
+    if (!target) throw new BadRequestException("Member required");
+
+    if (allowed == null) {
+      await this.postgres.query(
+        `DELETE FROM public.club_member_perm_overrides
+          WHERE club_id = $1::uuid AND steam_id = $2::bigint AND perm_key = $3`,
+        [clubId, target, permKey],
+      );
+    } else {
+      await this.postgres.query(
+        `INSERT INTO public.club_member_perm_overrides
+           (club_id, steam_id, perm_key, allowed, updated_at)
+         VALUES ($1::uuid, $2::bigint, $3, $4, now())
+         ON CONFLICT (club_id, steam_id, perm_key) DO UPDATE
+           SET allowed = EXCLUDED.allowed, updated_at = now()`,
+        [clubId, target, permKey, allowed],
+      );
+    }
+    return { success: true };
+  }
+
+  /** Recalc auto level from club VIP shop grants + XP; honor staff_level / owner. */
+  public async recalculateMemberLevel(clubId: string, steamId: string) {
+    this.assertUuid(clubId);
+    const member = await this.postgres.query<
+      Array<{
+        xp: number;
+        staff_level: number | null;
+        club_vip_until: string | null;
+        owner_steam_id: string;
+      }>
+    >(
+      `SELECT m.xp, m.staff_level, m.club_vip_until::text,
+              c.owner_steam_id::text
+         FROM public.club_members m
+         JOIN public.clubs c ON c.id = m.club_id
+        WHERE m.club_id = $1::uuid AND m.steam_id = $2::bigint`,
+      [clubId, steamId],
+    );
+    const row = member.at(0);
+    if (!row) return null;
+
+    const vipStats = await this.postgres.query<
+      Array<{ vip_servers: number; club_servers: number }>
+    >(
+      `SELECT
+         (
+           SELECT COUNT(DISTINCT g.server_id)::int
+             FROM public.store_vip_grants g
+             JOIN public.servers s ON s.id = g.server_id
+            WHERE s.club_id = $1::uuid
+              AND g.steam_id = $2::bigint
+              AND (g.expires_at IS NULL OR g.expires_at > now())
+         ) AS vip_servers,
+         (
+           SELECT COUNT(*)::int FROM public.servers WHERE club_id = $1::uuid
+         ) AS club_servers`,
+      [clubId, steamId],
+    );
+    const stats = vipStats.at(0) || { vip_servers: 0, club_servers: 0 };
+    const hasClubVip =
+      !!row.club_vip_until &&
+      new Date(row.club_vip_until).getTime() > Date.now();
+
+    const auto = autoLevelFromVipAndXp({
+      vipServerCount: Number(stats.vip_servers) || 0,
+      clubServerCount: Number(stats.club_servers) || 0,
+      hasClubVip,
+      xp: Number(row.xp) || 0,
+    });
+    const level = effectiveLevel({
+      staffLevel: row.staff_level,
+      autoLevel: auto,
+      isOwner: row.owner_steam_id === String(steamId),
+    });
+    const role = roleFromLevel(level);
+
+    await this.postgres.query(
+      `UPDATE public.club_members
+          SET level = $3,
+              role = $4,
+              is_vip = CASE WHEN $3 >= 2 THEN true ELSE is_vip END
+        WHERE club_id = $1::uuid AND steam_id = $2::bigint`,
+      [clubId, steamId, level, role],
+    );
+    return { level, role, auto_level: auto };
+  }
+
+  public async recalculateMemberLevelsForServer(
+    serverId: string,
+    steamId: string,
+  ) {
+    const rows = await this.postgres.query<Array<{ club_id: string }>>(
+      `SELECT club_id::text FROM public.servers
+        WHERE id = $1::uuid AND club_id IS NOT NULL`,
+      [serverId],
+    );
+    const clubId = rows.at(0)?.club_id;
+    if (!clubId) return;
+    // Ensure they are a member before leveling from shop VIP.
+    const member = await this.isMember(clubId, steamId);
+    if (!member) return;
+    await this.recalculateMemberLevel(clubId, steamId);
+  }
+
+  public async memberHasPerm(
+    clubId: string,
+    steamId: string,
+    perm: ClubPermKey,
+  ): Promise<boolean> {
+    const rows = await this.postgres.query<
+      Array<{
+        level: number;
+        level_permissions: Record<string, any> | null;
+        override: boolean | null;
+      }>
+    >(
+      `SELECT m.level, c.level_permissions,
+              o.allowed AS override
+         FROM public.club_members m
+         JOIN public.clubs c ON c.id = m.club_id
+         LEFT JOIN public.club_member_perm_overrides o
+           ON o.club_id = m.club_id
+          AND o.steam_id = m.steam_id
+          AND o.perm_key = $3
+        WHERE m.club_id = $1::uuid AND m.steam_id = $2::bigint`,
+      [clubId, steamId, perm],
+    );
+    const row = rows.at(0);
+    if (!row) return false;
+    return permissionAllowed({
+      level: Number(row.level) || 1,
+      perm,
+      clubPermissions: row.level_permissions,
+      override: row.override,
+    });
+  }
+
+  private async assertClubPerm(
+    clubId: string,
+    steamId: string,
+    perm: ClubPermKey,
+  ) {
+    if (await this.isSiteAdmin(steamId)) return;
+    if (!(await this.memberHasPerm(clubId, steamId, perm))) {
+      throw new ForbiddenException("Permission denied");
+    }
   }
 
   public async listClubServers(clubId: string, user?: User | null) {
@@ -1425,6 +1721,7 @@ export class ClubsService {
         title_fa: string;
         target: number;
         metric: string;
+        difficulty: string;
       }>
     >(
       `SELECT ch.id::text AS id,
@@ -1435,7 +1732,8 @@ export class ClubsService {
               cat.title,
               cat.title_fa,
               cat.target,
-              cat.metric
+              cat.metric,
+              cat.difficulty
          FROM public.club_challenges ch
          JOIN public.club_challenge_catalog cat ON cat.id = ch.catalog_id
         WHERE ch.active
@@ -1501,23 +1799,41 @@ export class ClubsService {
       const current = Number(after?.progress ?? 0);
       const completed = !!after?.completed_at;
       const justCompleted = completed && !alreadyDone;
-      if (justCompleted && row.prize_ypoints && row.prize_ypoints > 0) {
-        const canPrize =
-          row.prize_scope === "site" ||
-          (await this.isMember(row.club_id, steamId));
-        if (canPrize) {
+      if (justCompleted) {
+        const xpGain = challengeXpForDifficulty(row.difficulty);
+        if (xpGain > 0 && (await this.isMember(row.club_id, steamId))) {
           try {
-            await this.ypoint.credit({
-              steamId,
-              amount: row.prize_ypoints,
-              reason: `Club challenge: ${row.title}`,
-              refType: "club_challenge",
-              refId: row.id,
-            });
+            await this.postgres.query(
+              `UPDATE public.club_members
+                  SET xp = xp + $3
+                WHERE club_id = $1::uuid AND steam_id = $2::bigint`,
+              [row.club_id, steamId, xpGain],
+            );
+            await this.recalculateMemberLevel(row.club_id, steamId);
           } catch (err) {
             this.logger.warn(
-              `club challenge prize failed id=${row.id} steam=${steamId}: ${String(err)}`,
+              `club challenge xp failed id=${row.id} steam=${steamId}: ${String(err)}`,
             );
+          }
+        }
+        if (row.prize_ypoints && row.prize_ypoints > 0) {
+          const canPrize =
+            row.prize_scope === "site" ||
+            (await this.isMember(row.club_id, steamId));
+          if (canPrize) {
+            try {
+              await this.ypoint.credit({
+                steamId,
+                amount: row.prize_ypoints,
+                reason: `Club challenge: ${row.title}`,
+                refType: "club_challenge",
+                refId: row.id,
+              });
+            } catch (err) {
+              this.logger.warn(
+                `club challenge prize failed id=${row.id} steam=${steamId}: ${String(err)}`,
+              );
+            }
           }
         }
       }
@@ -1666,7 +1982,7 @@ export class ClubsService {
     const rows = await this.postgres.query<Array<{ ok: boolean }>>(
       `SELECT true AS ok FROM public.club_members
         WHERE club_id = $1::uuid AND steam_id = $2::bigint
-          AND role IN ('owner', 'admin')`,
+          AND (level >= 8 OR role IN ('owner', 'co_owner', 'admin'))`,
       [clubId, String(user.steam_id)],
     );
     return rows.length > 0;
@@ -1679,13 +1995,7 @@ export class ClubsService {
   private async canManageClubServers(clubId: string, user?: User | null) {
     if (!user?.steam_id) return false;
     if (this.callerIsSiteAdmin(user)) return true;
-    const rows = await this.postgres.query<Array<{ ok: boolean }>>(
-      `SELECT true AS ok FROM public.club_members
-        WHERE club_id = $1::uuid AND steam_id = $2::bigint
-          AND role IN ('owner', 'admin')`,
-      [clubId, String(user.steam_id)],
-    );
-    return rows.length > 0;
+    return this.memberHasPerm(clubId, String(user.steam_id), "manage_servers");
   }
 
   private async assertClubServerStaff(clubId: string, user: User) {
@@ -1730,10 +2040,11 @@ export class ClubsService {
   }
 
   private async assertCanManage(clubId: string, steamId: string) {
+    if (await this.isSiteAdmin(steamId)) return;
     const rows = await this.postgres.query<Array<{ ok: boolean }>>(
       `SELECT true AS ok FROM public.club_members
        WHERE club_id = $1::uuid AND steam_id = $2::bigint
-         AND role IN ('owner', 'admin')`,
+         AND (level >= 8 OR role IN ('owner', 'co_owner', 'admin'))`,
       [clubId, steamId],
     );
     if (!rows.length) throw new ForbiddenException("Club admin required");

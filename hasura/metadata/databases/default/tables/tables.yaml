@@ -24,6 +24,7 @@
 - "!include public_club_leaderboard_entries.yaml"
 - "!include public_club_leave_cooldowns.yaml"
 - "!include public_club_leaderboards.yaml"
+- "!include public_club_member_perm_overrides.yaml"
 - "!include public_club_members.yaml"
 - "!include public_club_messages.yaml"
 - "!include public_club_parties.yaml"

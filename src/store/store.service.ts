@@ -25,6 +25,7 @@ import { e_notification_types_enum } from "../../generated/schema";
 import { ChallengesService } from "../challenges/challenges.service";
 import type { ChallengeTier } from "../challenges/challenge-catalog";
 import { HostedServersService } from "../hosted-servers/hosted-servers.service";
+import { ClubsService } from "../clubs/clubs.service";
 import {
   isServerSectionMode,
   SERVER_SECTION_MODES,
@@ -91,6 +92,8 @@ export class StoreService {
     private readonly challenges: ChallengesService,
     @Inject(forwardRef(() => HostedServersService))
     private readonly hostedServers: HostedServersService,
+    @Inject(forwardRef(() => ClubsService))
+    private readonly clubs: ClubsService,
   ) {
     this.envBale = this.configService.get<BaleConfig>("bale");
     this.app = this.configService.get<AppConfig>("app");
@@ -2086,6 +2089,17 @@ export class StoreService {
     } catch (error) {
       this.logger.warn(
         `VIP grant roster upsert failed order=${args.orderId}`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+    try {
+      await this.clubs.recalculateMemberLevelsForServer(
+        args.serverId,
+        args.steamId,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Club level recalc after VIP failed steam=${args.steamId} server=${args.serverId}`,
         error instanceof Error ? error.message : error,
       );
     }

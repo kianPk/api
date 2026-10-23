@@ -15,15 +15,34 @@ insert_permissions:
 - role: user
   permission:
     check:
-      club:
-        members:
-          _and:
-          - steam_id:
-              _eq: X-Hasura-User-Id
-          - role:
-              _in:
-              - owner
-              - admin
+      _or:
+      - club:
+          members:
+            _and:
+            - steam_id:
+                _eq: X-Hasura-User-Id
+            - _or:
+              - level:
+                  _gte: 8
+              - role:
+                  _in:
+                  - owner
+                  - co_owner
+                  - admin
+      - _exists:
+          _table:
+            name: club_member_perm_overrides
+            schema: public
+          _where:
+            _and:
+            - steam_id:
+                _eq: X-Hasura-User-Id
+            - perm_key:
+                _eq: post_news
+            - allowed:
+                _eq: true
+            - club_id:
+                _ceq: club_id
     set:
       author_steam_id: x-hasura-user-id
     columns:
@@ -51,14 +70,32 @@ update_permissions:
     - deleted_at
     - body
     filter:
-      club:
-        members:
-          _and:
-          - steam_id:
-              _eq: X-Hasura-User-Id
-          - role:
-              _in:
-              - owner
-              - admin
-              - moderator
+      _or:
+      - club:
+          members:
+            _and:
+            - steam_id:
+                _eq: X-Hasura-User-Id
+            - _or:
+              - level:
+                  _gte: 7
+              - role:
+                  _in:
+                  - owner
+                  - co_owner
+                  - admin
+      - _exists:
+          _table:
+            name: club_member_perm_overrides
+            schema: public
+          _where:
+            _and:
+            - steam_id:
+                _eq: X-Hasura-User-Id
+            - perm_key:
+                _eq: moderate_news
+            - allowed:
+                _eq: true
+            - club_id:
+                _ceq: club_id
     check: {}

@@ -151,6 +151,35 @@ type Mutation {
 }
 
 type Mutation {
+  setClubMemberStaffLevel(
+    club_id: uuid!
+    steam_id: String!
+    staff_level: Int
+    title: String
+  ): SuccessOutput
+}
+
+type Mutation {
+  setClubMemberTitle(club_id: uuid!, steam_id: String!, title: String): SuccessOutput
+}
+
+type Mutation {
+  saveClubLevelPermissions(
+    club_id: uuid!
+    permissions: jsonb!
+  ): SuccessOutput
+}
+
+type Mutation {
+  setClubMemberPermOverride(
+    club_id: uuid!
+    steam_id: String!
+    perm_key: String!
+    allowed: Boolean
+  ): SuccessOutput
+}
+
+type Mutation {
   joinClubQueue(queue_id: uuid!): ClubQueueJoinOutput
 }
 

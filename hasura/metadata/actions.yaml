@@ -277,6 +277,38 @@ actions:
     permissions:
       - role: user
       - role: administrator
+  - name: setClubMemberStaffLevel
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+      - role: administrator
+  - name: setClubMemberTitle
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+      - role: administrator
+  - name: saveClubLevelPermissions
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+      - role: administrator
+  - name: setClubMemberPermOverride
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: user
+      - role: administrator
   - name: joinClubQueue
     definition:
       kind: synchronous
