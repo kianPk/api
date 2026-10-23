@@ -941,15 +941,22 @@ export class ClubsService {
     if (!isServerSectionMode(mode)) {
       throw new BadRequestException("Unknown server mode");
     }
-    const count = Math.min(
-      CLUB_MAX_PER_MODE,
-      Math.max(0, Math.floor(Number(input?.count) || 0)),
-    );
     const maps = this.cleanClubMaps(input?.maps);
     if (maps.length === 0) {
       throw new BadRequestException("Add at least one map");
     }
     const current = await this.readServerModes(clubId);
+    const existingCount = Math.min(
+      CLUB_MAX_PER_MODE,
+      Math.max(0, Math.floor(Number(current[mode]?.count) || 0)),
+    );
+    // Only site admins can grow/shrink fleet size; club staff may edit maps.
+    const count = this.callerIsSiteAdmin(user)
+      ? Math.min(
+          CLUB_MAX_PER_MODE,
+          Math.max(0, Math.floor(Number(input?.count) || 0)),
+        )
+      : existingCount;
     current[mode] = { count, maps };
     await this.postgres.query(
       `UPDATE public.clubs SET server_modes = $2::jsonb WHERE id = $1::uuid`,
