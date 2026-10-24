@@ -1805,7 +1805,11 @@ export class ClubsService {
           AND ch.ends_at > now()
           AND cat.server_mode = $1
           AND cat.metric = ANY($2::text[])
-          AND (cat.weapon = '' OR regexp_replace(cat.weapon, '^weapon_', '') = $3)
+          AND (
+            cat.weapon = ''
+            OR lower(cat.weapon) = $3
+            OR lower(cat.weapon) = 'weapon_' || $3
+          )
           AND ch.club_id = $5::uuid
           AND public.club_challenge_is_visible(
             ch,
