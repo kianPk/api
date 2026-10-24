@@ -172,8 +172,26 @@ export class DedicatedServersService {
 
       // A Ranked server resolves to no mode by design, so matchmaking capacity
       // always comes up on a clean plugin set.
+      // Section modes write their rules into gamemode_*_server.cfg via
+      // PLUGIN_CONFIGS, which replaces the whole file. Merge each loading
+      // plugin's install cfg (e.g. invsim_* for inventory-simulator) into that
+      // same payload or skins/cvars never reach the server after map load.
+      const resolved = await this.gameModesService.resolveForServer(serverId);
+      const pluginCfgLayers =
+        await this.gameModesService.pluginCfgLayers(resolved);
+      const mergedCfg = [
+        resolved?.cfg,
+        ...pluginCfgLayers.map((layer) => layer.cfg),
+      ]
+        .filter((part): part is string => Boolean(part?.trim()))
+        .join("\n");
       const gameMode = this.gameModesService.withPublicServerCfg(
-        await this.gameModesService.resolveForServer(serverId),
+        resolved
+          ? {
+              ...resolved,
+              cfg: mergedCfg || resolved.cfg,
+            }
+          : null,
       );
 
       const gameModeEnvironment =
