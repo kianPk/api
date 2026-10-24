@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Headers,
   Param,
   Post,
@@ -158,6 +159,7 @@ export class PublicRanksController {
   }
 
   @Get("site-xp")
+  @Header("Cache-Control", "no-store")
   public async siteXpGet(@Query("steam_ids") steamIds: string) {
     const ids = String(steamIds || "")
       .split(/[,\s]+/)

@@ -79,6 +79,28 @@ export class AvatarsController {
     return { success: true, ...result };
   }
 
+  /** Site admin: set the Faceit-style site level shown on the profile. */
+  @Post("admin/player-level")
+  async setPlayerLevel(
+    @Req() request: Request,
+    @Body()
+    body: {
+      steam_id?: string;
+      level?: number;
+    },
+  ) {
+    const user = this.requireUser(request);
+    if (user.role !== "administrator") {
+      throw new ForbiddenException("Administrator access required");
+    }
+    const player = await this.avatarsService.setPlayerSiteLevel({
+      user,
+      steamId: String(body?.steam_id || ""),
+      level: Number(body?.level),
+    });
+    return { success: true, player };
+  }
+
   @Post("teams/:teamId")
   @UseInterceptors(FileInterceptor("file"))
   async uploadTeam(

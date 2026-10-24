@@ -12,6 +12,7 @@ import { HasuraService } from "../hasura/hasura.service";
 import { PostgresService } from "../postgres/postgres.service";
 import { User } from "../auth/types/User";
 import { SteamConfig } from "../configs/types/SteamConfig";
+import { SiteXpService } from "../site-xp/site-xp.service";
 
 export type AvatarKind =
   | "teams"
@@ -45,6 +46,7 @@ export class AvatarsService {
     private readonly hasura: HasuraService,
     private readonly postgres: PostgresService,
     private readonly config: ConfigService,
+    private readonly siteXp: SiteXpService,
   ) {
     this.steamApiKey = this.config.get<SteamConfig>("steam")?.steamApiKey;
   }
@@ -176,6 +178,17 @@ export class AvatarsService {
       this.logger.error(`setPlayerElo failed for ${steamId}: ${message}`);
       throw new BadRequestException(message);
     }
+  }
+
+  async setPlayerSiteLevel(options: {
+    user: User;
+    steamId: string;
+    level: number;
+  }) {
+    return this.siteXp.adminSetLevel(options.user, {
+      steam_id: options.steamId,
+      level: options.level,
+    });
   }
 
   /**

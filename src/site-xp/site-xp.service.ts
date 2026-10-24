@@ -128,7 +128,7 @@ export class SiteXpService {
       throw new BadRequestException("level 1-10 required");
     }
     const xp = siteXpForLevel(level);
-    const [row] = await this.postgres.query<
+    const rows = await this.postgres.query<
       Array<{ steam_id: string; xp: number }>
     >(
       `INSERT INTO public.player_site_xp (steam_id, xp, updated_at)
@@ -139,10 +139,14 @@ export class SiteXpService {
        RETURNING steam_id::text AS steam_id, xp`,
       [steamId, xp],
     );
+    const row = rows[0];
+    if (!row) {
+      throw new BadRequestException("Could not save site level");
+    }
     return {
       steam_id: row.steam_id,
-      xp: row.xp,
-      level: siteLevelFromXp(row.xp),
+      xp: Number(row.xp),
+      level: siteLevelFromXp(Number(row.xp)),
     };
   }
 
