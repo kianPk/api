@@ -1686,7 +1686,7 @@ export class ClubsService {
     serverId?: string,
   ) {
     const section = this.normalizeMode(mode);
-    const clubId = await this.clubIdForChallenge(serverId, steamId, section);
+    const clubId = await this.clubIdForServer(serverId);
     if (!clubId) return { challenges: [] };
     const rows = await this.postgres.query<Array<Record<string, unknown>>>(
       `SELECT ch.id::text AS id,
@@ -1741,11 +1741,7 @@ export class ClubsService {
     const steamId = String(input.steam_id || "").trim();
     if (!steamId) throw new BadRequestException("steam_id is required");
     const mode = this.normalizeMode(input.mode);
-    const clubId = await this.clubIdForChallenge(
-      input.server_id,
-      steamId,
-      mode,
-    );
+    const clubId = await this.clubIdForServer(input.server_id);
     if (!clubId) return { progress: [] };
     const extra = String(input.metric || "").trim();
     const rawAmount = Number(input.amount);
@@ -2118,54 +2114,6 @@ export class ClubsService {
       [id],
     );
     return rows[0]?.club_id ?? null;
-  }
-
-  // Older mode plugins omit server_id, so the kill cannot be tied to a box.
-  // Use the club when the player belongs to exactly one club that has this
-  // mode running, or to the one club they own among those.
-  private async clubIdForChallenge(
-    serverId: string | null | undefined,
-    steamId: string | null | undefined,
-    mode: string,
-  ) {
-    const fromServer = await this.clubIdForServer(serverId);
-    if (fromServer) return fromServer;
-    const steam = String(steamId || "").trim();
-    if (!/^\d{15,20}$/.test(steam)) return null;
-    const rows = await this.postgres.query<
-      Array<{ club_id: string; owned: boolean }>
-    >(
-      `SELECT DISTINCT ch.club_id::text AS club_id,
-              EXISTS (
-                SELECT 1 FROM public.clubs c
-                 WHERE c.id = ch.club_id AND c.owner_steam_id = $1::bigint
-              ) AS owned
-         FROM public.club_challenges ch
-         JOIN public.club_challenge_catalog cat ON cat.id = ch.catalog_id
-        WHERE ch.active
-          AND ch.ends_at > now()
-          AND cat.server_mode = $2
-          AND EXISTS (
-            SELECT 1 FROM public.servers s
-             WHERE s.club_id = ch.club_id
-               AND s.enabled
-               AND s.section_mode = $2
-          )
-          AND (
-            EXISTS (
-              SELECT 1 FROM public.club_members m
-               WHERE m.club_id = ch.club_id AND m.steam_id = $1::bigint
-            )
-            OR EXISTS (
-              SELECT 1 FROM public.clubs c
-               WHERE c.id = ch.club_id AND c.owner_steam_id = $1::bigint
-            )
-          )`,
-      [steam, mode],
-    );
-    if (rows.length === 1) return rows[0].club_id;
-    const owned = rows.filter((row) => row.owned);
-    return owned.length === 1 ? owned[0].club_id : null;
   }
 
   private async serverIdForMatch(matchId: string) {
