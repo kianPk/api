@@ -192,6 +192,11 @@ export class DedicatedServersService {
 
       const { steamAccountToken, isHosted } =
         await this.getServerHostingInfo(serverId);
+      // Node shared plugins (/opt/node-plugins) carry ENABLED_PLUGINS (duels,
+      // inventory, …) AND a hand-placed FiveStack. Section servers need the
+      // former; FiveStack without a match SEGV's on player spawn. Keep the
+      // mount, overlay an emptyDir on the FiveStack path for non-Ranked.
+      const isRanked = server.type === "Ranked";
 
       const launchExtras = [
         // Without this the server hibernates before its Steam logon finishes
@@ -257,25 +262,45 @@ export class DedicatedServersService {
                     },
                   },
                 },
-                ...(isHosted
+                ...(!isRanked
                   ? {
                       initContainers: [
-                        {
-                          name: "hosted-plugins",
-                          image: pluginImage,
-                          command: ["sh", "-c", this.hostedPluginInitScript()],
-                          volumeMounts: [
-                            {
-                              name: `dedicated-server-data-${server.id}`,
-                              mountPath: "/opt/custom-plugins",
+                        isHosted
+                          ? {
+                              name: "hosted-plugins",
+                              image: pluginImage,
+                              command: [
+                                "sh",
+                                "-c",
+                                this.hostedPluginInitScript(),
+                              ],
+                              volumeMounts: [
+                                {
+                                  name: `dedicated-server-data-${server.id}`,
+                                  mountPath: "/opt/custom-plugins",
+                                },
+                                {
+                                  name: `hosted-template-${sanitizedGameServerNodeId}`,
+                                  mountPath: "/opt/hosted-template",
+                                  readOnly: true,
+                                },
+                              ],
+                            }
+                          : {
+                              name: "shadow-fivestack",
+                              image: pluginImage,
+                              command: [
+                                "sh",
+                                "-c",
+                                this.shadowFiveStackInitScript(),
+                              ],
+                              volumeMounts: [
+                                {
+                                  name: `dedicated-server-data-${server.id}`,
+                                  mountPath: "/opt/custom-plugins",
+                                },
+                              ],
                             },
-                            {
-                              name: `hosted-template-${sanitizedGameServerNodeId}`,
-                              mountPath: "/opt/hosted-template",
-                              readOnly: true,
-                            },
-                          ],
-                        },
                       ],
                     }
                   : {}),
@@ -385,15 +410,25 @@ export class DedicatedServersService {
                         name: `dedicated-server-data-${server.id}`,
                         mountPath: `/opt/custom-plugins`,
                       },
-                      // A dedicated server only ever saw its own directory, so
-                      // a plugin installed on the node reached every on-demand
-                      // match server and none of these. Mounted read-write
-                      // because a plugin writes its config on first load and
-                      // that has to survive the pod.
+                      // Dedicated servers need the node plugin cache so
+                      // ENABLED_PLUGINS (section modes) can link in. Linked
+                      // after the server's own custom-plugins directory.
                       {
                         name: `custom-plugins-${sanitizedGameServerNodeId}`,
                         mountPath: `/opt/node-plugins`,
                       },
+                      // Hand-placed FiveStack on the node is always linked by
+                      // setup.sh. Overlay an empty dir so non-Ranked never
+                      // loads the match plugin (SEGV on join with no match).
+                      ...(!isRanked
+                        ? [
+                            {
+                              name: "shadow-fivestack-node",
+                              mountPath:
+                                "/opt/node-plugins/addons/counterstrikesharp/plugins/FiveStack",
+                            },
+                          ]
+                        : []),
                     ],
                   },
                 ],
@@ -430,6 +465,14 @@ export class DedicatedServersService {
                       path: `/opt/5stack/custom-plugins`,
                     },
                   },
+                  ...(!isRanked
+                    ? [
+                        {
+                          name: "shadow-fivestack-node",
+                          emptyDir: {},
+                        },
+                      ]
+                    : []),
                   ...(isHosted
                     ? [
                         {
@@ -1182,9 +1225,24 @@ export class DedicatedServersService {
       '  cp -a /opt/hosted-template/. "$dest"/ 2>/dev/null || true',
       '  touch "$dest/.hosted-template-applied"',
       "fi",
-      'mkdir -p "$dest/addons/counterstrikesharp/plugins/FiveStack"',
-      'find "$dest/addons/counterstrikesharp/plugins/FiveStack" -mindepth 1 -delete 2>/dev/null || true',
+      ...this.shadowFiveStackShellLines(),
     ].join("\n");
+  }
+
+  // Clears leftover FiveStack bits under a section/Casual dedicated server's
+  // own hostPath so CSS cannot load the match plugin after a prior bad mount.
+  private shadowFiveStackInitScript(): string {
+    return ["set -e", "dest=/opt/custom-plugins", ...this.shadowFiveStackShellLines()].join(
+      "\n",
+    );
+  }
+
+  private shadowFiveStackShellLines(): string[] {
+    // Remove the directory entirely — an empty FiveStack folder still gets
+    // symlinked into the instance and confuses debugging.
+    return [
+      'rm -rf "$dest/addons/counterstrikesharp/plugins/FiveStack"',
+    ];
   }
 
   private async waitForPodReady(
