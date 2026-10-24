@@ -3,6 +3,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Header,
   Inject,
   Param,
   Post,
@@ -15,6 +16,7 @@ import { Request } from "express";
 import { User } from "../auth/types/User";
 import { StoreService } from "../store/store.service";
 import { HostedServersService } from "./hosted-servers.service";
+import { SiteXpService } from "../site-xp/site-xp.service";
 
 @Controller("hosted-servers")
 export class HostedServersController {
@@ -22,6 +24,7 @@ export class HostedServersController {
     private readonly hostedServers: HostedServersService,
     @Inject(forwardRef(() => StoreService))
     private readonly store: StoreService,
+    private readonly siteXp: SiteXpService,
   ) {}
 
   @Get("overview")
@@ -264,6 +267,20 @@ export class HostedServersController {
     );
   }
 
+  // Two segments, so the ":id" route below cannot claim it. /site-xp alone
+  // was answered by that param route with 401, and the profile showed level 1.
+  @Get("site-xp/lookup")
+  @Header("Cache-Control", "no-store")
+  public async siteXpLookup(@Query("steam_ids") steamIds: string) {
+    return this.readSiteXp(steamIds);
+  }
+
+  @Get("site-xp")
+  @Header("Cache-Control", "no-store")
+  public async siteXp(@Query("steam_ids") steamIds: string) {
+    return this.readSiteXp(steamIds);
+  }
+
   @Get(":id")
   public async get(@Req() request: Request, @Param("id") id: string) {
     const user = this.requireUser(request);
@@ -422,6 +439,13 @@ export class HostedServersController {
     const user = this.requireUser(request);
     const hosted = await this.hostedServers.requireAccess(id, user);
     return this.hostedServers.removeBan(hosted, steamId);
+  }
+
+  private readSiteXp(steamIds: string) {
+    const ids = String(steamIds || "")
+      .split(/[,\s]+/)
+      .filter(Boolean);
+    return this.siteXp.get(ids).then((players) => ({ players }));
   }
 
   private requireUser(request: Request): User {

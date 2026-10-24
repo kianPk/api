@@ -3,7 +3,6 @@ import {
   Body,
   Controller,
   Get,
-  Header,
   Headers,
   Param,
   Post,
@@ -156,15 +155,6 @@ export class PublicRanksController {
   @Get("site-xp/top")
   public async siteXpTop(@Query("limit") limit: string) {
     return { players: await this.siteXp.top(Number(limit)) };
-  }
-
-  @Get("site-xp")
-  @Header("Cache-Control", "no-store")
-  public async siteXpGet(@Query("steam_ids") steamIds: string) {
-    const ids = String(steamIds || "")
-      .split(/[,\s]+/)
-      .filter(Boolean);
-    return { players: await this.siteXp.get(ids) };
   }
 
   @Post("plugin/site-xp")
