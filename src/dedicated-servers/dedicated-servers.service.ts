@@ -182,6 +182,7 @@ export class DedicatedServersService {
       const mergedCfg = [
         resolved?.cfg,
         ...pluginCfgLayers.map((layer) => layer.cfg),
+        this.invsimCfgBlock(resolved?.enabledPlugins),
       ]
         .filter((part): part is string => Boolean(part?.trim()))
         .join("\n");
@@ -1192,6 +1193,33 @@ export class DedicatedServersService {
 
   private getDedicatedServerDeploymentName(serverId: string): string {
     return `dedicated-server-${serverId}`;
+  }
+
+  // Section setup rewrites gamemode_*_server.cfg from PLUGIN_CONFIGS, so a
+  // cvar that only lived in the instance file never reaches a newly created
+  // club server. InventorySimulator ignores unknown commands until it has
+  // loaded; these are the commands that build actually has. The API key stays
+  // in INVSIM_API_KEY and is never written into the repo.
+  private invsimCfgBlock(enabledPlugins?: string | null): string | null {
+    const enabled = `,${enabledPlugins ?? ""},`;
+    if (
+      !enabled.includes(",inventory-simulator@") &&
+      !enabled.includes(",inventory-simulator,")
+    ) {
+      return null;
+    }
+    const key = String(process.env.INVSIM_API_KEY || "").trim();
+    const lines = [
+      'invsim_url "https://inventory.yguard.ir"',
+      "invsim_require_inventory 1",
+      "invsim_ws_enabled 1",
+      "invsim_ws_immediately 1",
+      "invsim_spraychanger_enabled 1",
+    ];
+    if (key && !/[\r\n"]/.test(key)) {
+      lines.push(`invsim_apikey "${key}"`);
+    }
+    return lines.join("\n");
   }
 
   private async getServerHostingInfo(

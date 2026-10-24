@@ -1685,9 +1685,9 @@ export class ClubsService {
     steamId?: string,
     serverId?: string,
   ) {
-    const clubId = await this.clubIdForServer(serverId);
-    if (!clubId) return { challenges: [] };
     const section = this.normalizeMode(mode);
+    const clubId = await this.clubIdForChallenge(serverId, steamId, section);
+    if (!clubId) return { challenges: [] };
     const rows = await this.postgres.query<Array<Record<string, unknown>>>(
       `SELECT ch.id::text AS id,
               ch.club_id::text AS club_id,
@@ -1740,9 +1740,13 @@ export class ClubsService {
   }) {
     const steamId = String(input.steam_id || "").trim();
     if (!steamId) throw new BadRequestException("steam_id is required");
-    const clubId = await this.clubIdForServer(input.server_id);
-    if (!clubId) return { progress: [] };
     const mode = this.normalizeMode(input.mode);
+    const clubId = await this.clubIdForChallenge(
+      input.server_id,
+      steamId,
+      mode,
+    );
+    if (!clubId) return { progress: [] };
     const extra = String(input.metric || "").trim();
     const rawAmount = Number(input.amount);
     const amount =
@@ -1752,18 +1756,25 @@ export class ClubsService {
           ? 0
           : 1;
     if (amount <= 0) return { progress: [] };
+    const weapon = this.normalizeWeapon(input.weapon);
+    // CS2 often leaves the death-event noscope bit unset. An AWP or SSG kill
+    // is the shot those challenges are counting.
+    const sniper = weapon === "awp" || weapon === "ssg08";
     const metrics = extra
       ? [extra]
       : [
           "kills",
           ...(input.headshot ? ["headshots"] : []),
-          ...(input.noscope ? ["noscope"] : []),
+          ...(input.noscope || sniper ? ["noscope"] : []),
         ];
     if (!(await this.hasLiveChallengeMetrics(mode, metrics, clubId))) {
-      return { progress: [] };
+      // A normal kill does not match a no-scope challenge, but the game
+      // plugin only draws a line when this array is non-empty.
+      if (!metrics.includes("kills")) return { progress: [] };
+      return {
+        progress: await this.openChallengeHud(mode, steamId, input.server_id),
+      };
     }
-    const weapon = this.normalizeWeapon(input.weapon);
-
     const matches = await this.postgres.query<
       Array<{
         id: string;
@@ -1902,7 +1913,37 @@ export class ClubsService {
       });
     }
 
+    if (!progress.length && metrics.includes("kills")) {
+      return {
+        progress: await this.openChallengeHud(mode, steamId, input.server_id),
+      };
+    }
     return { progress };
+  }
+
+  // Open challenges for the in-game line. Does not change progress.
+  private async openChallengeHud(
+    mode: string,
+    steamId: string,
+    serverId?: string | null,
+  ) {
+    const live = await this.liveChallenges(mode, steamId, serverId);
+    return live.challenges
+      .filter((row) => {
+        const target = Number(row.target ?? 0);
+        const current = Number(row.progress ?? 0);
+        return target > 0 && !row.completed_at && current < target;
+      })
+      .slice(0, 2)
+      .map((row) => ({
+        id: String(row.id ?? ""),
+        title: String(row.title ?? ""),
+        title_fa: String(row.title_fa ?? ""),
+        current: Number(row.progress ?? 0),
+        target: Number(row.target ?? 0),
+        completed: false,
+        just_completed: false,
+      }));
   }
 
   private matchChallengeMode = new Map<
@@ -2073,6 +2114,54 @@ export class ClubsService {
       [id],
     );
     return rows[0]?.club_id ?? null;
+  }
+
+  // Older mode plugins omit server_id, so the kill cannot be tied to a box.
+  // Use the club when the player belongs to exactly one club that has this
+  // mode running, or to the one club they own among those.
+  private async clubIdForChallenge(
+    serverId: string | null | undefined,
+    steamId: string | null | undefined,
+    mode: string,
+  ) {
+    const fromServer = await this.clubIdForServer(serverId);
+    if (fromServer) return fromServer;
+    const steam = String(steamId || "").trim();
+    if (!/^\d{15,20}$/.test(steam)) return null;
+    const rows = await this.postgres.query<
+      Array<{ club_id: string; owned: boolean }>
+    >(
+      `SELECT DISTINCT ch.club_id::text AS club_id,
+              EXISTS (
+                SELECT 1 FROM public.clubs c
+                 WHERE c.id = ch.club_id AND c.owner_steam_id = $1::bigint
+              ) AS owned
+         FROM public.club_challenges ch
+         JOIN public.club_challenge_catalog cat ON cat.id = ch.catalog_id
+        WHERE ch.active
+          AND ch.ends_at > now()
+          AND cat.server_mode = $2
+          AND EXISTS (
+            SELECT 1 FROM public.servers s
+             WHERE s.club_id = ch.club_id
+               AND s.enabled
+               AND s.section_mode = $2
+          )
+          AND (
+            EXISTS (
+              SELECT 1 FROM public.club_members m
+               WHERE m.club_id = ch.club_id AND m.steam_id = $1::bigint
+            )
+            OR EXISTS (
+              SELECT 1 FROM public.clubs c
+               WHERE c.id = ch.club_id AND c.owner_steam_id = $1::bigint
+            )
+          )`,
+      [steam, mode],
+    );
+    if (rows.length === 1) return rows[0].club_id;
+    const owned = rows.filter((row) => row.owned);
+    return owned.length === 1 ? owned[0].club_id : null;
   }
 
   private async serverIdForMatch(matchId: string) {
