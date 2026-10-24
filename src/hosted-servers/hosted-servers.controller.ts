@@ -277,7 +277,7 @@ export class HostedServersController {
 
   @Get("site-xp")
   @Header("Cache-Control", "no-store")
-  public async siteXp(@Query("steam_ids") steamIds: string) {
+  public async siteXpGet(@Query("steam_ids") steamIds: string) {
     return this.readSiteXp(steamIds);
   }
 
