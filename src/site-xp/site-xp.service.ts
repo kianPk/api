@@ -18,6 +18,13 @@ export type SiteXpRow = {
   level: number;
 };
 
+export type SiteXpLeader = SiteXpRow & {
+  name: string;
+  avatar_url: string | null;
+  custom_avatar_url: string | null;
+  country: string | null;
+};
+
 @Injectable()
 export class SiteXpService {
   private readonly recent = new Map<string, number>();
@@ -41,6 +48,41 @@ export class SiteXpService {
       const xp = byId.get(steamId) ?? 0;
       return { steam_id: steamId, xp, level: siteLevelFromXp(xp) };
     });
+  }
+
+  public async top(limit: number): Promise<SiteXpLeader[]> {
+    const n = Math.min(50, Math.max(1, Math.floor(Number(limit) || 10)));
+    const rows = await this.postgres.query<
+      Array<{
+        steam_id: string;
+        xp: number;
+        name: string | null;
+        avatar_url: string | null;
+        custom_avatar_url: string | null;
+        country: string | null;
+      }>
+    >(
+      `SELECT p.steam_id::text AS steam_id,
+              x.xp,
+              p.name,
+              p.avatar_url,
+              p.custom_avatar_url,
+              p.country
+         FROM public.player_site_xp x
+         JOIN public.players p ON p.steam_id = x.steam_id
+        ORDER BY x.xp DESC, p.steam_id
+        LIMIT $1`,
+      [n],
+    );
+    return rows.map((row) => ({
+      steam_id: row.steam_id,
+      xp: row.xp,
+      level: siteLevelFromXp(row.xp),
+      name: row.name || "Player",
+      avatar_url: row.avatar_url,
+      custom_avatar_url: row.custom_avatar_url,
+      country: row.country,
+    }));
   }
 
   public async apply(input: SiteXpInput): Promise<SiteXpRow | null> {

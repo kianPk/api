@@ -152,6 +152,11 @@ export class PublicRanksController {
     return { players: await this.sectionRatings.getExisting(key, ids) };
   }
 
+  @Get("site-xp/top")
+  public async siteXpTop(@Query("limit") limit: string) {
+    return { players: await this.siteXp.top(Number(limit)) };
+  }
+
   @Get("site-xp")
   public async siteXpGet(@Query("steam_ids") steamIds: string) {
     const ids = String(steamIds || "")
