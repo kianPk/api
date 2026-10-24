@@ -66,12 +66,19 @@ export type SiteXpInput = {
   wallbang?: boolean;
   thrusmoke?: boolean;
   blinded?: boolean;
+  streak?: number;
 };
 
 export function siteXpDelta(input: SiteXpInput): number {
   switch (String(input.kind || "")) {
-    case "death":
-      return -10;
+    case "death": {
+      const streak = Math.max(1, Math.floor(Number(input.streak) || 1));
+      if (streak >= 5) return -110;
+      if (streak === 4) return -80;
+      if (streak === 3) return -55;
+      if (streak === 2) return -35;
+      return -20;
+    }
     case "team_damage":
       return -10;
     case "team_kill":

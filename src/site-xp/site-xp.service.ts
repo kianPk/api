@@ -21,6 +21,7 @@ export type SiteXpRow = {
 @Injectable()
 export class SiteXpService {
   private readonly recent = new Map<string, number>();
+  private readonly deathStreak = new Map<string, number>();
 
   constructor(private readonly postgres: PostgresService) {}
 
@@ -51,8 +52,17 @@ export class SiteXpService {
     const deltas = new Map<string, number>();
     for (const event of events.slice(0, 64)) {
       const steamId = this.ids([String(event.steam_id || "")])[0];
-      const delta = siteXpDelta(event);
-      if (!steamId || !delta || this.throttled(steamId, event)) continue;
+      if (!steamId || this.throttled(steamId, event)) continue;
+      const kind = String(event.kind || "");
+      if (kind === "kill" || kind === "round_win") {
+        this.deathStreak.set(steamId, 0);
+      }
+      const scored =
+        kind === "death"
+          ? { ...event, streak: this.nextDeathStreak(steamId) }
+          : event;
+      const delta = siteXpDelta(scored);
+      if (!delta) continue;
       deltas.set(steamId, (deltas.get(steamId) || 0) + delta);
     }
     const out: SiteXpRow[] = [];
@@ -111,6 +121,12 @@ export class SiteXpService {
       xp: row.xp,
       level: siteLevelFromXp(row.xp),
     };
+  }
+
+  private nextDeathStreak(steamId: string): number {
+    const streak = (this.deathStreak.get(steamId) || 0) + 1;
+    this.deathStreak.set(steamId, streak);
+    return streak;
   }
 
   private throttled(steamId: string, event: SiteXpInput): boolean {
