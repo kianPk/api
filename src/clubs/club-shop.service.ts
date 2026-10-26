@@ -61,15 +61,31 @@ export class ClubShopService {
     }
   }
 
+  private parseAmount(value: unknown) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.floor(value);
+    }
+    const fa = "۰۱۲۳۴۵۶۷۸۹";
+    const ar = "٠١٢٣٤٥٦٧٨٩";
+    const raw = String(value ?? "")
+      .trim()
+      .replace(/[۰-۹]/g, (d) => String(fa.indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String(ar.indexOf(d)))
+      .replace(/[^\d.-]/g, "");
+    if (!raw) return 0;
+    const n = Math.floor(Number(raw));
+    return Number.isFinite(n) ? n : 0;
+  }
+
   private priceCap(value: unknown) {
-    const n = Math.floor(Number(value));
-    if (!Number.isFinite(n) || n < 0) return 0;
+    const n = this.parseAmount(value);
+    if (n < 0) return 0;
     return Math.min(500_000_000, n);
   }
 
   private ypCap(value: unknown) {
-    const n = Math.floor(Number(value));
-    if (!Number.isFinite(n) || n < 0) return 0;
+    const n = this.parseAmount(value);
+    if (n < 0) return 0;
     return Math.min(10_000_000, n);
   }
 
@@ -104,6 +120,8 @@ export class ClubShopService {
 
   private async requireManageShop(clubId: string, user: User) {
     const steamId = String(user.steam_id);
+    // Match web club admin gate: owner, site admin, level >= 8, or manage_settings.
+    if (String(user.role || "") === "administrator") return;
     const rows = await this.postgres.query<
       Array<{ owner_steam_id: string }>
     >(
@@ -113,9 +131,18 @@ export class ClubShopService {
     const row = rows.at(0);
     if (!row) throw new NotFoundException("Club not found");
     if (row.owner_steam_id === steamId) return;
-    if (!(await this.clubs.memberHasPerm(clubId, steamId, "manage_settings"))) {
-      throw new ForbiddenException("Missing manage_settings permission");
+    if (await this.clubs.memberHasPerm(clubId, steamId, "manage_settings")) {
+      return;
     }
+    const levelRows = await this.postgres.query<Array<{ level: number }>>(
+      `SELECT level::int AS level
+         FROM public.club_members
+        WHERE club_id = $1::uuid AND steam_id = $2::bigint
+        LIMIT 1`,
+      [clubId, steamId],
+    );
+    if ((Number(levelRows.at(0)?.level) || 0) >= 8) return;
+    throw new ForbiddenException("Missing manage_settings permission");
   }
 
   public async getShopForStaff(clubId: string, user: User) {
@@ -267,7 +294,7 @@ export class ClubShopService {
 
       if (item.id) {
         this.assertUuid(item.id);
-        await this.postgres.query(
+        const updated = await this.postgres.query<Array<{ id: string }>>(
           `UPDATE public.club_shop_products
               SET title = CASE WHEN kind = 'custom' THEN $3 ELSE title END,
                   description = $4,
@@ -280,7 +307,8 @@ export class ClubShopService {
                   price_30d_ypoint = $11,
                   price_90d_ypoint = $12,
                   updated_at = now()
-            WHERE id = $1::uuid AND club_id = $2::uuid`,
+            WHERE id = $1::uuid AND club_id = $2::uuid
+            RETURNING id::text`,
           [
             item.id,
             clubId,
@@ -296,7 +324,13 @@ export class ClubShopService {
             payload.price_90d_ypoint,
           ],
         );
-      } else if (kind === "custom") {
+        if (updated.length > 0) continue;
+        // Stale id (e.g. builtins recreated) — fall through to kind upsert.
+        if (kind === "custom") {
+          throw new NotFoundException("Shop product not found");
+        }
+      }
+      if (kind === "custom" && !item.id) {
         const count = await this.postgres.query<Array<{ n: number }>>(
           `SELECT COUNT(*)::int AS n FROM public.club_shop_products
             WHERE club_id = $1::uuid AND kind = 'custom'`,
