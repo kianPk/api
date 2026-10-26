@@ -1,19 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Strategy as _SteamStrategy } from "passport-steam";
 import { PassportStrategy } from "@nestjs/passport";
-import { HasuraService } from "../../hasura/hasura.service";
 import { DoneCallback } from "passport";
 import { AppConfig } from "../../configs/types/AppConfig";
 import { ConfigService } from "@nestjs/config";
 import { SteamConfig } from "../../configs/types/SteamConfig";
-import { CacheService } from "../../cache/cache.service";
-import { InjectQueue } from "@nestjs/bullmq";
-import { Queue } from "bullmq";
-import { RedisManagerService } from "../../redis/redis-manager/redis-manager.service";
-import { SteamMatchHistoryQueues } from "../../steam-match-history/enums/SteamMatchHistoryQueues";
-import { SteamBansService } from "../../steam-match-history/steam-bans.service";
-import { FaceitQueues } from "../../faceit/enums/FaceitQueues";
-import { e_player_roles_enum } from "../../../generated";
+import { SteamAuthService } from "../steam-auth.service";
 
 interface SteamProfile {
   provider: string;
@@ -42,15 +34,7 @@ interface SteamProfile {
 export class SteamStrategy extends PassportStrategy(_SteamStrategy) {
   constructor(
     readonly config: ConfigService,
-    private readonly cache: CacheService,
-    private readonly hasura: HasuraService,
-    @InjectQueue(SteamMatchHistoryQueues.PollSteamMatchHistoryForUser)
-    private readonly pollQueue: Queue,
-    @InjectQueue(SteamMatchHistoryQueues.CheckSteamBans)
-    private readonly steamBansQueue: Queue,
-    @InjectQueue(FaceitQueues.RefreshFaceitRanks)
-    private readonly faceitRanksQueue: Queue,
-    private readonly redisManager: RedisManagerService,
+    private readonly steamAuth: SteamAuthService,
     private readonly logger: Logger,
   ) {
     const webDomain = config.get<AppConfig>("app").webDomain;
@@ -67,99 +51,20 @@ export class SteamStrategy extends PassportStrategy(_SteamStrategy) {
     profile: SteamProfile,
     done: DoneCallback,
   ): Promise<void> {
-    let role: e_player_roles_enum = "user";
-    if (!(await this.cache.has("admin-check"))) {
-      const { players } = await this.hasura.query({
-        players: {
-          __args: {
-            limit: 1,
-          },
-          __typename: true,
-        },
+    try {
+      const user = await this.steamAuth.upsertPlayerFromSteam({
+        steamId: profile._json.steamid,
+        name: profile._json.personaname,
+        profileUrl: profile._json.profileurl,
+        avatarUrl: profile._json.avatarfull,
       });
-
-      if (players.length === 0) {
-        role = "administrator";
-      }
-      await this.cache.put("admin-check", true);
-    }
-
-    const { insert_players_one } = await this.hasura.mutation({
-      insert_players_one: {
-        __args: {
-          object: {
-            role,
-            steam_id: profile._json.steamid,
-            name: profile._json.personaname,
-            profile_url: profile._json.profileurl,
-            avatar_url: profile._json.avatarfull,
-            last_sign_in_at: new Date(),
-          },
-          on_conflict: {
-            constraint: "players_steam_id_key",
-            update_columns: ["avatar_url", "profile_url", "last_sign_in_at"],
-          },
-        },
-        name: true,
-        role: true,
-        steam_id: true,
-        profile_url: true,
-        avatar_url: true,
-        discord_id: true,
-        language: true,
-        last_sign_in_at: true,
-      },
-    });
-
-    this.fireRefreshes(profile._json.steamid);
-
-    done(null, insert_players_one);
-  }
-
-  private fireRefreshes(steamId: string): void {
-    void this.pollQueue
-      .add(
-        "PollSteamMatchHistoryForUser",
-        { steamId },
-        {
-          jobId: `poll-steam-match-history.${steamId}`,
-          removeOnComplete: true,
-          removeOnFail: true,
-        },
-      )
-      .catch((err) => {
-        this.logger.error(
-          `on-login match-history poll enqueue failed for ${steamId}: ${(err as Error)?.message ?? err}`,
-        );
-      });
-
-    void SteamBansService.enqueueChecks(
-      this.redisManager.getConnection(),
-      this.steamBansQueue,
-      [steamId],
-    ).catch((err) => {
+      this.steamAuth.fireRefreshes(profile._json.steamid);
+      done(null, user);
+    } catch (err) {
       this.logger.error(
-        `on-login steam-bans enqueue failed for ${steamId}: ${(err as Error)?.message ?? err}`,
+        `steam openid upsert failed: ${(err as Error)?.message ?? err}`,
       );
-    });
-
-    // Pull FACEIT level from FACEIT Data API whenever someone signs in.
-    void this.faceitRanksQueue
-      .add(
-        "RefreshFaceitRanks",
-        { steamIds: [steamId], force: true },
-        {
-          jobId: `faceit-rank-login.${steamId}`,
-          removeOnComplete: 20,
-          removeOnFail: 20,
-        },
-      )
-      .catch((err) => {
-        this.logger.warn(
-          `on-login faceit refresh enqueue failed for ${steamId}: ${
-            (err as Error)?.message ?? err
-          }`,
-        );
-      });
+      done(err as Error);
+    }
   }
 }

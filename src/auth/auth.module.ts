@@ -13,6 +13,7 @@ import { ApiKeyGuard } from "./strategies/ApiKeyGuard";
 import { BullModule } from "@nestjs/bullmq";
 import { SteamMatchHistoryQueues } from "../steam-match-history/enums/SteamMatchHistoryQueues";
 import { FaceitQueues } from "../faceit/enums/FaceitQueues";
+import { SteamAuthService } from "./steam-auth.service";
 
 @Module({
   imports: [
@@ -32,12 +33,13 @@ import { FaceitQueues } from "../faceit/enums/FaceitQueues";
   providers: [
     ApiKeys,
     ApiKeyGuard,
+    SteamAuthService,
     SteamStrategy,
     DiscordStrategy,
     SteamSerializer,
     loggerFactory(),
   ],
-  exports: [ApiKeys, ApiKeyGuard],
+  exports: [ApiKeys, ApiKeyGuard, SteamAuthService],
   controllers: [AuthController],
 })
 export class AuthModule {}
