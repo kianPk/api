@@ -26,6 +26,7 @@ import { ChallengesService } from "../challenges/challenges.service";
 import type { ChallengeTier } from "../challenges/challenge-catalog";
 import { HostedServersService } from "../hosted-servers/hosted-servers.service";
 import { ClubsService } from "../clubs/clubs.service";
+import { ClubShopService } from "../clubs/club-shop.service";
 import {
   isServerSectionMode,
   SERVER_SECTION_MODES,
@@ -94,6 +95,8 @@ export class StoreService {
     private readonly hostedServers: HostedServersService,
     @Inject(forwardRef(() => ClubsService))
     private readonly clubs: ClubsService,
+    @Inject(forwardRef(() => ClubShopService))
+    private readonly clubShop: ClubShopService,
   ) {
     this.envBale = this.configService.get<BaleConfig>("bale");
     this.app = this.configService.get<AppConfig>("app");
@@ -1598,6 +1601,24 @@ export class StoreService {
     hosted_kind?: string | null;
     hosted_server_id?: string | null;
   }) {
+    if (order.hosted_kind === "club_shop") {
+      try {
+        await this.clubShop.fulfillFromStoreOrder(order.id);
+      } catch (error) {
+        this.logger.error(
+          `Club shop fulfillment failed order=${order.id}`,
+          error instanceof Error ? error.stack : error,
+        );
+      }
+      await this.postgres.query(
+        `UPDATE store_orders
+         SET hosted_fulfilled_at = COALESCE(hosted_fulfilled_at, now())
+         WHERE id = $1`,
+        [order.id],
+      );
+      return;
+    }
+
     const isVipShop =
       order.hosted_kind === "vip_shop" ||
       // Defend against older rows / partial payloads that lost hosted_kind.
