@@ -367,7 +367,7 @@ export class ClubShopService {
     >(
       `SELECT name, value FROM settings
         WHERE name IN ('bale.bot_token','bale.provider_token','bale.bot_username')`,
-    ).catch(() => []);
+    ).catch((): Array<{ name: string; value: string | null }> => []);
     const map = Object.fromEntries(rows.map((r) => [r.name, r.value ?? ""]));
     return {
       botToken: this.envBale?.botToken || map["bale.bot_token"] || "",
