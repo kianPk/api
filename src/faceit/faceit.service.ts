@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { CacheService } from "../cache/cache.service";
 import { HasuraService } from "../hasura/hasura.service";
+import { SiteXpService } from "../site-xp/site-xp.service";
 
 export type FaceitPlayerData = {
   faceit_player_id: string;
@@ -22,6 +23,7 @@ export class FaceitService {
     private readonly config: ConfigService,
     private readonly cache: CacheService,
     private readonly hasura: HasuraService,
+    private readonly siteXp: SiteXpService,
     private readonly logger: Logger,
   ) {
     this.apiKey = this.config.get("faceit.apiKey");
@@ -350,6 +352,17 @@ export class FaceitService {
         __typename: true,
       },
     });
+
+    // FACEIT 10 players start (or climb) to site level 10 when their rank syncs.
+    if (Number(data.faceit_skill_level) === 10) {
+      try {
+        await this.siteXp.ensureMinLevel(steamId, 10);
+      } catch (err) {
+        this.logger.warn(
+          `faceit site level bump failed for ${steamId}: ${String(err)}`,
+        );
+      }
+    }
 
     this.logger.debug(`faceit row written for ${steamId}`);
 

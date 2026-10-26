@@ -6,6 +6,7 @@ import { Queue } from "bullmq";
 import { CacheModule } from "../cache/cache.module";
 import { HasuraModule } from "../hasura/hasura.module";
 import { PostgresModule } from "../postgres/postgres.module";
+import { SiteXpModule } from "../site-xp/site-xp.module";
 import { DemosModule } from "../demos/demos.module";
 import { SteamMatchHistoryModule } from "../steam-match-history/steam-match-history.module";
 import { loggerFactory } from "../utilities/LoggerFactory";
@@ -44,6 +45,7 @@ import { RefreshFaceitRanks } from "./jobs/RefreshFaceitRanks";
     CacheModule,
     HasuraModule,
     PostgresModule,
+    SiteXpModule,
     DemosModule,
     forwardRef(() => SteamMatchHistoryModule),
   ],

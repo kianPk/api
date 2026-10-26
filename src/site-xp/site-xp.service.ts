@@ -114,6 +114,36 @@ export class SiteXpService {
     return out;
   }
 
+  // FACEIT level 10 (and similar) should land at least at this site level
+  // without pulling a higher site level back down.
+  public async ensureMinLevel(
+    steamId: string,
+    level: number,
+  ): Promise<SiteXpRow | null> {
+    const id = this.ids([String(steamId || "")])[0];
+    if (!id) return null;
+    const target = Math.min(10, Math.max(1, Math.round(Number(level) || 1)));
+    const xp = siteXpForLevel(target);
+    const rows = await this.postgres.query<
+      Array<{ steam_id: string; xp: number }>
+    >(
+      `INSERT INTO public.player_site_xp (steam_id, xp, updated_at)
+       VALUES ($1::bigint, $2, now())
+       ON CONFLICT (steam_id) DO UPDATE SET
+         xp = GREATEST(player_site_xp.xp, EXCLUDED.xp),
+         updated_at = now()
+       RETURNING steam_id::text AS steam_id, xp`,
+      [id, xp],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      steam_id: row.steam_id,
+      xp: Number(row.xp),
+      level: siteLevelFromXp(Number(row.xp)),
+    };
+  }
+
   public async adminSetLevel(
     user: User | undefined,
     body: { steam_id?: string; level?: number },

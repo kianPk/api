@@ -199,6 +199,7 @@ select_permissions:
     - min_elo
     - min_faceit_level
     - official_team_id
+    - xp
     - created_at
     - updated_at
     computed_fields:
