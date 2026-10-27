@@ -189,7 +189,19 @@ export class ClubShopService {
     };
   }
 
+  private asBool(value: unknown): boolean {
+    return (
+      value === true ||
+      value === 1 ||
+      value === "1" ||
+      value === "t" ||
+      value === "true"
+    );
+  }
+
   private serializeProduct(p: ClubShopProductRow, manage: boolean) {
+    const enabled = this.asBool(p.enabled);
+    const ypointEnabled = this.asBool(p.ypoint_enabled);
     const packages: Array<{
       duration: ClubShopDuration;
       price_irr: number;
@@ -200,7 +212,7 @@ export class ClubShopService {
       packages.push({
         duration,
         price_irr: irr,
-        price_ypoint: p.ypoint_enabled && yp > 0 ? yp : null,
+        price_ypoint: ypointEnabled && yp > 0 ? yp : null,
       });
     };
     push("7d", Number(p.price_7d_irr), Number(p.price_7d_ypoint));
@@ -212,8 +224,8 @@ export class ClubShopService {
       kind: p.kind,
       title: p.title,
       description: p.description,
-      enabled: p.enabled,
-      ypoint_enabled: p.ypoint_enabled,
+      enabled,
+      ypoint_enabled: ypointEnabled,
       price_7d_irr: Number(p.price_7d_irr),
       price_30d_irr: Number(p.price_30d_irr),
       price_90d_irr: Number(p.price_90d_irr),
@@ -221,7 +233,7 @@ export class ClubShopService {
       price_30d_ypoint: Number(p.price_30d_ypoint),
       price_90d_ypoint: Number(p.price_90d_ypoint),
       sort_order: p.sort_order,
-      packages: manage || p.enabled ? packages : packages,
+      packages,
     };
   }
 
@@ -278,8 +290,8 @@ export class ClubShopService {
           item.description != null
             ? String(item.description).trim().slice(0, 500) || null
             : null,
-        enabled: Boolean(item.enabled),
-        ypoint_enabled: Boolean(item.ypoint_enabled),
+        enabled: this.asBool(item.enabled),
+        ypoint_enabled: this.asBool(item.ypoint_enabled),
         price_7d_irr: this.priceCap(item.price_7d_irr),
         price_30d_irr: this.priceCap(item.price_30d_irr),
         price_90d_irr: this.priceCap(item.price_90d_irr),
