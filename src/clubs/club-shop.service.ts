@@ -413,9 +413,13 @@ export class ClubShopService {
   }
 
   private buildDeepLink(orderId: string, botUsername: string) {
-    const user = (botUsername || "").replace(/^@/, "");
-    if (!user) return null;
-    return `https://ble.ir/${user}?start=store_${orderId.replace(/-/g, "")}`;
+    // Must match StoreService + Bale webhook: /start pay_<uuid32>
+    const start = `pay_${orderId.replace(/-/g, "")}`;
+    const username = (botUsername || "").replace(/^@/, "");
+    if (username) {
+      return `https://ble.ir/${username}?start=${start}`;
+    }
+    return `bale://start?payload=${start}`;
   }
 
   private async ensureCarrier(): Promise<{ id: string }> {
@@ -629,9 +633,9 @@ export class ClubShopService {
       `INSERT INTO store_orders
          (id, product_id, product_title, buyer_steam_id, amount_irr, status,
           bale_payload, cart_items, terms_accepted_at, hosted_kind,
-          payment_method, hosted_fulfilled_at)
+          payment_method)
        VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7::jsonb, now(), 'club_shop',
-               'bale', now())`,
+               'bale')`,
       [
         storeOrderId,
         carrier.id,
@@ -896,6 +900,25 @@ export class ClubShopService {
         ORDER BY o.created_at DESC
         LIMIT 100`,
       [clubId],
+    );
+  }
+
+  /** Buyer's own club-shop purchases across all clubs. */
+  public async listMyPurchases(user: User) {
+    const steamId = String(user.steam_id);
+    return this.postgres.query(
+      `SELECT o.id::text, o.club_id::text, o.kind, o.product_title,
+              o.duration, o.server_id::text,
+              o.amount_irr::bigint AS amount_irr, o.amount_ypoint,
+              o.payment_method, o.status, o.fulfillment_status,
+              o.created_at, o.paid_at, o.fulfilled_at,
+              c.name AS club_name, c.slug AS club_slug
+         FROM public.club_shop_orders o
+         JOIN public.clubs c ON c.id = o.club_id
+        WHERE o.buyer_steam_id = $1::bigint
+        ORDER BY o.created_at DESC
+        LIMIT 100`,
+      [steamId],
     );
   }
 

@@ -99,6 +99,13 @@ export class ClubServersHttpController {
     return this.clubShop.checkout(clubId, user, body || {});
   }
 
+  @Get("clubs/shop/my-purchases")
+  public async myShopPurchases(@Req() request: Request) {
+    const user = request.user as User | undefined;
+    if (!user) throw new ForbiddenException("Authentication required");
+    return this.clubShop.listMyPurchases(user);
+  }
+
   @Get("clubs/:clubId/shop/orders")
   public async shopOrders(
     @Param("clubId") clubId: string,
