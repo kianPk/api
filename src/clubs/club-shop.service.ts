@@ -524,7 +524,7 @@ export class ClubShopService {
         WHERE id = $1::uuid AND club_id = $2::uuid`,
       [productId, clubId],
     );
-    if (!product?.enabled) {
+    if (!product || !this.asBool(product.enabled)) {
       throw new NotFoundException("Product is not for sale");
     }
 
