@@ -495,7 +495,6 @@ select_permissions:
         - losses_wingman
         - matchmaking_cooldown
         - peak_elo
-        - teams
         - tournament_cooldown
         - total_matches
         - wins
@@ -551,7 +550,6 @@ select_permissions:
         - losses_wingman
         - matchmaking_cooldown
         - peak_elo
-        - teams
         - tournament_cooldown
         - total_matches
         - wins
@@ -606,7 +604,6 @@ select_permissions:
         - losses_wingman
         - matchmaking_cooldown
         - peak_elo
-        - teams
         - tournament_cooldown
         - total_matches
         - wins

@@ -123,6 +123,8 @@ insert_permissions:
         - short_name
     comment: ""
 select_permissions:
+  # Table-returning computed fields (matches) are auto-derived from select on
+  # the returning table — do not list them here on this Hasura build.
   - role: guest
     permission:
       columns:
@@ -138,7 +140,6 @@ select_permissions:
         - can_invite
         - can_manage_scrims
         - can_remove
-        - matches
         - role
       filter: {}
       allow_aggregations: true
@@ -158,7 +159,6 @@ select_permissions:
         - can_invite
         - can_manage_scrims
         - can_remove
-        - matches
         - role
       filter: {}
       allow_aggregations: true
@@ -178,7 +178,6 @@ select_permissions:
         - can_invite
         - can_manage_scrims
         - can_remove
-        - matches
         - role
       filter: {}
       allow_aggregations: true
@@ -198,7 +197,6 @@ select_permissions:
         - can_invite
         - can_manage_scrims
         - can_remove
-        - matches
         - role
       filter: {}
       allow_aggregations: true
