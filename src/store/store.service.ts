@@ -1525,7 +1525,7 @@ export class StoreService {
     const payment =
       update?.message?.successful_payment || update?.successful_payment;
     if (payment) {
-      await this.markPaid(
+      const receipt = await this.markPaid(
         String(payment.invoice_payload || ""),
         String(
           payment.telegram_payment_charge_id ||
@@ -1533,6 +1533,27 @@ export class StoreService {
             "",
         ),
       );
+      const chatId =
+        update?.message?.chat?.id ?? update?.successful_payment?.chat?.id;
+      if (chatId && receipt?.fresh) {
+        const toman = Math.round(Number(receipt.amount_irr || 0) / 10);
+        const title = String(receipt.product_title || "YGuard Store").slice(
+          0,
+          80,
+        );
+        await this.sendBaleMessage(
+          chatId,
+          [
+            "✅ پرداخت موفق",
+            `محصول: ${title}`,
+            `مبلغ: ${toman.toLocaleString("en-US")} تومان`,
+            `شماره سفارش: ${receipt.id}`,
+            receipt.chargeId ? `کد پیگیری: ${receipt.chargeId}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        ).catch((): undefined => undefined);
+      }
       return { ok: true };
     }
 
@@ -1543,10 +1564,19 @@ export class StoreService {
     await this.baleApi("sendMessage", { chat_id: chatId, text });
   }
 
-  private async markPaid(payload: string, chargeId: string) {
+  private async markPaid(
+    payload: string,
+    chargeId: string,
+  ): Promise<{
+    fresh: boolean;
+    id: string;
+    amount_irr: number;
+    product_title: string;
+    chargeId: string;
+  } | null> {
     if (!payload.startsWith("store:")) {
       this.logger.warn(`Ignoring non-store payment payload: ${payload}`);
-      return;
+      return null;
     }
 
     const updated = await this.postgres.query<
@@ -1616,13 +1646,20 @@ export class StoreService {
           `Store order already paid or missing payload=${payload}`,
         );
       }
-      return;
+      return null;
     }
 
     await this.fulfillOrderBenefits(order);
     await this.notifyPurchasePaid(order);
 
     this.logger.log(`Store order paid payload=${payload} charge=${chargeId}`);
+    return {
+      fresh: true,
+      id: order.id,
+      amount_irr: Number(order.amount_irr) || 0,
+      product_title: order.product_title,
+      chargeId: chargeId || "",
+    };
   }
 
   private async fulfillOrderBenefits(order: {

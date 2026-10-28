@@ -5,7 +5,7 @@ export const CLUB_LEVEL_MAX = 10;
 export const CLUB_AUTO_LEVEL_MAX = 6;
 export const CLUB_STAFF_LEVEL_MIN = 7;
 
-/** XP needed for auto levels 2–6 (club-server play + challenge completions). */
+/** Site XP needed for auto levels 2–6 (same ledger as website level-up). */
 export const CLUB_XP_THRESHOLDS: Record<number, number> = {
   2: 150,
   3: 400,
@@ -14,7 +14,7 @@ export const CLUB_XP_THRESHOLDS: Record<number, number> = {
   6: 3000,
 };
 
-/** XP awarded when a club challenge is completed, by catalog difficulty. */
+/** Site XP awarded when a club challenge is completed, by catalog difficulty. */
 export const CLUB_CHALLENGE_XP: Record<string, number> = {
   easy: 25,
   medium: 50,

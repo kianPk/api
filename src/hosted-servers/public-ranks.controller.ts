@@ -174,11 +174,13 @@ export class PublicRanksController {
       throw new BadRequestException("events required");
     }
     const players = await this.siteXp.applyMany(body.events);
-    // Club members playing on a club-owned box earn club XP / auto levels.
+    // Club strength tracks site XP; refresh auto levels for club members.
     try {
-      await this.clubs.awardPlayXpFromSiteEvents(serverId, body.events);
+      await this.clubs.refreshMemberLevelsAfterSiteXp(
+        players.map((p) => p.steam_id),
+      );
     } catch {
-      // Site XP already applied; club XP must not fail the plugin batch.
+      // Site XP already applied; club level refresh must not fail the batch.
     }
     return { players };
   }

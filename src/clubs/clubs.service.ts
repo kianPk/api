@@ -28,7 +28,7 @@ import {
   roleFromLevel,
   type ClubPermKey,
 } from "./club-levels";
-import { siteXpDelta, type SiteXpInput } from "../site-xp/site-xp";
+import type { SiteXpInput } from "../site-xp/site-xp";
 
 const OWN_CLUB_TAG = "OwnClub";
 const CLAN_TAG_CACHE_MS = 15_000;
@@ -823,9 +823,11 @@ export class ClubsService {
 
   private async insertMember(clubId: string, steamId: string) {
     try {
+      // Seed member XP from site XP so club strength = Σ members' site XP.
       await this.postgres.query(
-        `INSERT INTO public.club_members (club_id, steam_id, role, level)
-         VALUES ($1::uuid, $2::bigint, 'member', 1)
+        `INSERT INTO public.club_members (club_id, steam_id, role, level, xp)
+         SELECT $1::uuid, $2::bigint, 'member', 1,
+                COALESCE((SELECT xp FROM public.player_site_xp WHERE steam_id = $2::bigint), 0)
          ON CONFLICT DO NOTHING`,
         [clubId, steamId],
       );
@@ -1171,48 +1173,46 @@ export class ClubsService {
   }
 
   /**
-   * When members play on a club-owned public server, mirror positive site-XP
-   * events into club_members.xp and refresh auto level (1–6).
+   * After site XP changes, refresh auto club levels for every club the
+   * players belong to. Member XP itself is mirrored from player_site_xp by
+   * a DB trigger (club strength = Σ members' site XP).
    */
-  public async awardPlayXpFromSiteEvents(
-    serverId: string,
-    events: SiteXpInput[],
-  ) {
-    const clubId = await this.clubIdForServer(serverId);
-    if (!clubId || !Array.isArray(events) || !events.length) return;
+  public async refreshMemberLevelsAfterSiteXp(steamIds: string[]) {
+    const ids = [
+      ...new Set(
+        (steamIds || [])
+          .map((s) => String(s || "").match(/\b(7656119\d{10})\b/)?.[1])
+          .filter((s): s is string => !!s),
+      ),
+    ].slice(0, 64);
+    if (!ids.length) return;
 
-    const deltas = new Map<string, number>();
-    for (const event of events.slice(0, 64)) {
-      const steamId = String(event.steam_id || "").match(
-        /\b(7656119\d{10})\b/,
-      )?.[1];
-      if (!steamId) continue;
-      const delta = siteXpDelta(event);
-      // Only positive play contributions (kills, wins, …) — deaths do not
-      // drain club XP.
-      if (!(delta > 0)) continue;
-      deltas.set(steamId, (deltas.get(steamId) || 0) + delta);
-    }
-    if (!deltas.size) return;
-
-    for (const [steamId, xpGain] of deltas) {
+    const rows = await this.postgres.query<
+      Array<{ club_id: string; steam_id: string }>
+    >(
+      `SELECT club_id::text, steam_id::text
+         FROM public.club_members
+        WHERE steam_id = ANY($1::bigint[])`,
+      [ids],
+    );
+    for (const row of rows) {
       try {
-        if (!(await this.isMember(clubId, steamId))) continue;
-        const updated = await this.postgres.query<Array<{ id: string }>>(
-          `UPDATE public.club_members
-              SET xp = xp + $3
-            WHERE club_id = $1::uuid AND steam_id = $2::bigint
-          RETURNING steam_id::text AS id`,
-          [clubId, steamId, xpGain],
-        );
-        if (!updated.length) continue;
-        await this.recalculateMemberLevel(clubId, steamId);
+        await this.recalculateMemberLevel(row.club_id, row.steam_id);
       } catch (err) {
         this.logger.warn(
-          `club play xp failed club=${clubId} steam=${steamId}: ${String(err)}`,
+          `club level refresh failed club=${row.club_id} steam=${row.steam_id}: ${String(err)}`,
         );
       }
     }
+  }
+
+  /** @deprecated Use refreshMemberLevelsAfterSiteXp — club XP is site XP. */
+  public async awardPlayXpFromSiteEvents(
+    _serverId: string,
+    events: SiteXpInput[],
+  ) {
+    const steamIds = (events || []).map((e) => String(e.steam_id || ""));
+    await this.refreshMemberLevelsAfterSiteXp(steamIds);
   }
 
   public async memberHasPerm(
@@ -1912,13 +1912,16 @@ export class ClubsService {
       const justCompleted = completed && !alreadyDone;
       if (justCompleted) {
         const xpGain = challengeXpForDifficulty(row.difficulty);
+        // Challenges credit the same site XP ledger (not a separate club pool).
         if (xpGain > 0 && (await this.isMember(row.club_id, steamId))) {
           try {
             await this.postgres.query(
-              `UPDATE public.club_members
-                  SET xp = xp + $3
-                WHERE club_id = $1::uuid AND steam_id = $2::bigint`,
-              [row.club_id, steamId, xpGain],
+              `INSERT INTO public.player_site_xp (steam_id, xp, updated_at)
+               VALUES ($1::bigint, $2, now())
+               ON CONFLICT (steam_id) DO UPDATE SET
+                 xp = GREATEST(0, player_site_xp.xp + $2),
+                 updated_at = now()`,
+              [steamId, xpGain],
             );
             await this.recalculateMemberLevel(row.club_id, steamId);
           } catch (err) {
