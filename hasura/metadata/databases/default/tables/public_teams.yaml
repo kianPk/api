@@ -138,6 +138,7 @@ select_permissions:
         - can_invite
         - can_manage_scrims
         - can_remove
+        - matches
         - role
       filter: {}
       allow_aggregations: true
