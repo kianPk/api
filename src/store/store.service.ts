@@ -1502,7 +1502,7 @@ export class StoreService {
           await this.sendBaleMessage(
             chatId,
             "فاکتور ساخته نشد. از فروشگاه دوباره خرید را شروع کن. اگر ادامه داشت به پشتیبانی بگو.",
-          ).catch(() => undefined);
+          ).catch((): undefined => undefined);
           return { ok: false, error: "start_pay_failed" };
         }
       }
