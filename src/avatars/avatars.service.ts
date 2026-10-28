@@ -7,6 +7,7 @@ import {
   Logger,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import sharp from "sharp";
 import { S3Service } from "../s3/s3.service";
 import { HasuraService } from "../hasura/hasura.service";
 import { PostgresService } from "../postgres/postgres.service";
@@ -778,8 +779,30 @@ export class AvatarsService {
     mimetype: string,
   ): Promise<string> {
     await this.assertClubNewsAuthor(clubId, user);
-    const path = this.buildPath("clubs", clubId, mimetype);
-    await this.s3.put(path, buffer);
+    // Telegram-style: keep aspect ratio, cap longest edge, JPEG for feed.
+    let out = buffer;
+    let outType = mimetype;
+    try {
+      out = await sharp(buffer)
+        .rotate()
+        .resize({
+          width: 1280,
+          height: 1280,
+          fit: "inside",
+          withoutEnlargement: true,
+        })
+        .jpeg({ quality: 82, mozjpeg: true })
+        .toBuffer();
+      outType = "image/jpeg";
+    } catch (error) {
+      this.logger.warn(
+        `club news image compress failed club=${clubId}: ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+    }
+    const path = this.buildPath("clubs", clubId, outType);
+    await this.s3.put(path, out);
     this.logger.log(`Uploaded club ${clubId} news image to ${path}`);
     return path;
   }
