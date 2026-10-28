@@ -143,6 +143,66 @@ select_permissions:
       filter: {}
       allow_aggregations: true
     comment: ""
+  - role: user
+    permission:
+      columns:
+        - avatar_url
+        - captain_steam_id
+        - id
+        - is_organization
+        - name
+        - owner_steam_id
+        - short_name
+      computed_fields:
+        - can_change_role
+        - can_invite
+        - can_manage_scrims
+        - can_remove
+        - matches
+        - role
+      filter: {}
+      allow_aggregations: true
+    comment: ""
+  - role: match_organizer
+    permission:
+      columns:
+        - avatar_url
+        - captain_steam_id
+        - id
+        - is_organization
+        - name
+        - owner_steam_id
+        - short_name
+      computed_fields:
+        - can_change_role
+        - can_invite
+        - can_manage_scrims
+        - can_remove
+        - matches
+        - role
+      filter: {}
+      allow_aggregations: true
+    comment: ""
+  - role: tournament_organizer
+    permission:
+      columns:
+        - avatar_url
+        - captain_steam_id
+        - id
+        - is_organization
+        - name
+        - owner_steam_id
+        - short_name
+      computed_fields:
+        - can_change_role
+        - can_invite
+        - can_manage_scrims
+        - can_remove
+        - matches
+        - role
+      filter: {}
+      allow_aggregations: true
+    comment: ""
 update_permissions:
   - role: tournament_organizer
     permission:
