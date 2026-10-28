@@ -77,6 +77,43 @@ export class ClubsController {
   }
 
   @HasuraAction()
+  public async activateClubChallenges(data: {
+    user: User;
+    club_id: string;
+    catalog_ids: string[];
+    ends_at: string;
+    prize_ypoints?: number | null;
+    prize_other?: string | null;
+    prize_scope?: string | null;
+    audience: string;
+    steam_ids?: string[];
+  }) {
+    return this.clubs.activateClubChallenges(String(data.user.steam_id), {
+      club_id: data.club_id,
+      catalog_ids: data.catalog_ids || [],
+      ends_at: data.ends_at,
+      prize_ypoints: data.prize_ypoints,
+      prize_other: data.prize_other,
+      prize_scope: data.prize_scope,
+      audience: data.audience,
+      steam_ids: data.steam_ids,
+    });
+  }
+
+  @HasuraAction()
+  public async notifyClubNewsPosted(data: {
+    user: User;
+    club_id: string;
+    message_id?: string | null;
+  }) {
+    return this.clubs.notifyClubNewsPosted(
+      String(data.user.steam_id),
+      data.club_id,
+      data.message_id,
+    );
+  }
+
+  @HasuraAction()
   public async leaveClub(data: { user: User; club_id: string }) {
     return this.clubs.leaveClub(data.club_id, String(data.user.steam_id));
   }

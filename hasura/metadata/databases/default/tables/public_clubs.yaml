@@ -146,6 +146,7 @@ insert_permissions:
     - bale_url
     - rubika_url
     - soroush_url
+    - website_url
     - description
     - promo_text
     - join_benefits
@@ -168,6 +169,7 @@ insert_permissions:
     - bale_url
     - rubika_url
     - soroush_url
+    - website_url
     - description
     - promo_text
     - join_benefits
@@ -190,6 +192,7 @@ select_permissions:
     - bale_url
     - rubika_url
     - soroush_url
+    - website_url
     - description
     - promo_text
     - join_benefits
@@ -220,6 +223,7 @@ update_permissions:
     - bale_url
     - rubika_url
     - soroush_url
+    - website_url
     - description
     - promo_text
     - join_benefits
@@ -257,6 +261,7 @@ update_permissions:
     - bale_url
     - rubika_url
     - soroush_url
+    - website_url
     - description
     - promo_text
     - join_benefits

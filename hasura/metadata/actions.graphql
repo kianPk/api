@@ -106,6 +106,23 @@ type Mutation {
 }
 
 type Mutation {
+  activateClubChallenges(
+    club_id: uuid!
+    catalog_ids: [String!]!
+    ends_at: String!
+    prize_ypoints: Int
+    prize_other: String
+    prize_scope: String
+    audience: String!
+    steam_ids: [String!]
+  ): ActivateClubChallengesOutput
+}
+
+type Mutation {
+  notifyClubNewsPosted(club_id: uuid!, message_id: String): SuccessOutput
+}
+
+type Mutation {
   grantPlayerTag(steam_id: String!, tag: String!): SuccessOutput
 }
 
@@ -1145,6 +1162,11 @@ type CreateClubOutput {
   success: Boolean!
   id: uuid
   slug: String
+}
+
+type ActivateClubChallengesOutput {
+  success: Boolean!
+  challenge_ids: [String!]
 }
 
 type CreateClubOfficialTeamOutput {

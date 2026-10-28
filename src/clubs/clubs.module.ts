@@ -8,6 +8,7 @@ import { PostgresModule } from "../postgres/postgres.module";
 import { YpointModule } from "../ypoint/ypoint.module";
 import { IrrModule } from "../irr/irr.module";
 import { RconModule } from "../rcon/rcon.module";
+import { NotificationsModule } from "../notifications/notifications.module";
 import { loggerFactory } from "../utilities/LoggerFactory";
 
 @Module({
@@ -16,6 +17,7 @@ import { loggerFactory } from "../utilities/LoggerFactory";
     PostgresModule,
     YpointModule,
     IrrModule,
+    NotificationsModule,
     forwardRef(() => RconModule),
   ],
   controllers: [ClubsController, ClubServersHttpController],

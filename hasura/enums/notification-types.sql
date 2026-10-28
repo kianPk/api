@@ -55,6 +55,9 @@ INSERT INTO e_notification_types ("value", "description") VALUES
     ('SeasonEnded', 'A season has ended'),
     ('UtilityPracticeInvite', 'You were invited to a utility practice session'),
     ('UtilityPracticeReady', 'Your utility practice server is ready'),
-    ('UtilityDriftScanFinished', 'A utility drift scan finished')
+    ('UtilityDriftScanFinished', 'A utility drift scan finished'),
+    ('ClubChallengeActivated', 'A club challenge became available for you'),
+    ('ClubNewsPosted', 'Your club posted news'),
+    ('ClubTournamentCreated', 'Your club opened a tournament')
 ON CONFLICT("value") DO UPDATE
     SET "description" = EXCLUDED."description";

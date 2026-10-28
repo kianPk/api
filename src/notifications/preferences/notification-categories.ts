@@ -79,6 +79,11 @@ export const PUSH_CATEGORIES: Record<string, e_notification_types_enum[]> = {
     "HostedServerFailed" as e_notification_types_enum,
   ],
   news: ["NewsPublished"],
+  clubs: [
+    "ClubChallengeActivated" as e_notification_types_enum,
+    "ClubNewsPosted" as e_notification_types_enum,
+    "ClubTournamentCreated" as e_notification_types_enum,
+  ],
   staff_moderation: ["MatchSupport", "MatchAbandoned", "NameChangeRequest"],
   staff_infrastructure: [
     "GameUpdate",
@@ -109,6 +114,7 @@ export const PUSH_KEYS: PreferenceKey[] = [
   { key: "utility", defaultEnabled: true },
   { key: "account", defaultEnabled: true },
   { key: "news", defaultEnabled: true },
+  { key: "clubs", defaultEnabled: true },
   { key: "staff_moderation", defaultEnabled: true, adminOnly: true },
   // Infrastructure chatter is constant and rarely actionable on a phone.
   { key: "staff_infrastructure", defaultEnabled: false, adminOnly: true },
@@ -135,6 +141,9 @@ export const IN_APP_KEYS: PreferenceKey[] = [
   { key: "StorePurchasePaid", defaultEnabled: true },
   { key: "StorePurchaseCancelled", defaultEnabled: true },
   { key: "NewsPublished", defaultEnabled: true },
+  { key: "ClubChallengeActivated", defaultEnabled: true },
+  { key: "ClubNewsPosted", defaultEnabled: true },
+  { key: "ClubTournamentCreated", defaultEnabled: true },
   { key: "TournamentReminder", defaultEnabled: true },
   { key: "TournamentCheckInOpen", defaultEnabled: true },
   { key: "TournamentCheckInClosing", defaultEnabled: true },

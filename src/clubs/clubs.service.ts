@@ -9,6 +9,7 @@ import { randomBytes } from "crypto";
 import { PostgresService } from "../postgres/postgres.service";
 import { HasuraService } from "../hasura/hasura.service";
 import { YpointService } from "../ypoint/ypoint.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { User } from "../auth/types/User";
 import {
   isServerSectionMode,
@@ -44,6 +45,7 @@ export class ClubsService {
     private readonly logger: Logger,
     private readonly hasura: HasuraService,
     private readonly ypoint: YpointService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   public async createClub(
@@ -2253,5 +2255,237 @@ export class ClubsService {
        VALUES ($1::uuid, $2::bigint, $3, $4::jsonb)`,
       [clubId, actorSteamId, kind, JSON.stringify(payload)],
     );
+  }
+
+  /** Resolve who should hear about a club challenge activation. */
+  private async challengeAudienceSteamIds(
+    clubId: string,
+    audience: string,
+    steamIds: string[],
+  ): Promise<string[]> {
+    if (audience === "players") {
+      return [
+        ...new Set(
+          steamIds
+            .map((s) => String(s || "").match(/\b(7656119\d{10})\b/)?.[1])
+            .filter((s): s is string => !!s),
+        ),
+      ];
+    }
+    if (audience === "club_vip") {
+      const rows = await this.postgres.query<Array<{ steam_id: string }>>(
+        `SELECT steam_id::text
+           FROM public.club_members
+          WHERE club_id = $1::uuid
+            AND (
+              is_vip = true
+              OR (club_vip_until IS NOT NULL AND club_vip_until > now())
+              OR level >= 2
+            )`,
+        [clubId],
+      );
+      return rows.map((r) => r.steam_id);
+    }
+    // club + site (club-scoped activations still go to members)
+    const rows = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT steam_id::text FROM public.club_members WHERE club_id = $1::uuid`,
+      [clubId],
+    );
+    return rows.map((r) => r.steam_id);
+  }
+
+  public async activateClubChallenges(
+    actorSteamId: string,
+    input: {
+      club_id: string;
+      catalog_ids: string[];
+      ends_at: string;
+      prize_ypoints?: number | null;
+      prize_other?: string | null;
+      prize_scope?: string | null;
+      audience: string;
+      steam_ids?: string[];
+    },
+  ) {
+    this.assertUuid(input.club_id);
+    if (!(await this.memberHasPerm(input.club_id, actorSteamId, "manage_challenges"))) {
+      throw new ForbiddenException("Not allowed to manage club challenges");
+    }
+    const catalogIds = [...new Set((input.catalog_ids || []).map(String))].filter(
+      Boolean,
+    );
+    if (!catalogIds.length) {
+      throw new BadRequestException("Pick at least one challenge");
+    }
+    const endsAt = new Date(input.ends_at);
+    if (!Number.isFinite(endsAt.getTime()) || endsAt.getTime() <= Date.now()) {
+      throw new BadRequestException("Challenge end time must be in the future");
+    }
+    const audience = ["site", "club", "club_vip", "players"].includes(
+      String(input.audience || ""),
+    )
+      ? String(input.audience)
+      : "club";
+    const steamIds = Array.isArray(input.steam_ids) ? input.steam_ids : [];
+    if (audience === "players" && !steamIds.length) {
+      throw new BadRequestException("Pick at least one player");
+    }
+    const ypoints =
+      input.prize_ypoints != null && Number(input.prize_ypoints) > 0
+        ? Math.floor(Number(input.prize_ypoints))
+        : null;
+    const other = String(input.prize_other || "").trim() || null;
+    if (!ypoints && !other) {
+      throw new BadRequestException("A prize is required");
+    }
+    const prizeScope =
+      input.prize_scope === "site" || input.prize_scope === "club"
+        ? input.prize_scope
+        : "club";
+
+    const created: string[] = [];
+    for (const catalogId of catalogIds.slice(0, 20)) {
+      const rows = await this.postgres.query<Array<{ id: string }>>(
+        `INSERT INTO public.club_challenges
+           (club_id, catalog_id, ends_at, prize_ypoints, prize_other, prize_scope, audience, active)
+         SELECT $1::uuid, c.id, $2::timestamptz, $3, $4, $5, $6, true
+           FROM public.club_challenge_catalog c
+          WHERE c.id = $7::uuid AND c.enabled = true
+         RETURNING id::text`,
+        [
+          input.club_id,
+          endsAt.toISOString(),
+          ypoints,
+          other,
+          prizeScope,
+          audience,
+          catalogId,
+        ],
+      );
+      const id = rows.at(0)?.id;
+      if (!id) continue;
+      created.push(id);
+      if (audience === "players") {
+        for (const steamId of steamIds) {
+          const sid = String(steamId || "").match(/\b(7656119\d{10})\b/)?.[1];
+          if (!sid) continue;
+          await this.postgres.query(
+            `INSERT INTO public.club_challenge_targets (challenge_id, steam_id)
+             VALUES ($1::uuid, $2::bigint)
+             ON CONFLICT DO NOTHING`,
+            [id, sid],
+          );
+        }
+      }
+    }
+    if (!created.length) {
+      throw new BadRequestException("Could not activate challenges");
+    }
+
+    const club = await this.postgres.query<
+      Array<{ name: string; slug: string }>
+    >(
+      `SELECT name, slug FROM public.clubs WHERE id = $1::uuid`,
+      [input.club_id],
+    );
+    const clubName = club.at(0)?.name || "Club";
+    const clubSlug = club.at(0)?.slug || input.club_id;
+    const recipients = (
+      await this.challengeAudienceSteamIds(input.club_id, audience, steamIds)
+    ).filter((sid) => sid !== String(actorSteamId));
+
+    if (recipients.length) {
+      try {
+        const countLabel =
+          created.length === 1
+            ? "a new challenge"
+            : `${created.length} new challenges`;
+        await this.notifications.notifyPlayers("ClubChallengeActivated" as any, {
+          title: `${clubName} challenge`,
+          message: `<a href="/clubs/${clubSlug}"><b>${NotificationsService.escapeHtml(
+            clubName,
+          )}</b></a> activated ${countLabel}. Open the club Challenges tab.`,
+          role: "user" as any,
+          entity_id: input.club_id,
+          steamIds: recipients,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `club challenge notify failed club=${input.club_id}: ${String(err)}`,
+        );
+      }
+    }
+
+    return { success: true, challenge_ids: created };
+  }
+
+  public async notifyClubNewsPosted(
+    actorSteamId: string,
+    clubId: string,
+    messageId?: string | null,
+  ) {
+    this.assertUuid(clubId);
+    if (!(await this.memberHasPerm(clubId, actorSteamId, "post_news"))) {
+      throw new ForbiddenException("Not allowed to post club news");
+    }
+    const club = await this.postgres.query<
+      Array<{ name: string; slug: string }>
+    >(`SELECT name, slug FROM public.clubs WHERE id = $1::uuid`, [clubId]);
+    const clubName = club.at(0)?.name || "Club";
+    const clubSlug = club.at(0)?.slug || clubId;
+    const members = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT steam_id::text FROM public.club_members
+        WHERE club_id = $1::uuid AND steam_id <> $2::bigint`,
+      [clubId, actorSteamId],
+    );
+    const steamIds = members.map((m) => m.steam_id);
+    if (!steamIds.length) return { success: true, notified: 0 };
+    const notified = await this.notifications.notifyPlayers(
+      "ClubNewsPosted" as any,
+      {
+        title: `${clubName} news`,
+        message: `<a href="/clubs/${clubSlug}"><b>${NotificationsService.escapeHtml(
+          clubName,
+        )}</b></a> posted in News.`,
+        role: "user" as any,
+        entity_id: clubId,
+        steamIds,
+        data: messageId ? { message_id: messageId } : undefined,
+      },
+    );
+    return { success: true, notified };
+  }
+
+  public async notifyClubTournamentOpen(
+    clubId: string,
+    tournamentId: string,
+    tournamentName: string,
+  ) {
+    this.assertUuid(clubId);
+    this.assertUuid(tournamentId);
+    const club = await this.postgres.query<
+      Array<{ name: string; slug: string }>
+    >(`SELECT name, slug FROM public.clubs WHERE id = $1::uuid`, [clubId]);
+    const clubName = club.at(0)?.name || "Club";
+    const members = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT steam_id::text FROM public.club_members WHERE club_id = $1::uuid`,
+      [clubId],
+    );
+    const steamIds = members.map((m) => m.steam_id);
+    if (!steamIds.length) return;
+    const name = NotificationsService.escapeHtml(tournamentName || "Tournament");
+    try {
+      await this.notifications.notifyPlayers("ClubTournamentCreated" as any, {
+        title: `${clubName} tournament`,
+        message: `<a href="/tournaments/${tournamentId}"><b>${name}</b></a> is open for signups.`,
+        role: "user" as any,
+        entity_id: tournamentId,
+        steamIds,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `club tournament notify failed club=${clubId} tournament=${tournamentId}: ${String(err)}`,
+      );
+    }
   }
 }

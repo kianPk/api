@@ -18,6 +18,10 @@ const PATH_BY_TYPE: Record<string, (entityId: string) => string> = {
   TournamentCreated: (id) => `/tournaments/${id}`,
   TournamentReminder: (id) => `/tournaments/${id.split(":")[0]}`,
   NewsPublished: () => `/news`,
+  // entity_id is the club id; club pages also accept uuid in the slug route.
+  ClubChallengeActivated: (id) => `/clubs/${id}`,
+  ClubNewsPosted: (id) => `/clubs/${id}`,
+  ClubTournamentCreated: (id) => `/tournaments/${id}`,
   ScrimRequestReceived: () => `/scrims`,
   ScrimRequestCountered: () => `/scrims`,
   ScrimRequestAccepted: () => `/scrims`,

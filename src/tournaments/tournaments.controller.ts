@@ -88,6 +88,38 @@ export class TournamentsController {
         entity_id: tournamentId,
         data: { image },
       });
+
+      // Club tournaments also ping club members so the Clubs sidebar lights up.
+      const clubRows = await this.postgres.query<
+        Array<{ club_id: string; club_name: string }>
+      >(
+        `SELECT club_id::text, c.name AS club_name
+           FROM public.tournaments t
+           JOIN public.clubs c ON c.id = t.club_id
+          WHERE t.id = $1::uuid AND t.club_id IS NOT NULL
+          LIMIT 1`,
+        [tournamentId],
+      );
+      const club = clubRows.at(0);
+      if (club?.club_id) {
+        const members = await this.postgres.query<Array<{ steam_id: string }>>(
+          `SELECT steam_id::text FROM public.club_members WHERE club_id = $1::uuid`,
+          [club.club_id],
+        );
+        const steamIds = members.map((m) => m.steam_id);
+        if (steamIds.length) {
+          await this.notifications.notifyPlayers(
+            "ClubTournamentCreated" as any,
+            {
+              title: `${club.club_name} tournament`,
+              message: `<a href="/tournaments/${tournamentId}"><b>${name}</b></a> is open for signups.`,
+              role: "user" as any,
+              entity_id: tournamentId,
+              steamIds,
+            },
+          );
+        }
+      }
     } catch (error) {
       this.logger.warn(
         `[${tournamentId}] unable to announce open registration`,
