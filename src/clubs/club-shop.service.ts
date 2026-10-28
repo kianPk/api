@@ -459,7 +459,7 @@ export class ClubShopService {
     payWith: "bale" | "ypoint",
   ) {
     if (payWith === "ypoint") {
-      if (!product.ypoint_enabled) {
+      if (!this.asBool(product.ypoint_enabled)) {
         throw new BadRequestException("YPoint is disabled for this product");
       }
       const yp =

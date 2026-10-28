@@ -1382,40 +1382,50 @@ export class StoreService {
     }
 
     const cart = this.normalizeCartItems(order.cart_items);
+    const orderedAmount = Number(order.amount_irr) || 0;
     let lines: Array<{ label: string; amount: number }>;
     let amountIrr: number;
     let title: string;
     let description: string;
 
     if (cart.length > 0) {
-      // Frozen cart snapshot from checkout — don't rewrite prices here.
-      lines = cart.map((i) => ({
-        label: i.title.slice(0, 32),
-        amount: Number(i.price_irr),
-      }));
-      amountIrr = lines.reduce((s, l) => s + l.amount, 0);
-      if (amountIrr !== Number(order.amount_irr)) {
-        await this.postgres.query(
-          `UPDATE store_orders SET amount_irr = $2 WHERE id = $1 AND status = 'pending'`,
-          [order.id, amountIrr],
-        );
-      }
+      // Checkout already froze the bill on store_orders.amount_irr. Prefer that
+      // over re-summing cart lines (club-shop carrier products are price 0 and
+      // a missing/partial cart used to send the wrong Bale total).
+      const cartSum = cart.reduce((s, i) => s + Number(i.price_irr || 0), 0);
+      amountIrr = orderedAmount > 0 ? orderedAmount : cartSum;
       title =
         cart.length === 1
           ? cart[0].title
           : `YGuard Store (${cart.length} items)`;
+      lines =
+        cart.length === 1
+          ? [{ label: cart[0].title.slice(0, 32), amount: amountIrr }]
+          : cart.map((i) => ({
+              label: i.title.slice(0, 32),
+              amount: Number(i.price_irr) || 0,
+            }));
+      if (cart.length > 1 && orderedAmount > 0) {
+        lines = [{ label: title.slice(0, 32), amount: amountIrr }];
+      }
       const toman = Math.round(amountIrr / 10);
       description = `${cart
         .map((i) => i.title)
         .join(" · ")
         .slice(0, 180)} · ${toman.toLocaleString("en-US")} تومان`.slice(0, 255);
     } else {
-      // Legacy single-product orders: sync live price.
-      if (!order.active) {
+      // Legacy single-product orders: keep checkout amount if set. Never
+      // overwrite a paid-pending bill with the linked product's live price when
+      // that product is an internal carrier (club-shop slug, price 0).
+      if (!order.active && !(orderedAmount > 0)) {
         throw new BadRequestException("Product unavailable");
       }
-      amountIrr = Number(order.price_irr);
-      if (amountIrr !== Number(order.amount_irr)) {
+      amountIrr =
+        orderedAmount > 0 ? orderedAmount : Number(order.price_irr) || 0;
+      if (!(amountIrr > 0)) {
+        throw new BadRequestException("Order has no payable amount");
+      }
+      if (orderedAmount <= 0) {
         await this.postgres.query(
           `UPDATE store_orders SET amount_irr = $2 WHERE id = $1 AND status = 'pending'`,
           [order.id, amountIrr],
