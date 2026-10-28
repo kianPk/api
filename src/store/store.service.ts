@@ -1394,6 +1394,9 @@ export class StoreService {
       // a missing/partial cart used to send the wrong Bale total).
       const cartSum = cart.reduce((s, i) => s + Number(i.price_irr || 0), 0);
       amountIrr = orderedAmount > 0 ? orderedAmount : cartSum;
+      if (!(amountIrr > 0)) {
+        throw new BadRequestException("Order has no payable amount");
+      }
       title =
         cart.length === 1
           ? cart[0].title
@@ -1487,14 +1490,35 @@ export class StoreService {
       const chatId = update.message.chat?.id;
       const match = text.match(/^\/start(?:@\w+)?\s+pay_([a-f0-9]{32})$/i);
       if (chatId && match) {
-        await this.handleStartPay(chatId, match[1]);
-        return { ok: true };
+        try {
+          await this.handleStartPay(chatId, match[1]);
+          return { ok: true };
+        } catch (error) {
+          this.logger.error(
+            `Bale start pay failed order=${match[1]}`,
+            error instanceof Error ? error.stack : error,
+          );
+          // Reply in-chat so Bale does not show «بازو پاسخگو نبود».
+          await this.sendBaleMessage(
+            chatId,
+            "فاکتور ساخته نشد. از فروشگاه دوباره خرید را شروع کن. اگر ادامه داشت به پشتیبانی بگو.",
+          ).catch(() => undefined);
+          return { ok: false, error: "start_pay_failed" };
+        }
       }
     }
 
     if (update?.pre_checkout_query) {
       const q = update.pre_checkout_query;
-      await this.answerPreCheckoutQuery(q.id, true);
+      try {
+        await this.answerPreCheckoutQuery(q.id, true);
+      } catch (error) {
+        this.logger.error(
+          "Bale pre_checkout failed",
+          error instanceof Error ? error.stack : error,
+        );
+        return { ok: false, error: "pre_checkout_failed" };
+      }
       return { ok: true };
     }
 
@@ -1513,6 +1537,10 @@ export class StoreService {
     }
 
     return { ok: true, ignored: true };
+  }
+
+  private async sendBaleMessage(chatId: number | string, text: string) {
+    await this.baleApi("sendMessage", { chat_id: chatId, text });
   }
 
   private async markPaid(payload: string, chargeId: string) {

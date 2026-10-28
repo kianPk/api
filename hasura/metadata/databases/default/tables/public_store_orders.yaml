@@ -29,6 +29,8 @@ select_permissions:
         - payment_method
         - amount_ypoint
         - product_title
+        - cart_items
+        - terms_accepted_at
       filter: {}
       allow_aggregations: true
   - role: user

@@ -144,11 +144,16 @@ export class StoreController {
   @Post("bale-webhook")
   public async baleWebhook(
     @Headers("x-bale-webhook-secret") secretHeader: string | undefined,
+    @Headers("x-telegram-bot-api-secret-token") telegramSecret: string | undefined,
     @Body() body: any,
   ) {
+    // Bale's own update delivery does not send our custom header. Only reject
+    // when a secret header IS present but wrong (internal fulfill callers).
+    // Requiring the secret on every request made Bale show «بازو پاسخگو نبود».
     const webhookSecret = await this.store.getWebhookSecret();
-    if (webhookSecret) {
-      const ok = timingSafeStringEqual(secretHeader || "", webhookSecret);
+    const provided = secretHeader || telegramSecret || "";
+    if (webhookSecret && provided) {
+      const ok = timingSafeStringEqual(provided, webhookSecret);
       if (!ok) {
         throw new UnauthorizedException("Invalid webhook secret");
       }
