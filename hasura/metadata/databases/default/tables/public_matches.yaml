@@ -150,6 +150,13 @@ array_relationships:
         table:
           name: match_region_veto_picks
           schema: public
+  - name: event_links
+    using:
+      foreign_key_constraint_on:
+        column: match_id
+        table:
+          name: event_match_links
+          schema: public
   - name: streams
     using:
       foreign_key_constraint_on:
@@ -164,6 +171,7 @@ array_relationships:
         table:
           name: tournament_brackets
           schema: public
+
 computed_fields:
   - name: can_assign_server
     definition:
