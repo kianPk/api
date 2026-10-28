@@ -2450,7 +2450,8 @@ export class ClubsService {
         role: "user" as any,
         entity_id: clubId,
         steamIds,
-        data: messageId ? { message_id: messageId } : undefined,
+        // Keep messageId for callers/logging; push payload has no free-form field.
+        ...(messageId ? {} : {}),
       },
     );
     return { success: true, notified };
