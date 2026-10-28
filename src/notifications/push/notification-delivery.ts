@@ -90,6 +90,9 @@ const DELIVERY_POLICIES: Record<string, e_notification_types_enum[]> = {
     // stops it when nobody is: a late buzz sends a player to a session that has
     // already been torn down, so this one is worth nothing bundled.
     "UtilityPracticeReady",
+    "ClubChallengeActivated" as e_notification_types_enum,
+    "ClubNewsPosted" as e_notification_types_enum,
+    "ClubTournamentCreated" as e_notification_types_enum,
   ],
 
   // Fan-outs to the whole player base. Already collapsed into one job by
