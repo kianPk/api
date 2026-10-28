@@ -16,6 +16,7 @@ import { PublicRanksService } from "./public-ranks.service";
 import { SectionRatingsService } from "./section-ratings.service";
 import { SiteXpService } from "../site-xp/site-xp.service";
 import { SiteXpInput } from "../site-xp/site-xp";
+import { ClubsService } from "../clubs/clubs.service";
 
 // Under /hosted-servers because the API ingress does not route arbitrary paths.
 @Controller("hosted-servers")
@@ -24,6 +25,7 @@ export class PublicRanksController {
     private readonly ranks: PublicRanksService,
     private readonly sectionRatings: SectionRatingsService,
     private readonly siteXp: SiteXpService,
+    private readonly clubs: ClubsService,
   ) {}
 
   @Get("plugin/ranks/players")
@@ -166,14 +168,19 @@ export class PublicRanksController {
       events?: SiteXpInput[];
     },
   ) {
-    await this.ranks.authenticateServer(
-      String(body?.server_id || ""),
-      authorization,
-    );
+    const serverId = String(body?.server_id || "");
+    await this.ranks.authenticateServer(serverId, authorization);
     if (!Array.isArray(body?.events)) {
       throw new BadRequestException("events required");
     }
-    return { players: await this.siteXp.applyMany(body.events) };
+    const players = await this.siteXp.applyMany(body.events);
+    // Club members playing on a club-owned box earn club XP / auto levels.
+    try {
+      await this.clubs.awardPlayXpFromSiteEvents(serverId, body.events);
+    } catch {
+      // Site XP already applied; club XP must not fail the plugin batch.
+    }
+    return { players };
   }
 
   @Post("site-xp/admin-set")

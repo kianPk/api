@@ -5,7 +5,7 @@ export const CLUB_LEVEL_MAX = 10;
 export const CLUB_AUTO_LEVEL_MAX = 6;
 export const CLUB_STAFF_LEVEL_MIN = 7;
 
-/** XP needed for auto levels 2–6 (challenge completions). */
+/** XP needed for auto levels 2–6 (club-server play + challenge completions). */
 export const CLUB_XP_THRESHOLDS: Record<number, number> = {
   2: 150,
   3: 400,

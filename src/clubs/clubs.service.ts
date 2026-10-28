@@ -28,6 +28,7 @@ import {
   roleFromLevel,
   type ClubPermKey,
 } from "./club-levels";
+import { siteXpDelta, type SiteXpInput } from "../site-xp/site-xp";
 
 const OWN_CLUB_TAG = "OwnClub";
 const CLAN_TAG_CACHE_MS = 15_000;
@@ -1167,6 +1168,51 @@ export class ClubsService {
     const member = await this.isMember(clubId, steamId);
     if (!member) return;
     await this.recalculateMemberLevel(clubId, steamId);
+  }
+
+  /**
+   * When members play on a club-owned public server, mirror positive site-XP
+   * events into club_members.xp and refresh auto level (1–6).
+   */
+  public async awardPlayXpFromSiteEvents(
+    serverId: string,
+    events: SiteXpInput[],
+  ) {
+    const clubId = await this.clubIdForServer(serverId);
+    if (!clubId || !Array.isArray(events) || !events.length) return;
+
+    const deltas = new Map<string, number>();
+    for (const event of events.slice(0, 64)) {
+      const steamId = String(event.steam_id || "").match(
+        /\b(7656119\d{10})\b/,
+      )?.[1];
+      if (!steamId) continue;
+      const delta = siteXpDelta(event);
+      // Only positive play contributions (kills, wins, …) — deaths do not
+      // drain club XP.
+      if (!(delta > 0)) continue;
+      deltas.set(steamId, (deltas.get(steamId) || 0) + delta);
+    }
+    if (!deltas.size) return;
+
+    for (const [steamId, xpGain] of deltas) {
+      try {
+        if (!(await this.isMember(clubId, steamId))) continue;
+        const updated = await this.postgres.query<Array<{ id: string }>>(
+          `UPDATE public.club_members
+              SET xp = xp + $3
+            WHERE club_id = $1::uuid AND steam_id = $2::bigint
+          RETURNING steam_id::text AS id`,
+          [clubId, steamId, xpGain],
+        );
+        if (!updated.length) continue;
+        await this.recalculateMemberLevel(clubId, steamId);
+      } catch (err) {
+        this.logger.warn(
+          `club play xp failed club=${clubId} steam=${steamId}: ${String(err)}`,
+        );
+      }
+    }
   }
 
   public async memberHasPerm(

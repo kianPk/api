@@ -21,6 +21,7 @@ import { SectionRatingsService } from "./section-ratings.service";
 import { PublicServerDetailsService } from "./public-server-details.service";
 import { PublicServerDetailsController } from "./public-server-details.controller";
 import { SiteXpModule } from "../site-xp/site-xp.module";
+import { ClubsModule } from "../clubs/clubs.module";
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { SiteXpModule } from "../site-xp/site-xp.module";
     NotificationsModule,
     DedicatedServersModule,
     SiteXpModule,
+    ClubsModule,
     forwardRef(() => StoreModule),
     BullModule.registerQueue({
       name: HostedServerQueues.Lifecycle,
