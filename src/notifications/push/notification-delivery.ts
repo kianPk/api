@@ -8,9 +8,17 @@ export type DeliveryPolicy = {
   // 0 disables windowing entirely -- one push per row, as before.
   bundleSeconds: number;
   // Drop the push if the bell row has been read or dismissed by the time it is
-  // sent. For chat this also means "the recipient's read cursor for the thread
-  // has moved past this message".
+  // sent. Chat has no row; for it this means "the recipient's read cursor for
+  // the thread has moved past this message".
   requireUnseen: boolean;
+  // How long the push service may hold the message for an offline device
+  // before discarding it. Unset keeps web-push's four-week default.
+  ttlSeconds?: number;
+  urgency?: "very-low" | "low" | "normal" | "high";
+  // Asks the service worker to ring rather than notify. What ringing means is
+  // the worker's to decide (sw-push.js).
+  urgent?: boolean;
+  ignoreQuietHours?: boolean;
 };
 
 // Notifications differ in how much a delayed or dropped buzz costs, and that
