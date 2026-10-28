@@ -904,18 +904,19 @@ export class ClubShopService {
       `SELECT o.id::text, o.kind, o.product_title, o.buyer_steam_id::text,
               o.duration, o.server_id::text, o.amount_irr::bigint AS amount_irr,
               o.amount_ypoint, o.payment_method, o.status, o.fulfillment_status,
+              o.store_order_id::text AS store_order_id,
               o.created_at, o.paid_at, o.fulfilled_at,
               p.name AS buyer_name, p.avatar_url AS buyer_avatar_url
          FROM public.club_shop_orders o
          LEFT JOIN public.players p ON p.steam_id = o.buyer_steam_id
         WHERE o.club_id = $1::uuid
-        ORDER BY o.created_at DESC
+        ORDER BY COALESCE(o.paid_at, o.created_at) DESC
         LIMIT 100`,
       [clubId],
     );
   }
 
-  /** Buyer's own club-shop purchases across all clubs. */
+  /** Buyer's own paid club-shop purchases across all clubs. */
   public async listMyPurchases(user: User) {
     const steamId = String(user.steam_id);
     return this.postgres.query(
@@ -923,12 +924,15 @@ export class ClubShopService {
               o.duration, o.server_id::text,
               o.amount_irr::bigint AS amount_irr, o.amount_ypoint,
               o.payment_method, o.status, o.fulfillment_status,
+              o.store_order_id::text AS store_order_id,
+              o.buyer_steam_id::text AS buyer_steam_id,
               o.created_at, o.paid_at, o.fulfilled_at,
               c.name AS club_name, c.slug AS club_slug
          FROM public.club_shop_orders o
          JOIN public.clubs c ON c.id = o.club_id
         WHERE o.buyer_steam_id = $1::bigint
-        ORDER BY o.created_at DESC
+          AND o.status = 'paid'
+        ORDER BY COALESCE(o.paid_at, o.created_at) DESC
         LIMIT 100`,
       [steamId],
     );
