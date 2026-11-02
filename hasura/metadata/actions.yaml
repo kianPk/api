@@ -936,6 +936,14 @@ actions:
     permissions:
       - role: administrator
     comment: Queue FACEIT rank backfill for recently active players
+  - name: syncFaceitSiteLevels
+    definition:
+      kind: synchronous
+      handler: '{{HASURA_GRAPHQL_ACTIONS_HOOK}}'
+      forward_client_headers: true
+    permissions:
+      - role: administrator
+    comment: Raise site XP so it is at least each player's stored FACEIT skill level
   - name: refreshLiveHud
     definition:
       kind: synchronous

@@ -18,12 +18,14 @@ import { FaceitService } from "./faceit.service";
 import { FaceitMatchImportService } from "./faceit-match-import.service";
 import { FaceitQueues } from "./enums/FaceitQueues";
 import { RefreshFaceitRanks } from "./jobs/RefreshFaceitRanks";
+import { SiteXpService } from "../site-xp/site-xp.service";
 
 @Controller("faceit")
 export class FaceitController {
   constructor(
     private readonly faceitService: FaceitService,
     private readonly faceitImport: FaceitMatchImportService,
+    private readonly siteXp: SiteXpService,
     private readonly logger: Logger,
     @InjectQueue(FaceitQueues.RefreshFaceitRanks)
     private readonly ranksQueue: Queue,
@@ -104,6 +106,28 @@ export class FaceitController {
     );
     this.logger.log(`faceit ranks refresh queued limit=${limit}`);
     return { success: true, limit };
+  }
+
+  /**
+   * Admin: raise site levels from already-stored FACEIT skill levels
+   * (no FACEIT API). Anyone with Faceit > site gets bumped to Faceit.
+   */
+  @HasuraAction()
+  public async syncFaceitSiteLevels(data: {
+    user?: User;
+  }): Promise<{ success: boolean; checked: number; updated: number }> {
+    if (!data.user) {
+      throw new ForbiddenException("authentication required");
+    }
+    if (data.user.role !== "administrator") {
+      throw new ForbiddenException("administrator access required");
+    }
+
+    const result = await this.siteXp.syncFromFaceitSkillLevels();
+    this.logger.log(
+      `faceit→site level sync checked=${result.checked} updated=${result.updated}`,
+    );
+    return { success: true, ...result };
   }
 
   /** Kept for in-cluster / future ingress; browser should use syncFaceitRanks. */

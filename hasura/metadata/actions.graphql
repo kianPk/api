@@ -642,6 +642,10 @@ type Mutation {
 }
 
 type Mutation {
+  syncFaceitSiteLevels: FaceitSyncSiteLevelsOutput
+}
+
+type Mutation {
   refreshLiveHud(
     match_id: uuid!
   ): SuccessOutput
@@ -1085,6 +1089,12 @@ type FaceitTestOutput {
 type FaceitSyncRanksOutput {
   success: Boolean!
   limit: Int!
+}
+
+type FaceitSyncSiteLevelsOutput {
+  success: Boolean!
+  checked: Int!
+  updated: Int!
 }
 
 type CreateClipRenderOutput {
