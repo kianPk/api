@@ -1747,6 +1747,13 @@ export class HostedServersService {
       set.connect_password = password || null;
     }
     if (input.type !== undefined) {
+      // Section fleet (Duels/DM/…) owns its mode; do not let the host panel
+      // retarget Valve type underneath the section plugins.
+      if (hosted.section_mode) {
+        throw new BadRequestException(
+          "Section servers cannot change game mode from this panel",
+        );
+      }
       if (!HostedServersService.isHostedType(input.type)) {
         throw new BadRequestException("Unsupported server mode");
       }
@@ -1782,6 +1789,11 @@ export class HostedServersService {
       parachute?: boolean;
     },
   ) {
+    if (hosted.section_mode) {
+      throw new BadRequestException(
+        "Section servers use fixed gameplay from their mode plugins",
+      );
+    }
     const set: string[] = [];
     const params: Array<string | boolean> = [hosted.id];
     if (typeof input.friendly_fire === "boolean") {

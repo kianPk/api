@@ -114,7 +114,7 @@ export class SiteXpService {
     return out;
   }
 
-  // FACEIT level 10 (and similar) should land at least at this site level
+  // FACEIT skill (1–10) should land the player at least at that site level
   // without pulling a higher site level back down.
   public async ensureMinLevel(
     steamId: string,

@@ -353,10 +353,12 @@ export class FaceitService {
       },
     });
 
-    // FACEIT 10 players start (or climb) to site level 10 when their rank syncs.
-    if (Number(data.faceit_skill_level) === 10) {
+    // On first sync (and later climbs), mirror FACEIT skill onto site level.
+    // ensureMinLevel never lowers an already-higher site level.
+    const faceitLevel = Math.round(Number(data.faceit_skill_level));
+    if (Number.isFinite(faceitLevel) && faceitLevel >= 1 && faceitLevel <= 10) {
       try {
-        await this.siteXp.ensureMinLevel(steamId, 10);
+        await this.siteXp.ensureMinLevel(steamId, faceitLevel);
       } catch (err) {
         this.logger.warn(
           `faceit site level bump failed for ${steamId}: ${String(err)}`,
