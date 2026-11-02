@@ -192,6 +192,10 @@ export class AvatarsService {
     });
   }
 
+  async syncFaceitSiteLevels(): Promise<{ checked: number; updated: number }> {
+    return this.siteXp.syncFromFaceitSkillLevels();
+  }
+
   /**
    * Pull latest Steam avatarfull (and profile URL) for players and overwrite
    * players.avatar_url. Custom / roster uploads are left alone.
