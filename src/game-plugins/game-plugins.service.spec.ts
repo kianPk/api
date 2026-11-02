@@ -123,6 +123,7 @@ describe("GamePluginsService update notices", () => {
         getPluginRuntime: jest.fn(async (): Promise<string> => "swiftlys2"),
       } as any,
       {} as any,
+      { pluginCacheUrl: jest.fn(() => null) } as any,
       queue as any,
     );
 
@@ -422,6 +423,7 @@ describe("GamePluginsService.setAutoUpdate", () => {
         getPluginRuntime: jest.fn(async (): Promise<string> => "swiftlys2"),
       } as any,
       {} as any,
+      { pluginCacheUrl: jest.fn(() => null) } as any,
       { add: jest.fn(), getJob: jest.fn() } as any,
     );
   });

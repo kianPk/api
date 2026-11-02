@@ -16,6 +16,7 @@ import { SystemSettingName } from "../system/enums/SystemSettingName";
 import { RegistryIndex, RegistryPlugin } from "./types/Registry";
 import { GamePluginQueues } from "./enums/GamePluginQueues";
 import { NotifyGamePluginUpdate } from "./jobs/NotifyGamePluginUpdate";
+import { DomesticKitService } from "../game-server-node/domestic-kit.service";
 
 @Injectable()
 export class GamePluginsService {
@@ -38,6 +39,7 @@ export class GamePluginsService {
     private readonly postgres: PostgresService,
     private readonly pluginRuntime: PluginRuntimeService,
     private readonly cache: CacheService,
+    private readonly domesticKit: DomesticKitService,
     @InjectQueue(GamePluginQueues.Registry)
     private readonly registryQueue: Queue,
   ) {}
@@ -664,10 +666,14 @@ export class GamePluginsService {
           row.version ?? undefined,
         );
 
+        // Prefer panel-hosted kit cache so nodes never hit GitHub when
+        // international internet is down (as long as prepare kit ran earlier).
+        const cachedUrl = this.domesticKit.pluginCacheUrl(resolved.sha256);
+
         plugins.push({
           slug: row.plugin_slug,
           version: resolved.version,
-          url: resolved.url,
+          url: cachedUrl || resolved.url,
           sha256: resolved.sha256,
           layout: resolved.layout,
           installPath: resolved.install_path,

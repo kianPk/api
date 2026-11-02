@@ -17,6 +17,7 @@ import { GamePluginsController } from "./game-plugins.controller";
 import { SyncGamePluginRegistry } from "./jobs/SyncGamePluginRegistry";
 import { CheckGamePluginUpdates } from "./jobs/CheckGamePluginUpdates";
 import { NotifyGamePluginUpdate } from "./jobs/NotifyGamePluginUpdate";
+import { DomesticKitModule } from "../game-server-node/domestic-kit.module";
 
 @Module({
   providers: [
@@ -35,6 +36,7 @@ import { NotifyGamePluginUpdate } from "./jobs/NotifyGamePluginUpdate";
     PostgresModule,
     NotificationsModule,
     PluginRuntimeModule,
+    DomesticKitModule,
     BullModule.registerQueue(
       { name: GamePluginQueues.Registry },
     ),

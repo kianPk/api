@@ -33,6 +33,7 @@ import { PluginRuntimeModule } from "src/plugin-runtime/plugin-runtime.module";
 import { GamePluginsModule } from "src/game-plugins/game-plugins.module";
 import { BakeShaders } from "./jobs/BakeShaders";
 import { ValidateGamedata } from "./jobs/ValidateGamedata";
+import { DomesticKitModule } from "./domestic-kit.module";
 
 @Module({
   providers: [
@@ -59,6 +60,7 @@ import { ValidateGamedata } from "./jobs/ValidateGamedata";
     GameStreamerModule,
     PluginRuntimeModule,
     GamePluginsModule,
+    DomesticKitModule,
     BullModule.registerQueue(
       {
         name: GameServerQueues.GameUpdate,

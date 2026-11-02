@@ -609,6 +609,17 @@ describe("MatchAssistantService", () => {
       expect(
         MatchAssistantService.imagePullPolicyFor("registry:5000/game-server"),
       ).toBe("Always");
+
+      const prev = process.env.AIRGAP_GAME_NODES;
+      process.env.AIRGAP_GAME_NODES = "true";
+      expect(
+        MatchAssistantService.imagePullPolicyFor("ghcr.io/5stackgg/game-server:latest"),
+      ).toBe("IfNotPresent");
+      if (prev === undefined) {
+        delete process.env.AIRGAP_GAME_NODES;
+      } else {
+        process.env.AIRGAP_GAME_NODES = prev;
+      }
     });
   });
 

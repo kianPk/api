@@ -1,4 +1,11 @@
-import { Controller, Get, Logger, Req, Res } from "@nestjs/common";
+import {
+  Controller,
+  Get,
+  Logger,
+  NotFoundException,
+  Req,
+  Res,
+} from "@nestjs/common";
 import { HasuraAction, HasuraEvent } from "../hasura/hasura.controller";
 import { GameServerNodeService } from "./game-server-node.service";
 import { TailscaleService } from "../tailscale/tailscale.service";
@@ -30,6 +37,8 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { DISCORD_COLORS } from "../notifications/utilities/constants";
 import { GameStreamerService } from "../matches/game-streamer/game-streamer.service";
 import { GamePluginsService } from "../game-plugins/game-plugins.service";
+import { DomesticKitService } from "./domestic-kit.service";
+import { randomBytes } from "crypto";
 
 @Controller("game-server-node")
 export class GameServerNodeController {
@@ -52,12 +61,79 @@ export class GameServerNodeController {
     @InjectQueue(GameServerQueues.NodeOffline)
     private readonly nodeOfflineQueue: Queue,
     protected readonly gamePlugins: GamePluginsService,
+    protected readonly domesticKit: DomesticKitService,
     @InjectQueue(GameServerQueues.BakeShaders)
     private readonly bakeShadersQueue: Queue,
     @InjectQueue(GameServerQueues.ValidateGamedata)
     private readonly validateGamedataQueue: Queue,
   ) {
     this.appConfig = this.config.get<AppConfig>("app");
+  }
+
+  @Get("/domestic/status")
+  public domesticStatus() {
+    return this.domesticKit.status();
+  }
+
+  @Get("/domestic/k3s/install.sh")
+  public domesticK3sInstall(@Res() response: Response) {
+    const stream = this.domesticKit.openKitFile("k3s", "install.sh");
+    if (!stream) {
+      throw new NotFoundException("domestic kit missing k3s/install.sh");
+    }
+    response.setHeader("Content-Type", "text/x-shellscript");
+    stream.pipe(response);
+  }
+
+  @Get("/domestic/k3s/bin")
+  public domesticK3sBin(@Res() response: Response) {
+    const stream = this.domesticKit.openKitFile("bin", "k3s");
+    if (!stream) {
+      throw new NotFoundException("domestic kit missing bin/k3s");
+    }
+    response.setHeader("Content-Type", "application/octet-stream");
+    stream.pipe(response);
+  }
+
+  @Get("/domestic/images/:name")
+  public domesticImage(
+    @Req() request: Request,
+    @Res() response: Response,
+  ) {
+    const name = String(request.params.name || "").replace(/[^a-zA-Z0-9._-]/g, "");
+    if (!name.endsWith(".tar") && !name.endsWith(".tar.gz")) {
+      throw new NotFoundException("invalid image archive name");
+    }
+    const stream = this.domesticKit.openKitFile("images", name);
+    if (!stream) {
+      throw new NotFoundException(`domestic kit missing images/${name}`);
+    }
+    response.setHeader("Content-Type", "application/octet-stream");
+    stream.pipe(response);
+  }
+
+  @Get("/domestic/plugins/:sha256.zip")
+  public domesticPlugin(
+    @Req() request: Request,
+    @Res() response: Response,
+  ) {
+    const sha = String(request.params.sha256 || "")
+      .replace(/\.zip$/i, "")
+      .toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(sha)) {
+      throw new NotFoundException("invalid plugin digest");
+    }
+    const stream = this.domesticKit.openKitFile("plugins", `${sha}.zip`);
+    if (!stream) {
+      throw new NotFoundException(`domestic kit missing plugins/${sha}.zip`);
+    }
+    response.setHeader("Content-Type", "application/zip");
+    stream.pipe(response);
+  }
+
+  @Get("/domestic/images")
+  public domesticImageList() {
+    return { images: this.domesticKit.listImageArchives() };
   }
 
   @EventPattern(`ping`)
@@ -462,6 +538,10 @@ export class GameServerNodeController {
       "",
     );
 
+    const mode = String(request.query.mode || "tailscale").toLowerCase();
+    const panelIp = String(request.query.panel_ip || "").trim();
+    const nodeIp = String(request.query.node_ip || "").trim();
+
     const { game_server_nodes_by_pk, settings } = await this.hasura.query({
       game_server_nodes_by_pk: {
         __args: {
@@ -502,6 +582,136 @@ export class GameServerNodeController {
       "Content-Disposition",
       `attachment; filename="${gameServerNodeId}.sh"`,
     );
+
+    if (mode === "domestic" || mode === "lan") {
+      if (!panelIp || !nodeIp) {
+        throw new Error(
+          "domestic join requires panel_ip and node_ip query params",
+        );
+      }
+      if (!this.domesticKit.isReady()) {
+        throw new Error(
+          "domestic kit not prepared on panel (run prepare-domestic-node-kit-vps.sh)",
+        );
+      }
+
+      const apiBase = (this.appConfig.apiDomain || "").replace(/\/+$/, "");
+      const imageList = this.domesticKit.listImageArchives()
+        .filter((n) => n.endsWith(".tar"))
+        .map((n) => `'${n}'`)
+        .join(" ");
+
+      const domesticScript = `
+        if [ -t 1 ]; then
+          C_RESET=$'\\033[0m'
+          C_STEP=$'\\033[1;36m'
+          C_OK=$'\\033[0;32m'
+          C_WARN=$'\\033[1;33m'
+          C_ERR=$'\\033[0;31m'
+        else
+          C_RESET=''; C_STEP=''; C_OK=''; C_WARN=''; C_ERR=''
+        fi
+        step() { echo; echo "\${C_STEP}==> $1\${C_RESET}"; }
+        ok()   { echo "\${C_OK}    $1\${C_RESET}"; }
+        warn() { echo "\${C_WARN}    $1\${C_RESET}"; }
+        err()  { echo "\${C_ERR}    $1\${C_RESET}" >&2; }
+
+        if [ "$(id -u)" -ne 0 ]; then
+            err "This script must be run as root."
+            exit 1
+        fi
+
+        PANEL_IP=${panelIp}
+        NODE_IP=${nodeIp}
+        API_BASE=${apiBase}
+        KIT_BASE=\${API_BASE}/game-server-node/domestic
+
+        step "Checking disk space"
+        if [ -d "/opt/5stack/serverfiles/game/csgo" ]; then
+            REQUIRED_GB=${existingDiskGb}
+        else
+            REQUIRED_GB=${freshDiskGb}
+        fi
+        if [ "$REQUIRED_GB" -gt 0 ]; then
+            AVAILABLE_GB=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
+            if [ "$AVAILABLE_GB" -lt "$REQUIRED_GB" ]; then
+                err "Insufficient disk space. Required: \${REQUIRED_GB}GB, Available: \${AVAILABLE_GB}GB"
+                exit 1
+            fi
+            ok "\${AVAILABLE_GB}GB available (minimum: \${REQUIRED_GB}GB)"
+        fi
+
+        step "Creating 5stack directories"
+        mkdir -p /opt/5stack/{demos,steamcmd,serverfiles,serverfiles-csgo,custom-plugins}
+        mkdir -p /usr/local/bin /var/lib/rancher/k3s/agent/images /etc/rancher/k3s
+        ok "ready"
+
+        step "Fetching k3s airgap bits from panel kit (no GitHub)"
+        curl -fsSL "\${KIT_BASE}/k3s/bin" -o /usr/local/bin/k3s
+        chmod +x /usr/local/bin/k3s
+        curl -fsSL "\${KIT_BASE}/k3s/install.sh" -o /tmp/k3s-install.sh
+        chmod +x /tmp/k3s-install.sh
+        if curl -fsSL "\${KIT_BASE}/images/k3s-airgap-images-amd64.tar.gz" -o /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.gz; then
+          ok "k3s airgap system images staged"
+        else
+          warn "k3s airgap images missing in kit — agent install may need prior cache"
+        fi
+
+        step "Configuring kernel IP forwarding"
+        echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-5stack-domestic.conf
+        sysctl -p /etc/sysctl.d/99-5stack-domestic.conf >/dev/null || true
+        ok "ip forwarding enabled"
+
+        rm -f /etc/rancher/k3s/config.yaml
+        rm -f /var/lib/kubelet/cpu_manager_state
+
+        step "Installing k3s agent against panel \${PANEL_IP} (LAN/WireGuard, no Tailscale)"
+        INSTALL_K3S_SKIP_DOWNLOAD=true \\
+          K3S_URL=https://\${PANEL_IP}:6443 \\
+          K3S_TOKEN=${process.env.K3S_TOKEN} \\
+          sh /tmp/k3s-install.sh -s - --node-name ${gameServerNodeId}
+
+cat <<-EOF >/etc/rancher/k3s/config.yaml
+	node-ip: \${NODE_IP}
+
+	kubelet-arg:
+	  - "cpu-manager-policy=static"
+	  - "cpu-manager-reconcile-period=5s"
+	  - "system-reserved=cpu=1"
+	  - "kube-reserved=cpu=1"
+EOF
+        ok "node-ip set to \${NODE_IP}"
+
+        systemctl daemon-reload
+        systemctl restart k3s-agent
+        ok "k3s-agent restarted"
+
+        step "Importing game images from panel kit"
+        for name in ${imageList}; do
+          echo "    importing \$name"
+          curl -fsSL "\${KIT_BASE}/images/\${name}" | ctr -n k8s.io images import - || true
+        done
+        ok "image import attempted"
+
+        echo
+        echo "\${C_OK}=================================\${C_RESET}"
+        echo "\${C_OK}  Domestic game node join complete\${C_RESET}"
+        echo "\${C_OK}=================================\${C_RESET}"
+        echo "  Node ID:  ${gameServerNodeId}"
+        echo "  Node IP:  \${NODE_IP}"
+        echo "  Panel IP: \${PANEL_IP}"
+        echo
+        echo "Next on the PANEL: seed CS + extracted plugins from a donor node:"
+        echo "  DONOR_NODE=<online-node> NEW_NODE=${gameServerNodeId} bash scripts/seed-domestic-node-vps.sh"
+        echo
+    `;
+
+      response.setHeader("Content-Length", Buffer.byteLength(domesticScript));
+      response.write(domesticScript);
+      response.end();
+      return;
+    }
+
     // Set the content length to avoid download issues
     const scriptContent = `
         if [ -t 1 ]; then
@@ -778,13 +988,29 @@ UNIT
 
   @HasuraAction()
   public async setupGameServer() {
-    const gameServer = await this.gameServerNodeService.create(
-      await this.tailscale.getAuthKey(),
-    );
+    let token: string;
+    try {
+      token = await this.tailscale.getAuthKey();
+    } catch (error) {
+      // Domestic / airgap panels may not reach Tailscale control plane.
+      this.logger.warn(
+        `Tailscale auth key unavailable, using local join token: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      token = `domestic-${randomBytes(24).toString("hex")}`;
+    }
+
+    const gameServer = await this.gameServerNodeService.create(token);
+    const base = `${this.appConfig.apiDomain}/game-server-node/script/${gameServer.id}.sh?token=${gameServer.token}`;
+    const kit = this.domesticKit.status();
 
     return {
       gameServerId: gameServer.id,
-      link: `curl -o- ${this.appConfig.apiDomain}/game-server-node/script/${gameServer.id}.sh?token=${gameServer.token} | bash`,
+      link: `curl -o- ${base} | bash`,
+      domesticLink: `curl -o- '${base}&mode=domestic&panel_ip=PANEL_IP&node_ip=NODE_IP' | bash`,
+      domesticKitReady: kit.ready,
+      domesticKit: kit,
     };
   }
 

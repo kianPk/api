@@ -712,6 +712,15 @@ export class MatchAssistantService {
   // nothing, and a registry that is rate limiting or down would stop matches
   // that could otherwise have started from the node's disk.
   public static imagePullPolicyFor(image: string): "Always" | "IfNotPresent" {
+    // Domestic / airgap fleets preload images onto nodes; Always would fail
+    // when GHCR is unreachable even though the correct layers are already local.
+    if (
+      process.env.AIRGAP_GAME_NODES === "1" ||
+      process.env.AIRGAP_GAME_NODES === "true"
+    ) {
+      return "IfNotPresent";
+    }
+
     const tag = image.slice(image.lastIndexOf("/") + 1).split(":")[1] ?? "";
 
     return /^v\d/.test(tag) ? "IfNotPresent" : "Always";

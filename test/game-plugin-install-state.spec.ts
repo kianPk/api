@@ -193,6 +193,7 @@ describe("game plugin install state (SQL-driven)", () => {
         postgres,
         {} as never,
         {} as never,
+        { pluginCacheUrl: jest.fn(() => null) } as never,
         { add: jest.fn(), getJob: jest.fn() } as never,
       );
 
@@ -330,6 +331,7 @@ describe("game plugin install state (SQL-driven)", () => {
           getPluginRuntime: async () => "swiftlys2",
         } as never,
         {} as never,
+        { pluginCacheUrl: jest.fn(() => null) } as never,
         { add: jest.fn(), getJob: jest.fn() } as never,
       );
 
@@ -467,6 +469,7 @@ describe("game plugin install state (SQL-driven)", () => {
       postgres,
       {} as never,
       {} as never,
+      { pluginCacheUrl: jest.fn(() => null) } as never,
       { add: jest.fn() } as never,
     );
     await addNode("node-1");
