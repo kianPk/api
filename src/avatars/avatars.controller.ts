@@ -101,6 +101,21 @@ export class AvatarsController {
     return { success: true, player };
   }
 
+  /**
+   * Raise site XP for anyone whose stored FACEIT skill is higher.
+   * Exposed under /avatars because live ingress already routes that prefix
+   * ( /faceit is in panel YAML but often not applied on the cluster ).
+   */
+  @Post("admin/sync-faceit-site-levels")
+  async syncFaceitSiteLevels(@Req() request: Request) {
+    const user = this.requireUser(request);
+    if (user.role !== "administrator") {
+      throw new ForbiddenException("Administrator access required");
+    }
+    const result = await this.avatarsService.syncFaceitSiteLevels();
+    return { success: true, ...result };
+  }
+
   @Post("teams/:teamId")
   @UseInterceptors(FileInterceptor("file"))
   async uploadTeam(
