@@ -2337,6 +2337,9 @@ custom_types:
     - name: DeleteOrphansOutput
     - name: WatchDemoOutput
     - name: SetupGameServeOutput
+    - name: FaceitSyncRanksOutput
+    - name: FaceitSyncSiteLevelsOutput
+    - name: FaceitTestOutput
     - name: SampleOutput
     - name: CpuStat
     - name: MemoryStat

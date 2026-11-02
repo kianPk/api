@@ -116,10 +116,25 @@ export class FaceitController {
   public async syncFaceitSiteLevels(data: {
     user?: User;
   }): Promise<{ success: boolean; checked: number; updated: number }> {
-    if (!data.user) {
+    return this.runSyncFaceitSiteLevels(data.user);
+  }
+
+  /** Same as syncFaceitSiteLevels, for panels that have not reloaded Hasura metadata yet. */
+  @Post("admin/sync-site-levels")
+  @UseGuards(SteamGuard)
+  public async syncSiteLevelsRest(
+    @Req() request: Request,
+  ): Promise<{ success: boolean; checked: number; updated: number }> {
+    return this.runSyncFaceitSiteLevels(request.user);
+  }
+
+  private async runSyncFaceitSiteLevels(
+    user?: User,
+  ): Promise<{ success: boolean; checked: number; updated: number }> {
+    if (!user) {
       throw new ForbiddenException("authentication required");
     }
-    if (data.user.role !== "administrator") {
+    if (user.role !== "administrator") {
       throw new ForbiddenException("administrator access required");
     }
 
