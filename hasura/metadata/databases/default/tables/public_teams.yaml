@@ -125,64 +125,8 @@ insert_permissions:
 select_permissions:
   # Table-returning computed fields (matches) are auto-derived from select on
   # the returning table — do not list them here on this Hasura build.
+  # user / match_organizer / tournament_organizer inherit guest select — do not repeat.
   - role: guest
-    permission:
-      columns:
-        - avatar_url
-        - captain_steam_id
-        - id
-        - is_organization
-        - name
-        - owner_steam_id
-        - short_name
-      computed_fields:
-        - can_change_role
-        - can_invite
-        - can_manage_scrims
-        - can_remove
-        - role
-      filter: {}
-      allow_aggregations: true
-    comment: ""
-  - role: user
-    permission:
-      columns:
-        - avatar_url
-        - captain_steam_id
-        - id
-        - is_organization
-        - name
-        - owner_steam_id
-        - short_name
-      computed_fields:
-        - can_change_role
-        - can_invite
-        - can_manage_scrims
-        - can_remove
-        - role
-      filter: {}
-      allow_aggregations: true
-    comment: ""
-  - role: match_organizer
-    permission:
-      columns:
-        - avatar_url
-        - captain_steam_id
-        - id
-        - is_organization
-        - name
-        - owner_steam_id
-        - short_name
-      computed_fields:
-        - can_change_role
-        - can_invite
-        - can_manage_scrims
-        - can_remove
-        - role
-      filter: {}
-      allow_aggregations: true
-    comment: ""
-  - role: tournament_organizer
     permission:
       columns:
         - avatar_url
