@@ -1,14 +1,21 @@
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { AvatarsService } from "./avatars.service";
 import { AvatarsController } from "./avatars.controller";
 import { S3Module } from "../s3/s3.module";
 import { HasuraModule } from "../hasura/hasura.module";
 import { PostgresModule } from "../postgres/postgres.module";
 import { SiteXpModule } from "../site-xp/site-xp.module";
+import { FaceitModule } from "../faceit/faceit.module";
 import { loggerFactory } from "../utilities/LoggerFactory";
 
 @Module({
-  imports: [S3Module, HasuraModule, PostgresModule, SiteXpModule],
+  imports: [
+    S3Module,
+    HasuraModule,
+    PostgresModule,
+    SiteXpModule,
+    forwardRef(() => FaceitModule),
+  ],
   providers: [AvatarsService, loggerFactory()],
   controllers: [AvatarsController],
 })

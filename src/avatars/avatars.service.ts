@@ -14,6 +14,7 @@ import { PostgresService } from "../postgres/postgres.service";
 import { User } from "../auth/types/User";
 import { SteamConfig } from "../configs/types/SteamConfig";
 import { SiteXpService } from "../site-xp/site-xp.service";
+import { FaceitService } from "../faceit/faceit.service";
 
 export type AvatarKind =
   | "teams"
@@ -48,6 +49,7 @@ export class AvatarsService {
     private readonly postgres: PostgresService,
     private readonly config: ConfigService,
     private readonly siteXp: SiteXpService,
+    private readonly faceit: FaceitService,
   ) {
     this.steamApiKey = this.config.get<SteamConfig>("steam")?.steamApiKey;
   }
@@ -192,8 +194,66 @@ export class AvatarsService {
     });
   }
 
-  async syncFaceitSiteLevels(): Promise<{ checked: number; updated: number }> {
-    return this.siteXp.syncFromFaceitSkillLevels();
+  /**
+   * Raise site XP from FACEIT skill already in DB, then kick a small FACEIT
+   * API refresh (bounded) so missing ranks fill in without timing out nginx.
+   */
+  async syncFaceitSiteLevels(): Promise<{
+    checked: number;
+    updated: number;
+    withFaceit: number;
+    faceitFetched: number;
+    faceitMissing: number;
+  }> {
+    // DB bump first — must not depend on live FACEIT API.
+    let bumped = await this.siteXp.syncFromFaceitSkillLevels();
+
+    let faceitFetched = 0;
+    let faceitMissing = 0;
+
+    if (this.faceit.isEnabled()) {
+      // Small force batch so the click does something even when Redis locked
+      // prior login refreshes. Keep it short for ingress timeouts.
+      const batch = await this.faceit.refreshStalePlayers(25, true);
+      faceitFetched = batch.updated;
+      faceitMissing = batch.missing;
+
+      if (faceitFetched > 0) {
+        bumped = await this.siteXp.syncFromFaceitSkillLevels();
+      }
+
+      // Background: larger refresh so a second click finds more rows.
+      void this.faceit
+        .refreshPlayersWithFaceit(100, true)
+        .then((r) =>
+          this.logger.log(
+            `faceit background refresh updated=${r.updated} missing=${r.missing}`,
+          ),
+        )
+        .catch((error) =>
+          this.logger.warn(
+            `faceit background refresh failed: ${
+              error instanceof Error ? error.message : error
+            }`,
+          ),
+        );
+    } else {
+      this.logger.warn(
+        "FACEIT_API_KEY missing — synced site levels from DB columns only",
+      );
+    }
+
+    this.logger.log(
+      `faceit→site sync withFaceit=${bumped.withFaceit} updated=${bumped.updated} fetched=${faceitFetched}`,
+    );
+
+    return {
+      checked: bumped.checked,
+      updated: bumped.updated,
+      withFaceit: bumped.withFaceit,
+      faceitFetched,
+      faceitMissing,
+    };
   }
 
   /**

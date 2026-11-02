@@ -468,6 +468,65 @@ export class FaceitService {
     };
   }
 
+  /**
+   * Force-refresh FACEIT for players that already have a skill level saved.
+   * Used by admin site-level sync so ensureMinLevel runs even when Redis
+   * cache blocked an earlier login refresh.
+   */
+  public async refreshPlayersWithFaceit(
+    limit = 80,
+    force = true,
+  ): Promise<{ checked: number; updated: number; missing: number }> {
+    if (!this.isEnabled()) {
+      return { checked: 0, updated: 0, missing: 0 };
+    }
+
+    const batch = Math.min(200, Math.max(1, Math.round(limit)));
+    const activeSince = new Date(
+      Date.now() - 180 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const { players } = await this.hasura.query({
+      players: {
+        __args: {
+          where: {
+            faceit_skill_level: { _is_null: false },
+            last_sign_in_at: { _gte: activeSince },
+          },
+          order_by: [{ last_sign_in_at: "desc" }],
+          limit: batch,
+        },
+        steam_id: true,
+      },
+    });
+
+    let updated = 0;
+    let notFound = 0;
+    for (const row of players ?? []) {
+      const steamId = String(row.steam_id || "");
+      if (!steamId) continue;
+      try {
+        const ok = await this.refreshPlayer(steamId, force);
+        if (ok) updated += 1;
+        else notFound += 1;
+      } catch (error) {
+        this.logger.warn(
+          `faceit refresh-with-level failed for ${steamId}: ${
+            error instanceof Error ? error.message : error
+          }`,
+        );
+        notFound += 1;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    return {
+      checked: players?.length ?? 0,
+      updated,
+      missing: notFound,
+    };
+  }
+
   private async fetchPlayer(steamId: string): Promise<FaceitPlayerData | null> {
     // Prefer CS2; fall back to CSGO for older FACEIT accounts that never
     // migrated their game stats.

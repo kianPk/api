@@ -152,45 +152,56 @@ export class SiteXpService {
   public async syncFromFaceitSkillLevels(): Promise<{
     checked: number;
     updated: number;
+    withFaceit: number;
   }> {
-    const floorRows = SITE_LEVEL_FLOORS.map(
-      (xp, index) => `(${index + 1}, ${xp})`,
-    ).join(", ");
+    const caseArms = SITE_LEVEL_FLOORS.map(
+      (xp, index) => `WHEN ${index + 1} THEN ${xp}`,
+    ).join(" ");
 
-    const rows = await this.postgres.query<
-      Array<{ checked: number; updated: number }>
+    // Count first so a broken bump query cannot hide "we found Faceit rows".
+    const [countRow] = await this.postgres.query<
+      Array<{ with_faceit: number }>
     >(
-      `WITH floors(level, xp) AS (
-         VALUES ${floorRows}
-       ),
-       candidates AS (
-         SELECT p.steam_id::bigint AS steam_id,
-                f.xp AS target_xp
-           FROM public.players p
-           JOIN floors f ON f.level = p.faceit_skill_level
-          WHERE p.faceit_skill_level BETWEEN 1 AND 10
-       ),
-       raised AS (
-         INSERT INTO public.player_site_xp (steam_id, xp, updated_at)
-         SELECT c.steam_id, c.target_xp, now()
-           FROM candidates c
-           LEFT JOIN public.player_site_xp s ON s.steam_id = c.steam_id
-          WHERE s.steam_id IS NULL OR s.xp < c.target_xp
-         ON CONFLICT (steam_id) DO UPDATE SET
-           xp = GREATEST(public.player_site_xp.xp, EXCLUDED.xp),
-           updated_at = now()
-         WHERE public.player_site_xp.xp < EXCLUDED.xp
-         RETURNING steam_id
-       )
-       SELECT
-         (SELECT COUNT(*)::int FROM candidates) AS checked,
-         (SELECT COUNT(*)::int FROM raised) AS updated`,
+      `SELECT COUNT(*)::int AS with_faceit
+         FROM public.players
+        WHERE faceit_skill_level IS NOT NULL
+          AND faceit_skill_level >= 1
+          AND faceit_skill_level <= 10`,
+    );
+    const withFaceit = Number(countRow?.with_faceit ?? 0);
+
+    const raised = await this.postgres.query<Array<{ steam_id: string }>>(
+      `INSERT INTO public.player_site_xp (steam_id, xp, updated_at)
+       SELECT p.steam_id::bigint,
+              CASE p.faceit_skill_level::int
+                ${caseArms}
+                ELSE NULL
+              END,
+              now()
+         FROM public.players p
+         LEFT JOIN public.player_site_xp s
+           ON s.steam_id = p.steam_id::bigint
+        WHERE p.faceit_skill_level IS NOT NULL
+          AND p.faceit_skill_level::int BETWEEN 1 AND 10
+          AND (
+            s.steam_id IS NULL
+            OR s.xp < CASE p.faceit_skill_level::int
+              ${caseArms}
+              ELSE 0
+            END
+          )
+       ON CONFLICT (steam_id) DO UPDATE SET
+         xp = GREATEST(public.player_site_xp.xp, EXCLUDED.xp),
+         updated_at = now()
+       WHERE public.player_site_xp.xp < EXCLUDED.xp
+         AND EXCLUDED.xp IS NOT NULL
+       RETURNING steam_id::text AS steam_id`,
     );
 
-    const row = rows[0];
     return {
-      checked: Number(row?.checked ?? 0),
-      updated: Number(row?.updated ?? 0),
+      withFaceit,
+      checked: withFaceit,
+      updated: raised.length,
     };
   }
 
