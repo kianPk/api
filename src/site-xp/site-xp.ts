@@ -1,7 +1,7 @@
-// One site level for the website and every server. Faceit level stays on the site.
-// Softer curve so non-Faceit players can catch level 10 around 7000 XP.
+// Lifetime site level (not Battle Pass). Easy grind, can go down from deaths.
+// Separate from BP XP. Level 2 ≈ 500 XP (~20 HS kills); level 10 at 7000.
 export const SITE_LEVEL_FLOORS = [
-  0, 100, 250, 500, 800, 1400, 2200, 3500, 5000, 7000,
+  0, 500, 1000, 1600, 2300, 3200, 4200, 5200, 6100, 7000,
 ] as const;
 
 export function siteLevelFromXp(xp: number): number {

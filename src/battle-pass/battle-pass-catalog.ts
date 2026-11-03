@@ -1,6 +1,7 @@
 export const SEASON_LENGTH_DAYS = 60;
 export const MAX_LEVEL = 50;
-export const XP_PER_LEVEL = 1000;
+/** Harder than site levels: ~3k XP per BP level, no death penalties. */
+export const XP_PER_LEVEL = 3000;
 export const DEFAULT_PREMIUM_PRICE_YPOINTS = 600;
 
 export const MATCH_XP = 100;
@@ -12,10 +13,18 @@ export const MATCH_MIN_ROUNDS = 3;
 export const DAILY_MISSION_COUNT = 3;
 export const WEEKLY_MISSION_COUNT = 3;
 
+/** Fallback BP XP per completed premium challenge when catalog has no bpXp. */
 export const SUBSCRIBER_CHALLENGE_XP: Record<string, number> = {
-  premium: 250,
-  premium_plus: 350,
+  premium: 2500,
+  premium_plus: 4000,
 };
+
+/** Ypoints reward → Battle Pass XP only (never site XP). ~100× ≈ thousands. */
+export function subscriberChallengeBpXp(rewardYpoints: number, tier?: string): number {
+  const scaled = Math.max(0, Math.round(Number(rewardYpoints) || 0) * 100);
+  if (scaled > 0) return scaled;
+  return SUBSCRIBER_CHALLENGE_XP[tier || "premium"] ?? SUBSCRIBER_CHALLENGE_XP.premium;
+}
 
 export type Track = "free" | "premium";
 

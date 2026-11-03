@@ -25,12 +25,14 @@ import {
   SEASON_LENGTH_DAYS,
   SeasonMatch,
   SUBSCRIBER_CHALLENGE_XP,
+  subscriberChallengeBpXp,
   Track,
   WEEKLY_MISSION_COUNT,
   WEEKLY_MISSIONS,
   weekStart,
   XP_PER_LEVEL,
 } from "./battle-pass-catalog";
+import { getChallenge } from "../challenges/challenge-catalog";
 
 export type Season = {
   id: string;
@@ -188,6 +190,7 @@ export class BattlePassService {
         ? {
             unlocked: subscriber.unlocked,
             subscription: subscriber.subscription,
+            // Typical BP XP from a premium challenge (Ypoints×100); UI copy only.
             xp_per_challenge: subscriberTier
               ? (SUBSCRIBER_CHALLENGE_XP[subscriberTier] ?? 0)
               : SUBSCRIBER_CHALLENGE_XP.premium,
@@ -425,19 +428,21 @@ export class BattlePassService {
   ): Promise<SeasonState> {
     const state = await this.computeState(steamId, season);
     const [row] = await this.postgres.query<
-      Array<{ premium: boolean; bonus_xp: number }>
+      Array<{ premium: boolean; bonus_xp: number; xp: number }>
     >(
       `INSERT INTO public.battle_pass_progress (season_id, steam_id, xp)
        VALUES ($1::uuid, $2::bigint, $3::int)
        ON CONFLICT (season_id, steam_id) DO UPDATE SET
-         xp = EXCLUDED.xp,
+         xp = GREATEST(battle_pass_progress.xp, EXCLUDED.xp),
          updated_at = now()
-       RETURNING premium, COALESCE(bonus_xp, 0)::int AS bonus_xp`,
+       RETURNING premium, COALESCE(bonus_xp, 0)::int AS bonus_xp, xp`,
       [season.id, steamId, state.xp],
     );
     state.premium = !!row?.premium;
+    // BP XP never goes down — keep the ratcheted earned column, then add bonus packs.
+    const earned = Number(row?.xp) || state.xp;
     const bonus = Number(row?.bonus_xp) || 0;
-    state.xp += bonus;
+    state.xp = earned + bonus;
     state.level = levelForXp(state.xp);
     state.breakdown = {
       ...state.breakdown,
@@ -526,22 +531,24 @@ export class BattlePassService {
       }
     }
 
+    // Premium challenges grant Battle Pass XP only (never site XP).
     const subscriberRows = await this.postgres.query<
-      Array<{ tier: string; completed: number }>
+      Array<{ challenge_key: string; tier: string }>
     >(
-      `SELECT tier, COUNT(*)::int AS completed
+      `SELECT challenge_key, tier
          FROM public.challenge_assignments
         WHERE steam_id = $1::bigint
           AND completed_at IS NOT NULL
-          AND day_date BETWEEN $2::date AND $3::date
-        GROUP BY tier`,
+          AND day_date BETWEEN $2::date AND $3::date`,
       [steamId, firstDay, lastDay],
     );
-    const subscriberXp = subscriberRows.reduce(
-      (sum, row) =>
-        sum + (SUBSCRIBER_CHALLENGE_XP[row.tier] ?? 0) * Number(row.completed),
-      0,
-    );
+    const subscriberXp = subscriberRows.reduce((sum, row) => {
+      const def = getChallenge(row.challenge_key);
+      return (
+        sum +
+        subscriberChallengeBpXp(def?.reward ?? 0, row.tier || def?.tier)
+      );
+    }, 0);
 
     const fromMatches = matchXp(matches);
     const xp = fromMatches + dailyXp + weeklyXp + subscriberXp;

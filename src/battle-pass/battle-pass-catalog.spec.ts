@@ -32,10 +32,10 @@ function match(overrides: Partial<SeasonMatch> = {}): SeasonMatch {
 }
 
 describe("battle pass catalog", () => {
-  it("levels up every 1000 XP and caps at the max level", () => {
+  it("levels up every 3000 XP and caps at the max level", () => {
     expect(levelForXp(0)).toBe(0);
-    expect(levelForXp(999)).toBe(0);
-    expect(levelForXp(1000)).toBe(1);
+    expect(levelForXp(2999)).toBe(0);
+    expect(levelForXp(3000)).toBe(1);
     expect(levelForXp(10_000_000)).toBe(MAX_LEVEL);
   });
 

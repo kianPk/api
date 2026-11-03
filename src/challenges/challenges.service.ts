@@ -376,6 +376,8 @@ export class ChallengesService implements OnModuleInit {
         target: def.target,
         progress: Math.min(progress, def.target),
         reward_ypoints: def.reward,
+        // Battle Pass XP only — never touches lifetime site XP / site level.
+        bp_xp: Math.max(0, Math.round(def.reward) * 100),
         completed,
         rewarded: !!rewardedAt,
         match_type: def.matchType ?? null,
