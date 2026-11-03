@@ -153,6 +153,8 @@ export class SiteXpService {
     checked: number;
     updated: number;
     withFaceit: number;
+    behind: number;
+    alreadyOk: number;
   }> {
     const caseArms = SITE_LEVEL_FLOORS.map(
       (xp, index) => `WHEN ${index + 1} THEN ${xp}`,
@@ -160,15 +162,31 @@ export class SiteXpService {
 
     // Count first so a broken bump query cannot hide "we found Faceit rows".
     const [countRow] = await this.postgres.query<
-      Array<{ with_faceit: number }>
+      Array<{ with_faceit: number; behind: number; already_ok: number }>
     >(
-      `SELECT COUNT(*)::int AS with_faceit
-         FROM public.players
-        WHERE faceit_skill_level IS NOT NULL
-          AND faceit_skill_level >= 1
-          AND faceit_skill_level <= 10`,
+      `SELECT
+         COUNT(*)::int AS with_faceit,
+         COUNT(*) FILTER (
+           WHERE COALESCE(s.xp, 0) < CASE p.faceit_skill_level::int
+             ${caseArms}
+             ELSE 0
+           END
+         )::int AS behind,
+         COUNT(*) FILTER (
+           WHERE COALESCE(s.xp, 0) >= CASE p.faceit_skill_level::int
+             ${caseArms}
+             ELSE 0
+           END
+         )::int AS already_ok
+         FROM public.players p
+         LEFT JOIN public.player_site_xp s
+           ON s.steam_id = p.steam_id::bigint
+        WHERE p.faceit_skill_level IS NOT NULL
+          AND p.faceit_skill_level::int BETWEEN 1 AND 10`,
     );
     const withFaceit = Number(countRow?.with_faceit ?? 0);
+    const behind = Number(countRow?.behind ?? 0);
+    const alreadyOk = Number(countRow?.already_ok ?? 0);
 
     const raised = await this.postgres.query<Array<{ steam_id: string }>>(
       `INSERT INTO public.player_site_xp (steam_id, xp, updated_at)
@@ -202,6 +220,8 @@ export class SiteXpService {
       withFaceit,
       checked: withFaceit,
       updated: raised.length,
+      behind,
+      alreadyOk,
     };
   }
 

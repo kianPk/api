@@ -203,24 +203,32 @@ export class AvatarsService {
     checked: number;
     updated: number;
     withFaceit: number;
+    behind: number;
+    alreadyOk: number;
     faceitFetched: number;
     faceitMissing: number;
+    faceitChecked: number;
     faceitEnabled: boolean;
+    faceitApiOk: boolean;
+    faceitApiDetail: string;
     withNickname: number;
     withPlayerId: number;
     withAnyFaceit: number;
   }> {
     const diag = await this.faceit.diagnoseFaceitColumns();
+    const probe = await this.faceit.probeDataApi();
 
     let faceitFetched = 0;
     let faceitMissing = 0;
+    let faceitChecked = 0;
 
-    if (diag.faceitEnabled) {
+    if (diag.faceitEnabled && probe.ok) {
       // Bounded sync batch — steam IDs from Postgres as text (no Hasura
       // JSON number truncation of Steam64).
       const batch = await this.faceit.refreshCandidatesForSiteSync(40, true);
       faceitFetched = batch.updated;
       faceitMissing = batch.missing;
+      faceitChecked = batch.checked;
 
       void this.faceit
         .refreshCandidatesForSiteSync(120, true)
@@ -237,33 +245,48 @@ export class AvatarsService {
             }`,
           ),
         );
-    } else {
+    } else if (!diag.faceitEnabled) {
       this.logger.warn(
         "FACEIT_API_KEY missing — syncing site levels from DB columns only",
+      );
+    } else {
+      this.logger.warn(
+        `FACEIT Data API probe failed — ${probe.detail}; syncing site levels from DB columns only`,
       );
     }
 
     const bumped = await this.siteXp.syncFromFaceitSkillLevels();
 
     this.logger.log(
-      `faceit→site sync withFaceit=${bumped.withFaceit} updated=${bumped.updated} fetched=${faceitFetched} nick=${diag.withNickname}`,
+      `faceit→site sync withFaceit=${bumped.withFaceit} behind=${bumped.behind} updated=${bumped.updated} fetched=${faceitFetched} api=${probe.detail}`,
     );
 
     return {
       checked: bumped.checked,
       updated: bumped.updated,
       withFaceit: bumped.withFaceit,
+      behind: bumped.behind,
+      alreadyOk: bumped.alreadyOk,
       faceitFetched,
       faceitMissing,
+      faceitChecked,
       faceitEnabled: diag.faceitEnabled,
+      faceitApiOk: probe.ok,
+      faceitApiDetail: probe.detail,
       withNickname: diag.withNickname,
       withPlayerId: diag.withPlayerId,
       withAnyFaceit: diag.withAnyFaceit,
     };
   }
 
-  diagnoseFaceitSiteLevels() {
-    return this.faceit.diagnoseFaceitColumns();
+  async diagnoseFaceitSiteLevels() {
+    const columns = await this.faceit.diagnoseFaceitColumns();
+    const probe = await this.faceit.probeDataApi();
+    return {
+      ...columns,
+      faceitApiOk: probe.ok,
+      faceitApiDetail: probe.detail,
+    };
   }
 
   /**

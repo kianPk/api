@@ -299,6 +299,36 @@ export class FaceitService {
     }
   }
 
+  public async probeDataApi(): Promise<{ ok: boolean; detail: string }> {
+    if (!this.apiKey) {
+      return { ok: false, detail: "FACEIT_API_KEY not configured" };
+    }
+    try {
+      const res = await fetch(`${FaceitService.BASE_URL}/games/cs2`, {
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (res.ok) {
+        return { ok: true, detail: `Data API ok (${res.status})` };
+      }
+      const body = (await res.text().catch(() => "")).slice(0, 160);
+      return {
+        ok: false,
+        detail: `Data API ${res.status}${body ? `: ${body}` : ""}`,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        detail: `Data API error: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+  }
+
   public async refreshPlayer(steamId: string, force = false): Promise<boolean> {
     if (!this.isEnabled()) {
       return false;
@@ -309,51 +339,57 @@ export class FaceitService {
       return false;
     }
 
-    await this.cache.put(
-      cacheKey,
-      true,
-      FaceitService.REFRESH_INTERVAL_SECONDS,
-    );
-
     this.logger.debug(`faceit refresh start for ${steamId}`);
     const startedAt = Date.now();
     const data = await this.fetchPlayer(steamId);
     const elapsedMs = Date.now() - startedAt;
 
     if (!data) {
-      // No faceit profile linked to this steam id. The redis lock will
-      // keep us from re-querying for an hour; we deliberately do NOT
-      // touch the players row so the columns stay NULL and the UI keeps
-      // the chip hidden.
+      // Confirmed miss / transport failure — lock so we do not hammer Faceit.
+      // Force admin sync bypasses this lock on the next click.
+      await this.cache.put(
+        cacheKey,
+        true,
+        FaceitService.REFRESH_INTERVAL_SECONDS,
+      );
       this.logger.debug(
         `faceit fetched for ${steamId} in ${elapsedMs}ms: no profile, skipping db write`,
       );
       return false;
     }
 
-    this.logger.debug(
+    this.logger.log(
       `faceit fetched for ${steamId} in ${elapsedMs}ms: ` +
         `nickname=${data.faceit_nickname} ` +
         `level=${data.faceit_skill_level} ` +
         `elo=${data.faceit_elo}`,
     );
 
-    await this.hasura.mutation({
-      update_players_by_pk: {
-        __args: {
-          pk_columns: { steam_id: steamId },
-          _set: {
-            faceit_player_id: data.faceit_player_id,
-            faceit_nickname: data.faceit_nickname,
-            faceit_skill_level: data.faceit_skill_level,
-            faceit_elo: data.faceit_elo,
-            faceit_url: data.faceit_url,
-            faceit_updated_at: new Date(),
-          },
-        },
-        __typename: true,
-      },
-    });
+    // Write via Postgres — Hasura JSON can corrupt Steam64 / drop updates.
+    await this.postgres.query(
+      `UPDATE public.players
+          SET faceit_player_id = $2,
+              faceit_nickname = $3,
+              faceit_skill_level = $4,
+              faceit_elo = $5,
+              faceit_url = $6,
+              faceit_updated_at = now()
+        WHERE steam_id = $1::bigint`,
+      [
+        steamId,
+        data.faceit_player_id,
+        data.faceit_nickname,
+        data.faceit_skill_level,
+        data.faceit_elo,
+        data.faceit_url,
+      ],
+    );
+
+    await this.cache.put(
+      cacheKey,
+      true,
+      FaceitService.REFRESH_INTERVAL_SECONDS,
+    );
 
     // On first sync (and later climbs), mirror FACEIT skill onto site level.
     // ensureMinLevel never lowers an already-higher site level.
@@ -628,6 +664,7 @@ export class FaceitService {
           Authorization: `Bearer ${this.apiKey}`,
           Accept: "application/json",
         },
+        signal: AbortSignal.timeout(12_000),
       });
 
       if (response.status === 404) {
@@ -660,7 +697,7 @@ export class FaceitService {
         };
       };
 
-      const stats = data.games?.cs2 ?? data.games?.csgo;
+      const stats = data.games?.[game] ?? data.games?.cs2 ?? data.games?.csgo;
 
       return {
         faceit_player_id: data.player_id,
