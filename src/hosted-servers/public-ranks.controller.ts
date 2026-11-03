@@ -17,6 +17,7 @@ import { SectionRatingsService } from "./section-ratings.service";
 import { SiteXpService } from "../site-xp/site-xp.service";
 import { SiteXpInput } from "../site-xp/site-xp";
 import { ClubsService } from "../clubs/clubs.service";
+import { GamenetService } from "../gamenet/gamenet.service";
 
 // Under /hosted-servers because the API ingress does not route arbitrary paths.
 @Controller("hosted-servers")
@@ -26,6 +27,7 @@ export class PublicRanksController {
     private readonly sectionRatings: SectionRatingsService,
     private readonly siteXp: SiteXpService,
     private readonly clubs: ClubsService,
+    private readonly gamenet: GamenetService,
   ) {}
 
   @Get("plugin/ranks/players")
@@ -173,7 +175,9 @@ export class PublicRanksController {
     if (!Array.isArray(body?.events)) {
       throw new BadRequestException("events required");
     }
-    const players = await this.siteXp.applyMany(body.events);
+    const steamIds = body.events.map((e) => String(e?.steam_id || ""));
+    const multipliers = await this.gamenet.multipliersFor(steamIds);
+    const players = await this.siteXp.applyMany(body.events, { multipliers });
     // Club strength tracks site XP; refresh auto levels for club members.
     try {
       await this.clubs.refreshMemberLevelsAfterSiteXp(

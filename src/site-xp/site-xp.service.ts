@@ -91,7 +91,10 @@ export class SiteXpService {
     return row ?? null;
   }
 
-  public async applyMany(events: SiteXpInput[]): Promise<SiteXpRow[]> {
+  public async applyMany(
+    events: SiteXpInput[],
+    options?: { multipliers?: Map<string, number> },
+  ): Promise<SiteXpRow[]> {
     const deltas = new Map<string, number>();
     for (const event of events.slice(0, 64)) {
       const steamId = this.ids([String(event.steam_id || "")])[0];
@@ -104,8 +107,15 @@ export class SiteXpService {
         kind === "death"
           ? { ...event, streak: this.nextDeathStreak(steamId) }
           : event;
-      const delta = siteXpDelta(scored);
+      let delta = siteXpDelta(scored);
       if (!delta) continue;
+      // Gamenet / venue bonuses only amplify gains — never punishments.
+      if (delta > 0) {
+        const mult = Number(options?.multipliers?.get(steamId) || 1);
+        if (Number.isFinite(mult) && mult > 1) {
+          delta = Math.round(delta * Math.min(5, mult));
+        }
+      }
       deltas.set(steamId, (deltas.get(steamId) || 0) + delta);
     }
     const out: SiteXpRow[] = [];

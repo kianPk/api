@@ -22,6 +22,7 @@ import { PublicServerDetailsService } from "./public-server-details.service";
 import { PublicServerDetailsController } from "./public-server-details.controller";
 import { SiteXpModule } from "../site-xp/site-xp.module";
 import { ClubsModule } from "../clubs/clubs.module";
+import { GamenetModule } from "../gamenet/gamenet.module";
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { ClubsModule } from "../clubs/clubs.module";
     DedicatedServersModule,
     SiteXpModule,
     ClubsModule,
+    GamenetModule,
     forwardRef(() => StoreModule),
     BullModule.registerQueue({
       name: HostedServerQueues.Lifecycle,

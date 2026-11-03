@@ -69,6 +69,7 @@ import { AnticheatModule } from "./anticheat/anticheat.module";
 import { ChallengesModule } from "./challenges/challenges.module";
 import { BattlePassModule } from "./battle-pass/battle-pass.module";
 import { ClubsModule } from "./clubs/clubs.module";
+import { GamenetModule } from "./gamenet/gamenet.module";
 
 @Module({
   imports: [
@@ -173,6 +174,7 @@ import { ClubsModule } from "./clubs/clubs.module";
     ChallengesModule,
     BattlePassModule,
     ClubsModule,
+    GamenetModule,
     EventsModule,
     ScrimsModule,
     LeaguesModule,
