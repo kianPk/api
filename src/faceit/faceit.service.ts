@@ -451,7 +451,9 @@ export class FaceitService {
 
   /**
    * Admin site-level sync candidates: anyone with Faceit hints OR recent login.
-   * Prefer filling missing skill first. Steam IDs as text from Postgres.
+   * Prefer players already known on Faceit / behind on site XP — not a long
+   * run of never-linked Steam accounts (those 404 and waste the batch).
+   * Steam IDs as text from Postgres.
    */
   public async refreshCandidatesForSiteSync(
     limit = 60,
@@ -462,18 +464,61 @@ export class FaceitService {
     }
 
     const batch = Math.min(200, Math.max(1, Math.round(limit)));
+    const floorArms = [
+      "WHEN 1 THEN 0",
+      "WHEN 2 THEN 200",
+      "WHEN 3 THEN 500",
+      "WHEN 4 THEN 1000",
+      "WHEN 5 THEN 1500",
+      "WHEN 6 THEN 2500",
+      "WHEN 7 THEN 4000",
+      "WHEN 8 THEN 6000",
+      "WHEN 9 THEN 8500",
+      "WHEN 10 THEN 11500",
+    ].join(" ");
     const players = await this.postgres.query<Array<{ steam_id: string }>>(
-      `SELECT steam_id::text AS steam_id
-         FROM public.players
+      `SELECT p.steam_id::text AS steam_id
+         FROM public.players p
+         LEFT JOIN public.player_site_xp s
+           ON s.steam_id = p.steam_id::bigint
         WHERE (
-            faceit_skill_level IS NULL
-            OR faceit_player_id IS NOT NULL
-            OR (faceit_nickname IS NOT NULL AND btrim(faceit_nickname) <> '')
-            OR last_sign_in_at >= now() - interval '180 days'
+            p.faceit_player_id IS NOT NULL
+            OR (p.faceit_nickname IS NOT NULL AND btrim(p.faceit_nickname) <> '')
+            OR p.faceit_skill_level BETWEEN 1 AND 10
+            OR p.last_sign_in_at >= now() - interval '180 days'
           )
         ORDER BY
-          (faceit_skill_level IS NULL) DESC,
-          last_sign_in_at DESC NULLS LAST
+          CASE
+            WHEN p.faceit_skill_level BETWEEN 1 AND 10
+             AND COALESCE(s.xp, 0) < CASE p.faceit_skill_level::int
+               ${floorArms}
+               ELSE 0
+             END
+            THEN 0
+            WHEN (
+              p.faceit_player_id IS NOT NULL
+              OR (p.faceit_nickname IS NOT NULL AND btrim(p.faceit_nickname) <> '')
+            )
+             AND (
+               p.faceit_skill_level IS NULL
+               OR p.faceit_skill_level = 0
+               OR p.faceit_updated_at IS NULL
+               OR p.faceit_updated_at < now() - interval '24 hours'
+             )
+            THEN 1
+            WHEN p.faceit_skill_level BETWEEN 1 AND 10
+             AND (
+               p.faceit_updated_at IS NULL
+               OR p.faceit_updated_at < now() - interval '24 hours'
+             )
+            THEN 2
+            WHEN p.faceit_skill_level IS NULL
+              AND p.faceit_player_id IS NULL
+              AND (p.faceit_nickname IS NULL OR btrim(p.faceit_nickname) = '')
+            THEN 4
+            ELSE 3
+          END,
+          p.last_sign_in_at DESC NULLS LAST
         LIMIT $1`,
       [batch],
     );
