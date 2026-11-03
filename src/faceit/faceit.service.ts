@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { CacheService } from "../cache/cache.service";
 import { HasuraService } from "../hasura/hasura.service";
+import { PostgresService } from "../postgres/postgres.service";
 import { SiteXpService } from "../site-xp/site-xp.service";
 
 export type FaceitPlayerData = {
@@ -23,6 +24,7 @@ export class FaceitService {
     private readonly config: ConfigService,
     private readonly cache: CacheService,
     private readonly hasura: HasuraService,
+    private readonly postgres: PostgresService,
     private readonly siteXp: SiteXpService,
     private readonly logger: Logger,
   ) {
@@ -375,6 +377,9 @@ export class FaceitService {
    * Backfill / refresh FACEIT ranks for recently active players whose
    * faceit_* columns are missing or stale. Bounded batch + delay to stay
    * within FACEIT Data API rate limits.
+   *
+   * Steam IDs come from Postgres as text — never Hasura JSON numbers
+   * (Steam64 exceeds Number.MAX_SAFE_INTEGER and gets corrupted).
    */
   public async refreshStalePlayers(
     limit = 40,
@@ -385,93 +390,67 @@ export class FaceitService {
     }
 
     const batch = Math.min(120, Math.max(1, Math.round(limit)));
-    const activeSince = new Date(
-      Date.now() - 90 * 24 * 60 * 60 * 1000,
-    ).toISOString();
-    const staleBefore = new Date(
-      Date.now() - 24 * 60 * 60 * 1000,
-    ).toISOString();
+    const players = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT steam_id::text AS steam_id
+         FROM public.players
+        WHERE last_sign_in_at >= now() - interval '90 days'
+          AND (
+            faceit_skill_level IS NULL
+            OR faceit_updated_at IS NULL
+            OR faceit_updated_at < now() - interval '24 hours'
+          )
+        ORDER BY
+          (faceit_skill_level IS NULL) DESC,
+          last_sign_in_at DESC NULLS LAST
+        LIMIT $1`,
+      [batch],
+    );
 
-    // Prefer players who still have no FACEIT level, then stale rows.
-    const withoutLevel = await this.hasura.query({
-      players: {
-        __args: {
-          where: {
-            last_sign_in_at: { _gte: activeSince },
-            faceit_skill_level: { _is_null: true },
-          },
-          order_by: [{ last_sign_in_at: "desc" }],
-          limit: batch,
-        },
-        steam_id: true,
-      },
-    });
+    return this.refreshSteamIds(
+      players.map((row) => row.steam_id),
+      force,
+      250,
+    );
+  }
 
-    const need = Math.max(0, batch - (withoutLevel.players?.length ?? 0));
-    const stale =
-      need > 0
-        ? await this.hasura.query({
-            players: {
-              __args: {
-                where: {
-                  last_sign_in_at: { _gte: activeSince },
-                  faceit_skill_level: { _is_null: false },
-                  faceit_updated_at: { _lt: staleBefore },
-                },
-                order_by: [{ last_sign_in_at: "desc" }],
-                limit: need,
-              },
-              steam_id: true,
-            },
-          })
-        : { players: [] as Array<{ steam_id: string }> };
-
-    const seen = new Set<string>();
-    const players: Array<{ steam_id: string }> = [];
-    for (const row of [
-      ...(withoutLevel.players ?? []),
-      ...(stale.players ?? []),
-    ]) {
-      const id = String(row.steam_id || "");
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      players.push({ steam_id: id });
+  /**
+   * Admin site-level sync candidates: anyone with Faceit hints OR recent login.
+   * Prefer filling missing skill first. Steam IDs as text from Postgres.
+   */
+  public async refreshCandidatesForSiteSync(
+    limit = 60,
+    force = true,
+  ): Promise<{ checked: number; updated: number; missing: number }> {
+    if (!this.isEnabled()) {
+      return { checked: 0, updated: 0, missing: 0 };
     }
 
-    let updated = 0;
-    let notFound = 0;
-    for (const row of players) {
-      const steamId = String(row.steam_id || "");
-      if (!steamId) continue;
-      try {
-        const ok = await this.refreshPlayer(steamId, force);
-        if (ok) {
-          updated += 1;
-        } else {
-          notFound += 1;
-        }
-      } catch (error) {
-        this.logger.warn(
-          `faceit stale refresh failed for ${steamId}: ${
-            error instanceof Error ? error.message : error
-          }`,
-        );
-        notFound += 1;
-      }
-      await new Promise((r) => setTimeout(r, 250));
-    }
+    const batch = Math.min(200, Math.max(1, Math.round(limit)));
+    const players = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT steam_id::text AS steam_id
+         FROM public.players
+        WHERE (
+            faceit_skill_level IS NULL
+            OR faceit_player_id IS NOT NULL
+            OR (faceit_nickname IS NOT NULL AND btrim(faceit_nickname) <> '')
+            OR last_sign_in_at >= now() - interval '180 days'
+          )
+        ORDER BY
+          (faceit_skill_level IS NULL) DESC,
+          last_sign_in_at DESC NULLS LAST
+        LIMIT $1`,
+      [batch],
+    );
 
-    return {
-      checked: players.length,
-      updated,
-      missing: notFound,
-    };
+    return this.refreshSteamIds(
+      players.map((row) => row.steam_id),
+      force,
+      200,
+    );
   }
 
   /**
    * Force-refresh FACEIT for players that already have a skill level saved.
-   * Used by admin site-level sync so ensureMinLevel runs even when Redis
-   * cache blocked an earlier login refresh.
    */
   public async refreshPlayersWithFaceit(
     limit = 80,
@@ -482,46 +461,138 @@ export class FaceitService {
     }
 
     const batch = Math.min(200, Math.max(1, Math.round(limit)));
-    const activeSince = new Date(
-      Date.now() - 180 * 24 * 60 * 60 * 1000,
-    ).toISOString();
+    const players = await this.postgres.query<Array<{ steam_id: string }>>(
+      `SELECT steam_id::text AS steam_id
+         FROM public.players
+        WHERE faceit_skill_level IS NOT NULL
+          AND faceit_skill_level BETWEEN 1 AND 10
+          AND last_sign_in_at >= now() - interval '180 days'
+        ORDER BY last_sign_in_at DESC NULLS LAST
+        LIMIT $1`,
+      [batch],
+    );
 
-    const { players } = await this.hasura.query({
-      players: {
-        __args: {
-          where: {
-            faceit_skill_level: { _is_null: false },
-            last_sign_in_at: { _gte: activeSince },
-          },
-          order_by: [{ last_sign_in_at: "desc" }],
-          limit: batch,
-        },
-        steam_id: true,
-      },
-    });
+    return this.refreshSteamIds(
+      players.map((row) => row.steam_id),
+      force,
+      200,
+    );
+  }
 
+  public async diagnoseFaceitColumns(): Promise<{
+    withSkill1to10: number;
+    withSkillAny: number;
+    withSkillZero: number;
+    withNickname: number;
+    withPlayerId: number;
+    withAnyFaceit: number;
+    faceitEnabled: boolean;
+    samples: Array<{
+      steam_id: string;
+      name: string | null;
+      faceit_nickname: string | null;
+      faceit_player_id: string | null;
+      faceit_skill_level: number | null;
+      faceit_elo: number | null;
+    }>;
+  }> {
+    const [row] = await this.postgres.query<
+      Array<{
+        with_skill_1_10: number;
+        with_skill_any: number;
+        with_skill_zero: number;
+        with_nickname: number;
+        with_player_id: number;
+        with_any_faceit: number;
+      }>
+    >(
+      `SELECT
+         COUNT(*) FILTER (
+           WHERE faceit_skill_level BETWEEN 1 AND 10
+         )::int AS with_skill_1_10,
+         COUNT(*) FILTER (
+           WHERE faceit_skill_level IS NOT NULL
+         )::int AS with_skill_any,
+         COUNT(*) FILTER (
+           WHERE faceit_skill_level = 0
+         )::int AS with_skill_zero,
+         COUNT(*) FILTER (
+           WHERE faceit_nickname IS NOT NULL AND btrim(faceit_nickname) <> ''
+         )::int AS with_nickname,
+         COUNT(*) FILTER (
+           WHERE faceit_player_id IS NOT NULL
+         )::int AS with_player_id,
+         COUNT(*) FILTER (
+           WHERE faceit_skill_level IS NOT NULL
+              OR faceit_player_id IS NOT NULL
+              OR (faceit_nickname IS NOT NULL AND btrim(faceit_nickname) <> '')
+         )::int AS with_any_faceit
+       FROM public.players`,
+    );
+
+    const samples = await this.postgres.query<
+      Array<{
+        steam_id: string;
+        name: string | null;
+        faceit_nickname: string | null;
+        faceit_player_id: string | null;
+        faceit_skill_level: number | null;
+        faceit_elo: number | null;
+      }>
+    >(
+      `SELECT steam_id::text AS steam_id,
+              name,
+              faceit_nickname,
+              faceit_player_id,
+              faceit_skill_level,
+              faceit_elo
+         FROM public.players
+        WHERE faceit_skill_level IS NOT NULL
+           OR faceit_player_id IS NOT NULL
+           OR (faceit_nickname IS NOT NULL AND btrim(faceit_nickname) <> '')
+        ORDER BY faceit_updated_at DESC NULLS LAST
+        LIMIT 15`,
+    );
+
+    return {
+      withSkill1to10: Number(row?.with_skill_1_10 ?? 0),
+      withSkillAny: Number(row?.with_skill_any ?? 0),
+      withSkillZero: Number(row?.with_skill_zero ?? 0),
+      withNickname: Number(row?.with_nickname ?? 0),
+      withPlayerId: Number(row?.with_player_id ?? 0),
+      withAnyFaceit: Number(row?.with_any_faceit ?? 0),
+      faceitEnabled: this.isEnabled(),
+      samples,
+    };
+  }
+
+  private async refreshSteamIds(
+    steamIds: string[],
+    force: boolean,
+    delayMs: number,
+  ): Promise<{ checked: number; updated: number; missing: number }> {
     let updated = 0;
     let notFound = 0;
-    for (const row of players ?? []) {
-      const steamId = String(row.steam_id || "");
-      if (!steamId) continue;
+    for (const raw of steamIds) {
+      const steamId = String(raw || "").trim();
+      if (!/^\d{5,20}$/.test(steamId)) continue;
       try {
         const ok = await this.refreshPlayer(steamId, force);
         if (ok) updated += 1;
         else notFound += 1;
       } catch (error) {
         this.logger.warn(
-          `faceit refresh-with-level failed for ${steamId}: ${
+          `faceit refresh failed for ${steamId}: ${
             error instanceof Error ? error.message : error
           }`,
         );
         notFound += 1;
       }
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, delayMs));
     }
 
     return {
-      checked: players?.length ?? 0,
+      checked: steamIds.length,
       updated,
       missing: notFound,
     };

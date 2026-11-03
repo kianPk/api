@@ -116,6 +116,18 @@ export class AvatarsController {
     return { success: true, ...result };
   }
 
+  @Get("admin/faceit-site-level-diagnostics")
+  async faceitSiteLevelDiagnostics(@Req() request: Request) {
+    const user = this.requireUser(request);
+    if (user.role !== "administrator") {
+      throw new ForbiddenException("Administrator access required");
+    }
+    return {
+      success: true,
+      ...(await this.avatarsService.diagnoseFaceitSiteLevels()),
+    };
+  }
+
   @Post("teams/:teamId")
   @UseInterceptors(FileInterceptor("file"))
   async uploadTeam(

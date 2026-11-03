@@ -195,8 +195,9 @@ export class AvatarsService {
   }
 
   /**
-   * Raise site XP from FACEIT skill already in DB, then kick a small FACEIT
-   * API refresh (bounded) so missing ranks fill in without timing out nginx.
+   * 1) Diagnose Faceit columns
+   * 2) Force-refresh candidates via FACEIT API (Postgres steam_id::text)
+   * 3) Raise site XP from whatever skill is now stored
    */
   async syncFaceitSiteLevels(): Promise<{
     checked: number;
@@ -204,47 +205,48 @@ export class AvatarsService {
     withFaceit: number;
     faceitFetched: number;
     faceitMissing: number;
+    faceitEnabled: boolean;
+    withNickname: number;
+    withPlayerId: number;
+    withAnyFaceit: number;
   }> {
-    // DB bump first — must not depend on live FACEIT API.
-    let bumped = await this.siteXp.syncFromFaceitSkillLevels();
+    const diag = await this.faceit.diagnoseFaceitColumns();
 
     let faceitFetched = 0;
     let faceitMissing = 0;
 
-    if (this.faceit.isEnabled()) {
-      // Small force batch so the click does something even when Redis locked
-      // prior login refreshes. Keep it short for ingress timeouts.
-      const batch = await this.faceit.refreshStalePlayers(25, true);
+    if (diag.faceitEnabled) {
+      // Bounded sync batch — steam IDs from Postgres as text (no Hasura
+      // JSON number truncation of Steam64).
+      const batch = await this.faceit.refreshCandidatesForSiteSync(40, true);
       faceitFetched = batch.updated;
       faceitMissing = batch.missing;
 
-      if (faceitFetched > 0) {
-        bumped = await this.siteXp.syncFromFaceitSkillLevels();
-      }
-
-      // Background: larger refresh so a second click finds more rows.
       void this.faceit
-        .refreshPlayersWithFaceit(100, true)
-        .then((r) =>
+        .refreshCandidatesForSiteSync(120, true)
+        .then(async (r) => {
           this.logger.log(
-            `faceit background refresh updated=${r.updated} missing=${r.missing}`,
-          ),
-        )
+            `faceit background site-sync refresh updated=${r.updated} missing=${r.missing}`,
+          );
+          await this.siteXp.syncFromFaceitSkillLevels();
+        })
         .catch((error) =>
           this.logger.warn(
-            `faceit background refresh failed: ${
+            `faceit background site-sync failed: ${
               error instanceof Error ? error.message : error
             }`,
           ),
         );
     } else {
       this.logger.warn(
-        "FACEIT_API_KEY missing — synced site levels from DB columns only",
+        "FACEIT_API_KEY missing — syncing site levels from DB columns only",
       );
     }
 
+    const bumped = await this.siteXp.syncFromFaceitSkillLevels();
+
     this.logger.log(
-      `faceit→site sync withFaceit=${bumped.withFaceit} updated=${bumped.updated} fetched=${faceitFetched}`,
+      `faceit→site sync withFaceit=${bumped.withFaceit} updated=${bumped.updated} fetched=${faceitFetched} nick=${diag.withNickname}`,
     );
 
     return {
@@ -253,7 +255,15 @@ export class AvatarsService {
       withFaceit: bumped.withFaceit,
       faceitFetched,
       faceitMissing,
+      faceitEnabled: diag.faceitEnabled,
+      withNickname: diag.withNickname,
+      withPlayerId: diag.withPlayerId,
+      withAnyFaceit: diag.withAnyFaceit,
     };
+  }
+
+  diagnoseFaceitSiteLevels() {
+    return this.faceit.diagnoseFaceitColumns();
   }
 
   /**
