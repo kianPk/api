@@ -466,15 +466,15 @@ export class FaceitService {
     const batch = Math.min(200, Math.max(1, Math.round(limit)));
     const floorArms = [
       "WHEN 1 THEN 0",
-      "WHEN 2 THEN 200",
-      "WHEN 3 THEN 500",
-      "WHEN 4 THEN 1000",
-      "WHEN 5 THEN 1500",
-      "WHEN 6 THEN 2500",
-      "WHEN 7 THEN 4000",
-      "WHEN 8 THEN 6000",
-      "WHEN 9 THEN 8500",
-      "WHEN 10 THEN 11500",
+      "WHEN 2 THEN 100",
+      "WHEN 3 THEN 250",
+      "WHEN 4 THEN 500",
+      "WHEN 5 THEN 800",
+      "WHEN 6 THEN 1400",
+      "WHEN 7 THEN 2200",
+      "WHEN 8 THEN 3500",
+      "WHEN 9 THEN 5000",
+      "WHEN 10 THEN 7000",
     ].join(" ");
     const players = await this.postgres.query<Array<{ steam_id: string }>>(
       `SELECT p.steam_id::text AS steam_id

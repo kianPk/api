@@ -1,7 +1,7 @@
 // One site level for the website and every server. Faceit level stays on the site.
-// Bands the owner set: 1000–1500 is 4, 1500–2500 is 5, 2500–4000 is 6, max is 10.
+// Softer curve so non-Faceit players can catch level 10 around 7000 XP.
 export const SITE_LEVEL_FLOORS = [
-  0, 200, 500, 1000, 1500, 2500, 4000, 6000, 8500, 11500,
+  0, 100, 250, 500, 800, 1400, 2200, 3500, 5000, 7000,
 ] as const;
 
 export function siteLevelFromXp(xp: number): number {

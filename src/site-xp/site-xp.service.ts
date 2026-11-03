@@ -24,6 +24,9 @@ export type SiteXpLeader = SiteXpRow & {
   avatar_url: string | null;
   custom_avatar_url: string | null;
   country: string | null;
+  club_id: string | null;
+  club_name: string | null;
+  club_slug: string | null;
 };
 
 @Injectable()
@@ -51,8 +54,15 @@ export class SiteXpService {
     });
   }
 
-  public async top(limit: number): Promise<SiteXpLeader[]> {
-    const n = Math.min(50, Math.max(1, Math.floor(Number(limit) || 10)));
+  public async top(
+    limit: number,
+    offset = 0,
+  ): Promise<{ players: SiteXpLeader[]; total: number }> {
+    const n = Math.min(100, Math.max(1, Math.floor(Number(limit) || 10)));
+    const off = Math.max(0, Math.floor(Number(offset) || 0));
+    const [{ count }] = await this.postgres.query<Array<{ count: string }>>(
+      `SELECT COUNT(*)::text AS count FROM public.player_site_xp`,
+    );
     const rows = await this.postgres.query<
       Array<{
         steam_id: string;
@@ -61,6 +71,9 @@ export class SiteXpService {
         avatar_url: string | null;
         custom_avatar_url: string | null;
         country: string | null;
+        club_id: string | null;
+        club_name: string | null;
+        club_slug: string | null;
       }>
     >(
       `SELECT p.steam_id::text AS steam_id,
@@ -68,22 +81,39 @@ export class SiteXpService {
               p.name,
               p.avatar_url,
               p.custom_avatar_url,
-              p.country
+              p.country,
+              c.id::text AS club_id,
+              c.name AS club_name,
+              c.slug AS club_slug
          FROM public.player_site_xp x
          JOIN public.players p ON p.steam_id = x.steam_id
+         LEFT JOIN LATERAL (
+           SELECT cl.id, cl.name, cl.slug
+             FROM public.club_members m
+             JOIN public.clubs cl ON cl.id = m.club_id
+            WHERE m.steam_id = p.steam_id
+            ORDER BY m.is_primary DESC, m.joined_at ASC
+            LIMIT 1
+         ) c ON true
         ORDER BY x.xp DESC, p.steam_id
-        LIMIT $1`,
-      [n],
+        LIMIT $1 OFFSET $2`,
+      [n, off],
     );
-    return rows.map((row) => ({
-      steam_id: row.steam_id,
-      xp: row.xp,
-      level: siteLevelFromXp(row.xp),
-      name: row.name || "Player",
-      avatar_url: row.avatar_url,
-      custom_avatar_url: row.custom_avatar_url,
-      country: row.country,
-    }));
+    return {
+      total: Number(count) || 0,
+      players: rows.map((row) => ({
+        steam_id: row.steam_id,
+        xp: row.xp,
+        level: siteLevelFromXp(row.xp),
+        name: row.name || "Player",
+        avatar_url: row.avatar_url,
+        custom_avatar_url: row.custom_avatar_url,
+        country: row.country,
+        club_id: row.club_id,
+        club_name: row.club_name,
+        club_slug: row.club_slug,
+      })),
+    };
   }
 
   public async apply(input: SiteXpInput): Promise<SiteXpRow | null> {

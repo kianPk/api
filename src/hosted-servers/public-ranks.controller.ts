@@ -157,8 +157,11 @@ export class PublicRanksController {
   }
 
   @Get("site-xp/top")
-  public async siteXpTop(@Query("limit") limit: string) {
-    return { players: await this.siteXp.top(Number(limit)) };
+  public async siteXpTop(
+    @Query("limit") limit: string,
+    @Query("offset") offset?: string,
+  ) {
+    return this.siteXp.top(Number(limit), Number(offset || 0));
   }
 
   @Post("plugin/site-xp")
